@@ -63,8 +63,8 @@ func TestCollectionNames(t *testing.T) {
 
 func TestIndexModels(t *testing.T) {
 	indexes := indexModels()
-	if len(indexes[TransfersCollection]) != 5 {
-		t.Fatalf("transfer index count = %d, want 5", len(indexes[TransfersCollection]))
+	if len(indexes[TransfersCollection]) != 7 {
+		t.Fatalf("transfer index count = %d, want 7", len(indexes[TransfersCollection]))
 	}
 	if unique := indexes[TransfersCollection][0].Options.Unique; unique == nil || !*unique {
 		t.Fatal("transfer identity index must be unique")

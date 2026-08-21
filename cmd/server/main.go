@@ -12,6 +12,7 @@ import (
 
 	"github.com/Nickcandy/eth-fund-trace/internal/config"
 	"github.com/Nickcandy/eth-fund-trace/internal/etherscan"
+	"github.com/Nickcandy/eth-fund-trace/internal/fundgraph"
 	"github.com/Nickcandy/eth-fund-trace/internal/httpapi"
 	"github.com/Nickcandy/eth-fund-trace/internal/profile"
 	"github.com/Nickcandy/eth-fund-trace/internal/store"
@@ -67,6 +68,7 @@ func run(parent context.Context) error {
 	e.POST("/api/v1/sync", syncHandler.Enqueue)
 	e.GET("/api/v1/sync-jobs/:id", syncHandler.Job)
 	e.GET("/api/v1/addresses/:address/profile", httpapi.NewProfileHandler(addressProfiler).Get)
+	e.GET("/api/v1/edges", httpapi.NewEdgeHandler(fundgraph.New(appStore)).Get)
 
 	serverCtx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer stop()

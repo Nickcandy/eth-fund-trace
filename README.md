@@ -11,6 +11,15 @@
 
 第一阶段只读取 Ethereum Mainnet 的公开数据，不发起交易、不托管资产，也不需要链上资金。数据通过 Etherscan API 获取，保存普通 ETH 交易、合约产生的 ETH 内部转账和 ERC-20 转账到本地 Docker MongoDB；数据模型预留 `chain` 字段，后续可以扩展到 Sepolia、Arbitrum、Base 等网络。
 
+## 当前实现（M0-M5）
+
+- `POST /api/v1/sync`：创建异步按需同步任务，补齐种子地址及最多 10 个直接邻居；
+- `GET /api/v1/sync-jobs/:id`：查询任务进度、缓存命中、抓取计数及部分失败；
+- `GET /api/v1/addresses/:address/profile`：读取或生成 `hot-wallet-v1` 版本化地址画像；
+- `GET /api/v1/edges`：按地址、方向、资产和区块范围查询正金额事实边，使用 Base64URL 游标稳定翻页。
+
+Etherscan 请求在单进程内共享默认 5 QPS、突发 1 的令牌桶。同步缓存默认 15 分钟，安全链头为最新块减 12 个确认。M6 BFS、M7 标签风险和 M8 完整 HTTP 治理尚未实现。
+
 ## 第一阶段核心能力
 
 | 能力 | 说明 | 优先级 |

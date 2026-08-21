@@ -49,10 +49,12 @@ func indexModels() map[string][]mongo.IndexModel {
 		},
 		TransfersCollection: {
 			{Keys: bson.D{{Key: "chain", Value: 1}, {Key: "txHash", Value: 1}, {Key: "source", Value: 1}, {Key: "traceId", Value: 1}, {Key: "logIndex", Value: 1}, {Key: "asset", Value: 1}}, Options: options.Index().SetUnique(true).SetName("uq_transfers_identity")},
-			{Keys: bson.D{{Key: "chain", Value: 1}, {Key: "from", Value: 1}, {Key: "assetType", Value: 1}, {Key: "blockNumber", Value: 1}}, Options: options.Index().SetName("idx_transfers_from_type_block")},
-			{Keys: bson.D{{Key: "chain", Value: 1}, {Key: "to", Value: 1}, {Key: "assetType", Value: 1}, {Key: "blockNumber", Value: 1}}, Options: options.Index().SetName("idx_transfers_to_type_block")},
-			{Keys: bson.D{{Key: "chain", Value: 1}, {Key: "from", Value: 1}, {Key: "asset", Value: 1}}, Options: options.Index().SetName("idx_transfers_from_asset")},
-			{Keys: bson.D{{Key: "chain", Value: 1}, {Key: "to", Value: 1}, {Key: "asset", Value: 1}}, Options: options.Index().SetName("idx_transfers_to_asset")},
+			{Keys: edgeIndex("from", ""), Options: options.Index().SetName("idx_transfers_from_cursor")},
+			{Keys: edgeIndex("to", ""), Options: options.Index().SetName("idx_transfers_to_cursor")},
+			{Keys: edgeIndex("from", "assetType"), Options: options.Index().SetName("idx_transfers_from_type_cursor")},
+			{Keys: edgeIndex("to", "assetType"), Options: options.Index().SetName("idx_transfers_to_type_cursor")},
+			{Keys: edgeIndex("from", "asset"), Options: options.Index().SetName("idx_transfers_from_asset_cursor")},
+			{Keys: edgeIndex("to", "asset"), Options: options.Index().SetName("idx_transfers_to_asset_cursor")},
 		},
 		LabelsCollection: {
 			{Keys: bson.D{{Key: "chain", Value: 1}, {Key: "address", Value: 1}, {Key: "type", Value: 1}, {Key: "source", Value: 1}}, Options: options.Index().SetUnique(true).SetName("uq_labels_identity")},
@@ -66,6 +68,21 @@ func indexModels() map[string][]mongo.IndexModel {
 			{Keys: bson.D{{Key: "chain", Value: 1}, {Key: "address", Value: 1}, {Key: "computedAt", Value: -1}}, Options: options.Index().SetName("idx_profiles_address_computed")},
 		},
 	}
+}
+
+func edgeIndex(endpoint, assetField string) bson.D {
+	keys := bson.D{{Key: "chain", Value: 1}, {Key: endpoint, Value: 1}}
+	if assetField != "" {
+		keys = append(keys, bson.E{Key: assetField, Value: 1})
+	}
+	keys = append(keys,
+		bson.E{Key: "blockNumber", Value: -1}, bson.E{Key: "txHash", Value: -1}, bson.E{Key: "source", Value: -1},
+		bson.E{Key: "traceId", Value: -1}, bson.E{Key: "logIndex", Value: -1},
+	)
+	if assetField != "asset" {
+		keys = append(keys, bson.E{Key: "asset", Value: -1})
+	}
+	return keys
 }
 
 func (s *Store) FindAddress(ctx context.Context, chain, address string) (Address, bool, error) {
@@ -325,6 +342,85 @@ func nonEmptyCount(values []any) int {
 		}
 	}
 	return count
+}
+
+func (s *Store) QueryTransfers(ctx context.Context, query TransferQuery) ([]Transfer, error) {
+	conditions := bson.A{positiveTransferCondition()}
+	switch query.Direction {
+	case "in":
+		conditions = append(conditions, bson.D{{Key: "to", Value: bson.D{{Key: "$in", Value: query.Addresses}}}})
+	case "out":
+		conditions = append(conditions, bson.D{{Key: "from", Value: bson.D{{Key: "$in", Value: query.Addresses}}}})
+	default:
+		conditions = append(conditions, bson.D{{Key: "$or", Value: bson.A{
+			bson.D{{Key: "from", Value: bson.D{{Key: "$in", Value: query.Addresses}}}},
+			bson.D{{Key: "to", Value: bson.D{{Key: "$in", Value: query.Addresses}}}},
+		}}})
+	}
+	switch query.AssetMode {
+	case "eth":
+		conditions = append(conditions, bson.D{{Key: "assetType", Value: "eth"}})
+	case "erc20":
+		conditions = append(conditions, bson.D{{Key: "assetType", Value: "erc20"}})
+	case "contract":
+		conditions = append(conditions, bson.D{{Key: "asset", Value: query.Asset}})
+	}
+	if query.FromBlock > 0 || query.ToBlock > 0 {
+		rangeFilter := bson.D{}
+		if query.FromBlock > 0 {
+			rangeFilter = append(rangeFilter, bson.E{Key: "$gte", Value: query.FromBlock})
+		}
+		if query.ToBlock > 0 {
+			rangeFilter = append(rangeFilter, bson.E{Key: "$lte", Value: query.ToBlock})
+		}
+		conditions = append(conditions, bson.D{{Key: "blockNumber", Value: rangeFilter}})
+	}
+	if query.After != nil {
+		conditions = append(conditions, transferCursorCondition(*query.After))
+	}
+	filter := bson.D{{Key: "chain", Value: query.Chain}, {Key: "$and", Value: conditions}}
+	sort := bson.D{{Key: "blockNumber", Value: -1}, {Key: "txHash", Value: -1}, {Key: "source", Value: -1}, {Key: "traceId", Value: -1}, {Key: "logIndex", Value: -1}, {Key: "asset", Value: -1}}
+	cursor, err := s.db.Collection(TransfersCollection).Find(ctx, filter, options.Find().SetSort(sort).SetLimit(query.Limit))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = cursor.Close(ctx) }()
+	var results []Transfer
+	if err := cursor.All(ctx, &results); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+func positiveTransferCondition() bson.D {
+	return bson.D{{Key: "$or", Value: bson.A{
+		bson.D{{Key: "amount", Value: bson.D{{Key: "$exists", Value: true}, {Key: "$nin", Value: bson.A{"", "0"}}}}},
+		bson.D{{Key: "tokenValue", Value: bson.D{{Key: "$exists", Value: true}, {Key: "$nin", Value: bson.A{"", "0"}}}}},
+	}}}
+}
+
+func transferCursorCondition(cursor TransferCursor) bson.D {
+	fields := []struct {
+		name  string
+		value any
+	}{
+		{name: "blockNumber", value: cursor.BlockNumber},
+		{name: "txHash", value: cursor.TxHash},
+		{name: "source", value: cursor.Source},
+		{name: "traceId", value: cursor.TraceID},
+		{name: "logIndex", value: cursor.LogIndex},
+		{name: "asset", value: cursor.Asset},
+	}
+	clauses := make(bson.A, 0, len(fields))
+	for index, field := range fields {
+		clause := bson.D{}
+		for prefix := 0; prefix < index; prefix++ {
+			clause = append(clause, bson.E{Key: fields[prefix].name, Value: fields[prefix].value})
+		}
+		clause = append(clause, bson.E{Key: field.name, Value: bson.D{{Key: "$lt", Value: field.value}}})
+		clauses = append(clauses, clause)
+	}
+	return bson.D{{Key: "$or", Value: clauses}}
 }
 
 func (s *Store) ensureCollection(ctx context.Context, name string) error {

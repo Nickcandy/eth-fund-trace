@@ -35,8 +35,8 @@ type Transfer struct {
 	Amount      string    `bson:"amount,omitempty"`
 	TokenValue  string    `bson:"tokenValue,omitempty"`
 	Source      string    `bson:"source"`
-	TraceID     string    `bson:"traceId,omitempty"`
-	LogIndex    int64     `bson:"logIndex,omitempty"`
+	TraceID     string    `bson:"traceId"`
+	LogIndex    int64     `bson:"logIndex"`
 	ObservedAt  time.Time `bson:"observedAt"`
 }
 
@@ -118,4 +118,25 @@ type ProfileFeatures struct {
 type AddressActivity struct {
 	LatestTransferAt time.Time
 	Features         ProfileFeatures
+}
+
+type TransferCursor struct {
+	BlockNumber int64
+	TxHash      string
+	Source      string
+	TraceID     string
+	LogIndex    int64
+	Asset       string
+}
+
+type TransferQuery struct {
+	Chain     string
+	Addresses []string
+	Direction string
+	AssetMode string
+	Asset     string
+	FromBlock int64
+	ToBlock   int64
+	Limit     int64
+	After     *TransferCursor
 }

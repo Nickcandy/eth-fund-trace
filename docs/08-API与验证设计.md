@@ -6,6 +6,23 @@
 
 按地址补齐 Etherscan 数据并入库。只负责同步，不执行完整风险判断。
 
+始终返回 `202` 和 `jobId`；同地址已有活动任务时返回同一 ID。`neighborLimit` 取值 `0..10`，默认 10。
+
+### `GET /api/v1/sync-jobs/:id`
+
+返回 `queued -> running -> succeeded | partial | failed` 状态及同步计数、邻居结果和可重试错误。
+
+### `GET /api/v1/edges`
+
+查询一个或多个已同步地址的正金额事实边：
+
+```text
+chain, address, direction=in|out|both, asset=all|ETH|erc20|<token contract>
+fromBlock, toBlock, limit, cursor
+```
+
+`address` 可重复传入；`limit` 默认 100、最大 500。结果按 `blockNumber, txHash, source, traceId, logIndex, asset` 降序排列，`cursor` 为不透明 Base64URL 值。不推断同哈希跨资产换币关系，不做汇率换算。
+
 ### `GET /api/v1/trace`
 
 执行上游、下游或双向追踪。
@@ -24,6 +41,8 @@ chain, address, direction, depth, topN, asset
 
 根据已同步数据计算地址画像，例如交易频率、独立对手方、归集行为和疑似热钱包分数。画像结果不自动等同于人工标签。
 
+当前规则版本为 `hot-wallet-v1`，快照唯一键为 `(chain, address, ruleVersion, dataThroughBlock)`。少于 10 条记录输出 `insufficient_data`；画像只表达推断信号，不写入确定性标签。
+
 ### `POST /api/v1/labels`
 
 添加或更新人工标签，记录来源、备注、证据和风险等级。
@@ -40,7 +59,8 @@ chain, address, direction, depth, topN, asset
 - 参数超过深度/节点/边上限：`400`；
 - 外部数据源限流：`503` 或可重试错误；
 - 同步失败：返回任务状态和错误原因；
-- 未找到数据：返回“暂无结论”，不是“安全”。
+- 画像或资金边查询的地址从未成功同步：`409 address_not_synced`，不能解释为无风险；
+- 未找到资金边：返回空页，仅表示当前过滤条件下没有已同步的正金额事实边。
 
 每个请求需要有超时、日志、请求 ID 和最大资源限制。
 

@@ -159,6 +159,67 @@ func TestM4ActivityAggregationAndProfileSnapshot(t *testing.T) {
 	}
 }
 
+func TestM5TransferQueryFiltersAndPaginates(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(os.Getenv("MONGO_URI")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Disconnect(context.Background())
+	db := client.Database("eth_fund_trace_m5_test")
+	if err := db.Drop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s := New(db)
+	if err := s.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	seed := "0x0000000000000000000000000000000000000001"
+	neighbor := "0x0000000000000000000000000000000000000002"
+	token := "0x0000000000000000000000000000000000000010"
+	transfers := []Transfer{
+		{Chain: "ethereum", TxHash: "0xff", BlockNumber: 12, Source: "txlist", Asset: "ETH", AssetType: "eth", From: seed, To: neighbor, Amount: "0"},
+		{Chain: "ethereum", TxHash: "0xcc", BlockNumber: 11, Source: "txlist", Asset: "ETH", AssetType: "eth", From: seed, To: neighbor, Amount: "3"},
+		{Chain: "ethereum", TxHash: "0xbb", BlockNumber: 10, Source: "txlistinternal", TraceID: "1", Asset: "ETH", AssetType: "eth", From: neighbor, To: seed, Amount: "2"},
+		{Chain: "ethereum", TxHash: "0xbb", BlockNumber: 10, Source: "tokentx", LogIndex: 2, Asset: token, AssetType: "erc20", From: seed, To: neighbor, TokenValue: "4"},
+		{Chain: "ethereum", TxHash: "0xaa", BlockNumber: 9, Source: "txlist", Asset: "ETH", AssetType: "eth", From: neighbor, To: seed, Amount: "1"},
+	}
+	if _, err := s.BulkUpsertTransfers(ctx, transfers); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := s.QueryTransfers(ctx, TransferQuery{Chain: "ethereum", Addresses: []string{seed}, Direction: "both", AssetMode: "all", Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 2 || first[0].TxHash != "0xcc" || first[1].Source != "txlistinternal" {
+		t.Fatalf("first page=%+v", first)
+	}
+	after := TransferCursor{BlockNumber: first[1].BlockNumber, TxHash: first[1].TxHash, Source: first[1].Source, TraceID: first[1].TraceID, LogIndex: first[1].LogIndex, Asset: first[1].Asset}
+	second, err := s.QueryTransfers(ctx, TransferQuery{Chain: "ethereum", Addresses: []string{seed}, Direction: "both", AssetMode: "all", Limit: 10, After: &after})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second) != 2 || second[0].Source != "tokentx" || second[1].TxHash != "0xaa" {
+		t.Fatalf("second page=%+v", second)
+	}
+
+	outgoingToken, err := s.QueryTransfers(ctx, TransferQuery{Chain: "ethereum", Addresses: []string{seed}, Direction: "out", AssetMode: "contract", Asset: token, Limit: 10})
+	if err != nil || len(outgoingToken) != 1 || outgoingToken[0].Source != "tokentx" {
+		t.Fatalf("token edges=%+v err=%v", outgoingToken, err)
+	}
+	incomingETH, err := s.QueryTransfers(ctx, TransferQuery{Chain: "ethereum", Addresses: []string{seed}, Direction: "in", AssetMode: "eth", FromBlock: 10, ToBlock: 10, Limit: 10})
+	if err != nil || len(incomingETH) != 1 || incomingETH[0].Source != "txlistinternal" {
+		t.Fatalf("incoming ETH=%+v err=%v", incomingETH, err)
+	}
+	multiAddress, err := s.QueryTransfers(ctx, TransferQuery{Chain: "ethereum", Addresses: []string{seed, neighbor}, Direction: "out", AssetMode: "erc20", Limit: 10})
+	if err != nil || len(multiAddress) != 1 {
+		t.Fatalf("multi-address ERC-20=%+v err=%v", multiAddress, err)
+	}
+}
+
 func assertDuplicateKey(t *testing.T, ctx context.Context, collection *mongo.Collection, document any) {
 	t.Helper()
 	if _, err := collection.InsertOne(ctx, document); err != nil {
