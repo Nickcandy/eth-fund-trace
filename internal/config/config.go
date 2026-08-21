@@ -13,7 +13,13 @@ type Config struct {
 	EtherscanBaseURL           string
 	EtherscanPageSize          int
 	EtherscanMaxPages          int
-	EtherscanRequestIntervalMS int
+	EtherscanRequestsPerSecond int
+	EtherscanBurst             int
+	EtherscanMaxRetries        int
+	EtherscanRetryBaseMS       int
+	SyncCacheTTLMinutes        int
+	SyncConfirmations          int
+	SyncQueueSize              int
 }
 
 func Load() Config {
@@ -25,8 +31,22 @@ func Load() Config {
 		EtherscanBaseURL:           value("ETHERSCAN_BASE_URL", "https://api.etherscan.io/v2/api"),
 		EtherscanPageSize:          intValue("ETHERSCAN_PAGE_SIZE", 100),
 		EtherscanMaxPages:          intValue("ETHERSCAN_MAX_PAGES", 100),
-		EtherscanRequestIntervalMS: intValue("ETHERSCAN_REQUEST_INTERVAL_MS", 250),
+		EtherscanRequestsPerSecond: intValue("ETHERSCAN_REQUESTS_PER_SECOND", 5),
+		EtherscanBurst:             intValue("ETHERSCAN_BURST", 1),
+		EtherscanMaxRetries:        nonNegativeIntValue("ETHERSCAN_MAX_RETRIES", 3),
+		EtherscanRetryBaseMS:       intValue("ETHERSCAN_RETRY_BASE_MS", 500),
+		SyncCacheTTLMinutes:        intValue("SYNC_CACHE_TTL_MINUTES", 15),
+		SyncConfirmations:          nonNegativeIntValue("SYNC_CONFIRMATIONS", 12),
+		SyncQueueSize:              intValue("SYNC_QUEUE_SIZE", 100),
 	}
+}
+
+func nonNegativeIntValue(key string, fallback int) int {
+	parsed, err := strconv.Atoi(os.Getenv(key))
+	if err != nil || parsed < 0 {
+		return fallback
+	}
+	return parsed
 }
 
 func value(key, fallback string) string {

@@ -1,6 +1,10 @@
 package store
 
-import "time"
+import (
+	"time"
+
+	"go.mongodb.org/mongo-driver/bson/primitive"
+)
 
 type Address struct {
 	Chain                string    `bson:"chain"`
@@ -8,6 +12,7 @@ type Address struct {
 	Address              string    `bson:"address"`
 	IsContract           bool      `bson:"isContract"`
 	IsTerminal           bool      `bson:"isTerminal"`
+	EarliestSyncedBlock  int64     `bson:"earliestSyncedBlock"`
 	HistorySyncedToBlock int64     `bson:"historySyncedToBlock"`
 	LatestSyncedBlock    int64     `bson:"latestSyncedBlock"`
 	LastSyncedAt         time.Time `bson:"lastSyncedAt,omitempty"`
@@ -47,13 +52,33 @@ type Label struct {
 }
 
 type SyncJob struct {
-	Chain      string    `bson:"chain"`
-	ChainID    int64     `bson:"chainId"`
-	Address    string    `bson:"address"`
-	Status     string    `bson:"status"`
-	StartedAt  time.Time `bson:"startedAt"`
-	FinishedAt time.Time `bson:"finishedAt,omitempty"`
-	DurationMS int64     `bson:"durationMs,omitempty"`
-	Fetched    int64     `bson:"fetched"`
-	Error      string    `bson:"error,omitempty"`
+	ID                  primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Chain               string             `bson:"chain" json:"chain"`
+	ChainID             int64              `bson:"chainId" json:"chainId"`
+	Address             string             `bson:"address" json:"address"`
+	StartBlock          int64              `bson:"startBlock" json:"startBlock"`
+	NeighborLimit       int                `bson:"neighborLimit" json:"neighborLimit"`
+	Status              string             `bson:"status" json:"status"`
+	CreatedAt           time.Time          `bson:"createdAt" json:"createdAt"`
+	StartedAt           time.Time          `bson:"startedAt,omitempty" json:"startedAt,omitempty"`
+	FinishedAt          time.Time          `bson:"finishedAt,omitempty" json:"finishedAt,omitempty"`
+	DurationMS          int64              `bson:"durationMs,omitempty" json:"durationMs,omitempty"`
+	SafeHead            int64              `bson:"safeHead,omitempty" json:"safeHead,omitempty"`
+	TotalAddresses      int                `bson:"totalAddresses" json:"totalAddresses"`
+	CompletedAddresses  int                `bson:"completedAddresses" json:"completedAddresses"`
+	CachedAddresses     int                `bson:"cachedAddresses" json:"cachedAddresses"`
+	Fetched             int64              `bson:"fetched" json:"fetched"`
+	ActionCounts        map[string]int64   `bson:"actionCounts,omitempty" json:"actionCounts,omitempty"`
+	SuccessfulNeighbors []string           `bson:"successfulNeighbors,omitempty" json:"successfulNeighbors,omitempty"`
+	FailedNeighbors     []SyncFailure      `bson:"failedNeighbors,omitempty" json:"failedNeighbors,omitempty"`
+	ErrorCode           string             `bson:"errorCode,omitempty" json:"errorCode,omitempty"`
+	Error               string             `bson:"error,omitempty" json:"error,omitempty"`
+	Retryable           bool               `bson:"retryable" json:"retryable"`
+}
+
+type SyncFailure struct {
+	Address   string `bson:"address" json:"address"`
+	Code      string `bson:"code" json:"code"`
+	Message   string `bson:"message" json:"message"`
+	Retryable bool   `bson:"retryable" json:"retryable"`
 }

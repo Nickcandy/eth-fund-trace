@@ -17,8 +17,8 @@ func TestLiveActions(t *testing.T) {
 		t.Skip("set ETHERSCAN_LIVE_TEST=1 and ETHERSCAN_API_KEY to run")
 	}
 	client := NewClient(Config{
-		APIKey:          os.Getenv("ETHERSCAN_API_KEY"),
-		RequestInterval: 250 * time.Millisecond,
+		APIKey:            os.Getenv("ETHERSCAN_API_KEY"),
+		RequestsPerSecond: 5,
 	})
 
 	const address = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
@@ -74,4 +74,21 @@ func TestLiveActions(t *testing.T) {
 			t.Logf("received %d transfers", len(transfers))
 		})
 	}
+}
+
+func TestLiveLatestBlock(t *testing.T) {
+	if os.Getenv("ETHERSCAN_LIVE_TEST") != "1" || os.Getenv("ETHERSCAN_API_KEY") == "" {
+		t.Skip("set ETHERSCAN_LIVE_TEST=1 and ETHERSCAN_API_KEY to run")
+	}
+	client := NewClient(Config{APIKey: os.Getenv("ETHERSCAN_API_KEY"), RequestsPerSecond: 5})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	block, err := client.LatestBlock(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if block <= 0 {
+		t.Fatalf("latest block = %d", block)
+	}
+	t.Logf("latest block %d", block)
 }

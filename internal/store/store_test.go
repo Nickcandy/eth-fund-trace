@@ -33,7 +33,7 @@ func TestModelBSONFields(t *testing.T) {
 		{name: "address", model: Address{}, required: []string{"chain", "chainId", "address", "syncStatus"}},
 		{name: "transfer", model: Transfer{}, required: []string{"chain", "chainId", "txHash", "from", "to", "assetType", "asset", "source", "observedAt"}},
 		{name: "label", model: Label{}, required: []string{"chain", "chainId", "address", "type", "source", "observedAt"}},
-		{name: "sync job", model: SyncJob{}, required: []string{"chain", "chainId", "address", "status", "startedAt", "fetched"}},
+		{name: "sync job", model: SyncJob{}, required: []string{"chain", "chainId", "address", "status", "createdAt", "fetched"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

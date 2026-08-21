@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -257,7 +258,7 @@ func TestClientPageLimitAndContextCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err = NewClient(Config{APIKey: "secret", BaseURL: server.URL, RequestInterval: time.Second, HTTPClient: server.Client()}).ListTransactions(ctx, "0xseed", 0, 1)
+	_, err = NewClient(Config{APIKey: "secret", BaseURL: server.URL, RequestsPerSecond: 1, HTTPClient: server.Client()}).ListTransactions(ctx, "0xseed", 0, 1)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context canceled", err)
 	}
@@ -267,5 +268,68 @@ func TestNormalizeRejectsInvalidFields(t *testing.T) {
 	_, err := normalize([]json.RawMessage{json.RawMessage(`{"blockNumber":"bad"}`)}, "txlist")
 	if !errors.Is(err, ErrMalformedResponse) {
 		t.Fatalf("error = %v, want malformed response", err)
+	}
+}
+
+func TestClientReturnsLatestBlock(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("module") != "proxy" || r.URL.Query().Get("action") != "eth_blockNumber" {
+			t.Fatalf("unexpected query: %s", r.URL.RawQuery)
+		}
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"0x12d687"}`))
+	}))
+	defer server.Close()
+
+	block, err := NewClient(Config{BaseURL: server.URL, HTTPClient: server.Client(), RequestsPerSecond: 1000}).LatestBlock(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if block != 1234567 {
+		t.Fatalf("block = %d, want 1234567", block)
+	}
+}
+
+func TestClientSharesRateLimitAcrossConcurrentActions(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"0","message":"No transactions found","result":[]}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{BaseURL: server.URL, HTTPClient: server.Client(), RequestsPerSecond: 20, Burst: 1})
+	started := time.Now()
+	var wg sync.WaitGroup
+	for _, call := range []func(context.Context, string, int64, int64) ([]store.Transfer, error){client.ListTransactions, client.ListInternalTransactions} {
+		wg.Add(1)
+		go func(call func(context.Context, string, int64, int64) ([]store.Transfer, error)) {
+			defer wg.Done()
+			if _, err := call(context.Background(), "0xseed", 0, 1); err != nil {
+				t.Errorf("call failed: %v", err)
+			}
+		}(call)
+	}
+	wg.Wait()
+	if elapsed := time.Since(started); elapsed < 35*time.Millisecond {
+		t.Fatalf("elapsed = %v, want shared rate limiter delay", elapsed)
+	}
+}
+
+func TestClientRetriesTransientHTTPFailure(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"0","message":"No transactions found","result":[]}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{BaseURL: server.URL, HTTPClient: server.Client(), RequestsPerSecond: 1000, MaxRetries: 3, RetryBase: time.Millisecond})
+	if _, err := client.ListTransactions(context.Background(), "0xseed", 0, 1); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 3 {
+		t.Fatalf("requests = %d, want 3", requests)
 	}
 }

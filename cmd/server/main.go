@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"github.com/Nickcandy/eth-fund-trace/internal/config"
+	"github.com/Nickcandy/eth-fund-trace/internal/etherscan"
 	"github.com/Nickcandy/eth-fund-trace/internal/httpapi"
 	"github.com/Nickcandy/eth-fund-trace/internal/store"
+	"github.com/Nickcandy/eth-fund-trace/internal/syncer"
 	"github.com/labstack/echo/v4"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -39,16 +41,33 @@ func run(parent context.Context) error {
 	if err := client.Ping(connectCtx, nil); err != nil {
 		return err
 	}
-	if err := store.New(client.Database(cfg.MongoDatabase)).Initialize(connectCtx); err != nil {
+	appStore := store.New(client.Database(cfg.MongoDatabase))
+	if err := appStore.Initialize(connectCtx); err != nil {
 		return err
 	}
+	etherscanClient := etherscan.NewClient(etherscan.Config{
+		APIKey: cfg.EtherscanAPIKey, BaseURL: cfg.EtherscanBaseURL, PageSize: cfg.EtherscanPageSize,
+		MaxPages: cfg.EtherscanMaxPages, RequestsPerSecond: float64(cfg.EtherscanRequestsPerSecond),
+		Burst: cfg.EtherscanBurst, MaxRetries: cfg.EtherscanMaxRetries, RetryBase: time.Duration(cfg.EtherscanRetryBaseMS) * time.Millisecond,
+	})
+	syncManager := syncer.New(etherscanClient, appStore, syncer.Config{
+		CacheTTL: time.Duration(cfg.SyncCacheTTLMinutes) * time.Minute, Confirmations: int64(cfg.SyncConfirmations), QueueSize: cfg.SyncQueueSize,
+	})
 
 	e := echo.New()
 	e.HideBanner = true
 	e.GET("/healthz", httpapi.NewHealthHandler(client).Handle)
+	syncHandler := httpapi.NewSyncHandler(syncManager)
+	e.POST("/api/v1/sync", syncHandler.Enqueue)
+	e.GET("/api/v1/sync-jobs/:id", syncHandler.Job)
 
 	serverCtx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	go func() {
+		if err := syncManager.Run(serverCtx); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("sync manager stopped", "error", err)
+		}
+	}()
 	go func() {
 		<-serverCtx.Done()
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
