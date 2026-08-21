@@ -36,7 +36,7 @@ func (p *Profiler) Get(ctx context.Context, chain, address string) (store.Addres
 	if err != nil {
 		return store.AddressProfile{}, err
 	}
-	if !found || metadata.SyncStatus != "synced" {
+	if !found || (metadata.SyncStatus != "synced" && metadata.LastSyncedAt.IsZero()) {
 		return store.AddressProfile{}, ErrAddressNotSynced
 	}
 	if existing, found, err := p.repository.FindAddressProfile(ctx, chain, address, RuleVersion, metadata.LatestSyncedBlock); err != nil {
@@ -117,12 +117,15 @@ func tier(value int, thresholds []threshold) int {
 }
 
 func behaviorScore(counterparties int, oppositeDirection int64) int {
+	if oppositeDirection < 1 {
+		return 0
+	}
 	switch {
-	case counterparties >= 50 && oppositeDirection >= 10:
+	case counterparties >= 50:
 		return 15
-	case counterparties >= 20 && oppositeDirection >= 5:
+	case counterparties >= 20:
 		return 10
-	case counterparties >= 10 && oppositeDirection >= 1:
+	case counterparties >= 10:
 		return 5
 	default:
 		return 0

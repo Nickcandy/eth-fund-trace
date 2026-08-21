@@ -19,6 +19,8 @@ func TestLiveActions(t *testing.T) {
 	client := NewClient(Config{
 		APIKey:            os.Getenv("ETHERSCAN_API_KEY"),
 		RequestsPerSecond: 5,
+		MaxRetries:        3,
+		RetryBase:         500 * time.Millisecond,
 	})
 
 	const address = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
@@ -80,7 +82,7 @@ func TestLiveLatestBlock(t *testing.T) {
 	if os.Getenv("ETHERSCAN_LIVE_TEST") != "1" || os.Getenv("ETHERSCAN_API_KEY") == "" {
 		t.Skip("set ETHERSCAN_LIVE_TEST=1 and ETHERSCAN_API_KEY to run")
 	}
-	client := NewClient(Config{APIKey: os.Getenv("ETHERSCAN_API_KEY"), RequestsPerSecond: 5})
+	client := NewClient(Config{APIKey: os.Getenv("ETHERSCAN_API_KEY"), RequestsPerSecond: 5, MaxRetries: 3, RetryBase: 500 * time.Millisecond})
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	block, err := client.LatestBlock(ctx)

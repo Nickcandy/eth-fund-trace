@@ -96,6 +96,10 @@ func TestM3BulkNeighborsAndInterruptedJobs(t *testing.T) {
 	if len(neighbors) != 2 || neighbors[0] != neighborA || neighbors[1] != neighborB {
 		t.Fatalf("neighbors=%v, want interaction-count ordering", neighbors)
 	}
+	neighbors, err = s.TopNeighbors(ctx, "ethereum", seed, 0)
+	if err != nil || len(neighbors) != 0 {
+		t.Fatalf("zero-limit neighbors=%v err=%v, want empty", neighbors, err)
+	}
 
 	job := SyncJob{Chain: "ethereum", ChainID: 1, Address: seed, Status: "running", CreatedAt: time.Now()}
 	if err := s.CreateSyncJob(ctx, &job); err != nil {

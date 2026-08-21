@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -157,7 +158,10 @@ func (m *Manager) process(ctx context.Context, queued queuedJob) {
 		return
 	}
 	job.Status, job.StartedAt = "running", m.config.Clock().UTC()
-	_ = m.repository.SaveSyncJob(ctx, job)
+	if err := m.repository.SaveSyncJob(ctx, job); err != nil {
+		slog.Error("failed to mark sync job running", "job_id", job.ID.Hex(), "error", err)
+		return
+	}
 
 	var safeHead *int64
 	getSafeHead := func() (int64, error) {
@@ -185,12 +189,16 @@ func (m *Manager) process(ctx context.Context, queued queuedJob) {
 	m.mergeResult(&job, seedResult)
 	job.CompletedAddresses = 1
 
-	neighbors, err := m.repository.TopNeighbors(ctx, queued.request.Chain, queued.request.Address, queued.request.NeighborLimit)
-	if err != nil {
-		m.finishFailed(ctx, &job, err)
-		return
+	var neighbors []string
+	if queued.request.NeighborLimit > 0 {
+		neighbors, err = m.repository.TopNeighbors(ctx, queued.request.Chain, queued.request.Address, queued.request.NeighborLimit)
+		if err != nil {
+			m.finishFailed(ctx, &job, err)
+			return
+		}
 	}
 	job.TotalAddresses = 1 + len(neighbors)
+	m.saveProgress(ctx, job)
 	for _, neighbor := range neighbors {
 		request := queued.request
 		request.Address, request.NeighborLimit = neighbor, 0
@@ -198,11 +206,13 @@ func (m *Manager) process(ctx context.Context, queued queuedJob) {
 		if syncErr != nil {
 			code, retryable := classify(syncErr)
 			job.FailedNeighbors = append(job.FailedNeighbors, store.SyncFailure{Address: neighbor, Code: code, Message: syncErr.Error(), Retryable: retryable})
+			m.saveProgress(ctx, job)
 			continue
 		}
 		m.mergeResult(&job, result)
 		job.CompletedAddresses++
 		job.SuccessfulNeighbors = append(job.SuccessfulNeighbors, neighbor)
+		m.saveProgress(ctx, job)
 	}
 	job.Status = "succeeded"
 	if len(job.FailedNeighbors) > 0 {
@@ -258,7 +268,9 @@ func (m *Manager) syncAddress(ctx context.Context, request Request, getSafeHead 
 		for _, action := range m.actions() {
 			count, fetchErr := m.fetchRange(ctx, action.call, action.name, request.Address, interval[0], interval[1], discovered)
 			if fetchErr != nil {
-				_ = m.repository.FailAddressSync(ctx, request.Chain, request.Address, fetchErr.Error())
+				if err := m.repository.FailAddressSync(ctx, request.Chain, request.Address, fetchErr.Error()); err != nil {
+					slog.Error("failed to persist address sync failure", "address", request.Address, "error", err)
+				}
 				return addressResult{}, fetchErr
 			}
 			result.fetched += count
@@ -338,12 +350,21 @@ func (m *Manager) fetchRange(ctx context.Context, call func(context.Context, str
 }
 
 func (m *Manager) mergeResult(job *store.SyncJob, result addressResult) {
+	if job.ActionCounts == nil {
+		job.ActionCounts = make(map[string]int64)
+	}
 	job.Fetched += result.fetched
 	if result.cached {
 		job.CachedAddresses++
 	}
 	for name, count := range result.actionCounts {
 		job.ActionCounts[name] += count
+	}
+}
+
+func (m *Manager) saveProgress(ctx context.Context, job store.SyncJob) {
+	if err := m.repository.SaveSyncJob(ctx, job); err != nil {
+		slog.Error("failed to persist sync job progress", "job_id", job.ID.Hex(), "error", err)
 	}
 }
 
@@ -357,7 +378,9 @@ func (m *Manager) finishFailed(ctx context.Context, job *store.SyncJob, err erro
 func (m *Manager) finish(ctx context.Context, job *store.SyncJob) {
 	job.FinishedAt = m.config.Clock().UTC()
 	job.DurationMS = job.FinishedAt.Sub(job.StartedAt).Milliseconds()
-	_ = m.repository.SaveSyncJob(ctx, *job)
+	if err := m.repository.SaveSyncJob(ctx, *job); err != nil {
+		slog.Error("failed to persist final sync job state", "job_id", job.ID.Hex(), "status", job.Status, "error", err)
+	}
 }
 
 func (m *Manager) release(request Request) {

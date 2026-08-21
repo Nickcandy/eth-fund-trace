@@ -333,3 +333,25 @@ func TestClientRetriesTransientHTTPFailure(t *testing.T) {
 		t.Fatalf("requests = %d, want 3", requests)
 	}
 }
+
+func TestClientRetriesAPILevelRateLimit(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests < 3 {
+			_, _ = w.Write([]byte(`{"status":"0","message":"NOTOK","result":"Max rate limit reached"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"0x12d687"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{BaseURL: server.URL, HTTPClient: server.Client(), RequestsPerSecond: 1000, MaxRetries: 3, RetryBase: time.Millisecond})
+	block, err := client.LatestBlock(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if block != 1234567 || requests != 3 {
+		t.Fatalf("block=%d requests=%d, want 1234567 and 3", block, requests)
+	}
+}

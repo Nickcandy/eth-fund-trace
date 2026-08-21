@@ -54,11 +54,12 @@ func (f *fakeSource) ListTokenTransfers(_ context.Context, address string, start
 }
 
 type memoryRepository struct {
-	mu        sync.Mutex
-	addresses map[string]store.Address
-	jobs      map[primitive.ObjectID]store.SyncJob
-	transfers []store.Transfer
-	neighbors []string
+	mu                    sync.Mutex
+	addresses             map[string]store.Address
+	jobs                  map[primitive.ObjectID]store.SyncJob
+	transfers             []store.Transfer
+	neighbors             []string
+	omitEmptyActionCounts bool
 }
 
 func newMemoryRepository() *memoryRepository {
@@ -121,7 +122,11 @@ func (r *memoryRepository) CreateSyncJob(_ context.Context, job *store.SyncJob) 
 func (r *memoryRepository) GetSyncJob(_ context.Context, id primitive.ObjectID) (store.SyncJob, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.jobs[id], nil
+	job := r.jobs[id]
+	if r.omitEmptyActionCounts && len(job.ActionCounts) == 0 {
+		job.ActionCounts = nil
+	}
+	return job, nil
 }
 
 func (r *memoryRepository) SaveSyncJob(_ context.Context, job store.SyncJob) error {
@@ -169,6 +174,25 @@ func TestManagerSyncsSeedAndReusesFreshCache(t *testing.T) {
 	}
 	if profileCalls != 2 {
 		t.Fatalf("profile calls = %d, want one after sync and one cached snapshot check", profileCalls)
+	}
+}
+
+func TestManagerHandlesOmittedEmptyActionCountsAfterPersistence(t *testing.T) {
+	source := &fakeSource{latest: 100}
+	repository := newMemoryRepository()
+	repository.omitEmptyActionCounts = true
+	manager := New(source, repository, Config{CacheTTL: time.Minute, Confirmations: 12, QueueSize: 10})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = manager.Run(ctx) }()
+
+	job, err := manager.Enqueue(context.Background(), Request{Chain: "ethereum", Address: "0x0000000000000000000000000000000000000001", NeighborLimit: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job = waitForJob(t, manager, job.ID.Hex())
+	if job.Status != "succeeded" || len(job.ActionCounts) != 3 {
+		t.Fatalf("job=%+v", job)
 	}
 }
 

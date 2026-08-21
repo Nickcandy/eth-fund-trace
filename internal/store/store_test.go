@@ -72,6 +72,9 @@ func TestIndexModels(t *testing.T) {
 	if unique := indexes[AddressesCollection][0].Options.Unique; unique == nil || !*unique {
 		t.Fatal("address identity index must be unique")
 	}
+	if len(indexes[AddressesCollection]) != 2 {
+		t.Fatalf("address index count = %d, want 2", len(indexes[AddressesCollection]))
+	}
 	if unique := indexes[LabelsCollection][0].Options.Unique; unique == nil || !*unique {
 		t.Fatal("label identity index must be unique")
 	}

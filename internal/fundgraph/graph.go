@@ -78,7 +78,7 @@ func New(repository Repository) *Graph {
 }
 
 func (g *Graph) Edges(ctx context.Context, query EdgeQuery) (EdgePage, error) {
-	normalized, dataThrough, err := g.normalize(ctx, query)
+	normalized, dataThrough, dataStatus, err := g.normalize(ctx, query)
 	if err != nil {
 		return EdgePage{}, err
 	}
@@ -94,7 +94,7 @@ func (g *Graph) Edges(ctx context.Context, query EdgeQuery) (EdgePage, error) {
 	for _, transfer := range transfers {
 		items = append(items, edgeFromTransfer(transfer))
 	}
-	page := EdgePage{Items: items, DataThroughBlock: dataThrough, DataStatus: "synced"}
+	page := EdgePage{Items: items, DataThroughBlock: dataThrough, DataStatus: dataStatus}
 	if hasMore && len(transfers) > 0 {
 		page.NextCursor, err = encodeCursor(transfers[len(transfers)-1])
 		if err != nil {
@@ -104,31 +104,35 @@ func (g *Graph) Edges(ctx context.Context, query EdgeQuery) (EdgePage, error) {
 	return page, nil
 }
 
-func (g *Graph) normalize(ctx context.Context, query EdgeQuery) (store.TransferQuery, int64, error) {
+func (g *Graph) normalize(ctx context.Context, query EdgeQuery) (store.TransferQuery, int64, string, error) {
 	query.Chain = strings.ToLower(strings.TrimSpace(query.Chain))
 	if query.Chain == "" {
 		query.Chain = "ethereum"
 	}
 	if query.Chain != "ethereum" || len(query.Addresses) == 0 || query.FromBlock < 0 || query.ToBlock < 0 || (query.ToBlock > 0 && query.FromBlock > query.ToBlock) {
-		return store.TransferQuery{}, 0, ErrInvalidQuery
+		return store.TransferQuery{}, 0, "", ErrInvalidQuery
 	}
 	seen := make(map[string]struct{}, len(query.Addresses))
 	addresses := make([]string, 0, len(query.Addresses))
 	dataThrough := int64(-1)
+	dataStatus := "synced"
 	for _, value := range query.Addresses {
 		address, err := ethaddr.Normalize(value)
 		if err != nil {
-			return store.TransferQuery{}, 0, ErrInvalidQuery
+			return store.TransferQuery{}, 0, "", ErrInvalidQuery
 		}
 		if _, ok := seen[address]; ok {
 			continue
 		}
 		metadata, found, err := g.repository.FindAddress(ctx, query.Chain, address)
 		if err != nil {
-			return store.TransferQuery{}, 0, err
+			return store.TransferQuery{}, 0, "", err
 		}
 		if !found || (metadata.SyncStatus != "synced" && metadata.LastSyncedAt.IsZero()) {
-			return store.TransferQuery{}, 0, ErrAddressNotSynced
+			return store.TransferQuery{}, 0, "", ErrAddressNotSynced
+		}
+		if metadata.SyncStatus != "synced" {
+			dataStatus = "stale"
 		}
 		if dataThrough < 0 || metadata.LatestSyncedBlock < dataThrough {
 			dataThrough = metadata.LatestSyncedBlock
@@ -141,28 +145,28 @@ func (g *Graph) normalize(ctx context.Context, query EdgeQuery) (store.TransferQ
 		direction = "both"
 	}
 	if direction != "in" && direction != "out" && direction != "both" {
-		return store.TransferQuery{}, 0, ErrInvalidQuery
+		return store.TransferQuery{}, 0, "", ErrInvalidQuery
 	}
 	assetMode, asset, err := normalizeAsset(query.Asset)
 	if err != nil {
-		return store.TransferQuery{}, 0, err
+		return store.TransferQuery{}, 0, "", err
 	}
 	limit := query.Limit
 	if limit == 0 {
 		limit = 100
 	}
 	if limit < 1 || limit > 500 {
-		return store.TransferQuery{}, 0, ErrInvalidQuery
+		return store.TransferQuery{}, 0, "", ErrInvalidQuery
 	}
 	var after *store.TransferCursor
 	if query.Cursor != "" {
 		decoded, err := decodeCursor(query.Cursor)
 		if err != nil {
-			return store.TransferQuery{}, 0, ErrInvalidQuery
+			return store.TransferQuery{}, 0, "", ErrInvalidQuery
 		}
 		after = &store.TransferCursor{BlockNumber: decoded.BlockNumber, TxHash: decoded.TxHash, Source: decoded.Source, TraceID: decoded.TraceID, LogIndex: decoded.LogIndex, Asset: decoded.Asset}
 	}
-	return store.TransferQuery{Chain: query.Chain, Addresses: addresses, Direction: direction, AssetMode: assetMode, Asset: asset, FromBlock: query.FromBlock, ToBlock: query.ToBlock, Limit: int64(limit + 1), After: after}, dataThrough, nil
+	return store.TransferQuery{Chain: query.Chain, Addresses: addresses, Direction: direction, AssetMode: assetMode, Asset: asset, FromBlock: query.FromBlock, ToBlock: query.ToBlock, Limit: int64(limit + 1), After: after}, dataThrough, dataStatus, nil
 }
 
 func normalizeAsset(value string) (string, string, error) {

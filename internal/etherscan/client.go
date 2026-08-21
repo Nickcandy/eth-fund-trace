@@ -241,6 +241,10 @@ func (c *APIClient) get(ctx context.Context, endpoint string) ([]byte, error) {
 		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 			return nil, fmt.Errorf("etherscan HTTP status %d", resp.StatusCode)
 		}
+		if isRateLimitResponse(body) {
+			lastErr = fmt.Errorf("%w: API response", ErrRateLimited)
+			continue
+		}
 		return body, nil
 	}
 	return nil, lastErr
@@ -280,4 +284,19 @@ func responseMessage(message string, result json.RawMessage) string {
 func isRateLimited(message string, result json.RawMessage) bool {
 	text := strings.ToLower(message + " " + string(result))
 	return strings.Contains(text, "rate limit") || strings.Contains(text, "rate-limit") || strings.Contains(text, "max rate")
+}
+
+func isRateLimitResponse(body []byte) bool {
+	var envelope struct {
+		Status  string          `json:"status"`
+		Message string          `json:"message"`
+		Result  json.RawMessage `json:"result"`
+		Error   struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &envelope) != nil || envelope.Status == "1" {
+		return false
+	}
+	return isRateLimited(envelope.Message+" "+envelope.Error.Message, envelope.Result)
 }

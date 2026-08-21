@@ -46,6 +46,7 @@ func indexModels() map[string][]mongo.IndexModel {
 	return map[string][]mongo.IndexModel{
 		AddressesCollection: {
 			{Keys: bson.D{{Key: "chain", Value: 1}, {Key: "address", Value: 1}}, Options: options.Index().SetUnique(true).SetName("uq_addresses_chain_address")},
+			{Keys: bson.D{{Key: "syncStatus", Value: 1}, {Key: "lastSyncedAt", Value: 1}}, Options: options.Index().SetName("idx_addresses_status_synced")},
 		},
 		TransfersCollection: {
 			{Keys: bson.D{{Key: "chain", Value: 1}, {Key: "txHash", Value: 1}, {Key: "source", Value: 1}, {Key: "traceId", Value: 1}, {Key: "logIndex", Value: 1}, {Key: "asset", Value: 1}}, Options: options.Index().SetUnique(true).SetName("uq_transfers_identity")},
@@ -156,6 +157,9 @@ func (s *Store) UpsertDiscoveredAddresses(ctx context.Context, chain string, cha
 }
 
 func (s *Store) TopNeighbors(ctx context.Context, chain, address string, limit int) ([]string, error) {
+	if limit <= 0 {
+		return []string{}, nil
+	}
 	positive := bson.D{{Key: "$or", Value: bson.A{
 		bson.D{{Key: "amount", Value: bson.D{{Key: "$exists", Value: true}, {Key: "$nin", Value: bson.A{"", "0"}}}}},
 		bson.D{{Key: "tokenValue", Value: bson.D{{Key: "$exists", Value: true}, {Key: "$nin", Value: bson.A{"", "0"}}}}},

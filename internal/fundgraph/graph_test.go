@@ -85,4 +85,7 @@ func TestGraphKeepsPreviouslySyncedDataAvailableDuringRefreshFailure(t *testing.
 	if page.DataThroughBlock != 90 {
 		t.Fatalf("dataThroughBlock=%d, want 90", page.DataThroughBlock)
 	}
+	if page.DataStatus != "stale" {
+		t.Fatalf("dataStatus=%q, want stale", page.DataStatus)
+	}
 }
