@@ -12,6 +12,7 @@ import (
 
 	"github.com/Nickcandy/eth-fund-trace/internal/config"
 	"github.com/Nickcandy/eth-fund-trace/internal/httpapi"
+	"github.com/Nickcandy/eth-fund-trace/internal/store"
 	"github.com/labstack/echo/v4"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -36,6 +37,9 @@ func run(parent context.Context) error {
 	}
 	defer func() { _ = client.Disconnect(context.Background()) }()
 	if err := client.Ping(connectCtx, nil); err != nil {
+		return err
+	}
+	if err := store.New(client.Database(cfg.MongoDatabase)).Initialize(connectCtx); err != nil {
 		return err
 	}
 
