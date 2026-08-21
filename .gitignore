@@ -2,6 +2,7 @@ bin/
 .env
 .env.*
 !.env.example
+.env.local
 *.log
 .DS_Store
 .workbuddy/
