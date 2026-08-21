@@ -82,3 +82,40 @@ type SyncFailure struct {
 	Message   string `bson:"message" json:"message"`
 	Retryable bool   `bson:"retryable" json:"retryable"`
 }
+
+type AddressProfile struct {
+	ID                 primitive.ObjectID `bson:"_id,omitempty" json:"-"`
+	Chain              string             `bson:"chain" json:"chain"`
+	ChainID            int64              `bson:"chainId" json:"chainId"`
+	Address            string             `bson:"address" json:"address"`
+	RuleVersion        string             `bson:"ruleVersion" json:"ruleVersion"`
+	DataThroughBlock   int64              `bson:"dataThroughBlock" json:"dataThroughBlock"`
+	WindowStart        time.Time          `bson:"windowStart,omitempty" json:"windowStart,omitempty"`
+	WindowEnd          time.Time          `bson:"windowEnd,omitempty" json:"windowEnd,omitempty"`
+	Features           ProfileFeatures    `bson:"features" json:"features"`
+	Score              int                `bson:"score" json:"score"`
+	Classification     string             `bson:"classification" json:"classification"`
+	SuspectedHotWallet bool               `bson:"suspectedHotWallet" json:"suspectedHotWallet"`
+	Signals            []string           `bson:"signals,omitempty" json:"signals,omitempty"`
+	ComputedAt         time.Time          `bson:"computedAt" json:"computedAt"`
+}
+
+type ProfileFeatures struct {
+	LifetimeTransfers  int64 `bson:"lifetimeTransfers" json:"lifetimeTransfers"`
+	LifetimeIncoming   int64 `bson:"lifetimeIncoming" json:"lifetimeIncoming"`
+	LifetimeOutgoing   int64 `bson:"lifetimeOutgoing" json:"lifetimeOutgoing"`
+	WindowTransfers    int64 `bson:"windowTransfers" json:"windowTransfers"`
+	Incoming           int64 `bson:"incoming" json:"incoming"`
+	Outgoing           int64 `bson:"outgoing" json:"outgoing"`
+	UniqueCounterparts int   `bson:"uniqueCounterparties" json:"uniqueCounterparties"`
+	UniqueSenders      int   `bson:"uniqueSenders" json:"uniqueSenders"`
+	UniqueRecipients   int   `bson:"uniqueRecipients" json:"uniqueRecipients"`
+	ActiveDays         int   `bson:"activeDays" json:"activeDays"`
+	ETHTransfers       int64 `bson:"ethTransfers" json:"ethTransfers"`
+	ERC20Transfers     int64 `bson:"erc20Transfers" json:"erc20Transfers"`
+}
+
+type AddressActivity struct {
+	LatestTransferAt time.Time
+	Features         ProfileFeatures
+}

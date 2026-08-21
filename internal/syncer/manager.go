@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/Nickcandy/eth-fund-trace/internal/ethaddr"
 	"github.com/Nickcandy/eth-fund-trace/internal/etherscan"
 	"github.com/Nickcandy/eth-fund-trace/internal/store"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -17,7 +17,6 @@ import (
 var (
 	ErrInvalidRequest = errors.New("invalid sync request")
 	ErrQueueFull      = errors.New("sync queue is full")
-	addressPattern    = regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`)
 )
 
 type Source interface {
@@ -46,10 +45,11 @@ type Request struct {
 }
 
 type Config struct {
-	CacheTTL      time.Duration
-	Confirmations int64
-	QueueSize     int
-	Clock         func() time.Time
+	CacheTTL           time.Duration
+	Confirmations      int64
+	QueueSize          int
+	Clock              func() time.Time
+	AfterAddressSynced func(context.Context, string, string) error
 }
 
 type queuedJob struct {
@@ -87,8 +87,9 @@ func (m *Manager) Enqueue(ctx context.Context, request Request) (store.SyncJob, 
 	if request.Chain == "" {
 		request.Chain = "ethereum"
 	}
-	request.Address = strings.ToLower(strings.TrimSpace(request.Address))
-	if request.Chain != "ethereum" || !addressPattern.MatchString(request.Address) || request.StartBlock < 0 || request.NeighborLimit < 0 || request.NeighborLimit > 10 {
+	normalizedAddress, err := ethaddr.Normalize(request.Address)
+	request.Address = normalizedAddress
+	if request.Chain != "ethereum" || err != nil || request.StartBlock < 0 || request.NeighborLimit < 0 || request.NeighborLimit > 10 {
 		return store.SyncJob{}, ErrInvalidRequest
 	}
 	key := request.Chain + ":" + request.Address
@@ -217,6 +218,11 @@ func (m *Manager) syncAddress(ctx context.Context, request Request, getSafeHead 
 		return addressResult{}, err
 	}
 	if exists && address.SyncStatus == "synced" && request.StartBlock >= address.EarliestSyncedBlock && now.Sub(address.LastSyncedAt) < m.config.CacheTTL {
+		if m.config.AfterAddressSynced != nil {
+			if err := m.config.AfterAddressSynced(ctx, request.Chain, request.Address); err != nil {
+				return addressResult{}, err
+			}
+		}
 		return addressResult{cached: true, actionCounts: make(map[string]int64)}, nil
 	}
 	safeHead, err := getSafeHead()
@@ -270,6 +276,11 @@ func (m *Manager) syncAddress(ctx context.Context, request Request, getSafeHead 
 	if err := m.repository.CompleteAddressSync(ctx, request.Chain, request.Address, earliest, latest, now); err != nil {
 		return addressResult{}, err
 	}
+	if m.config.AfterAddressSynced != nil {
+		if err := m.config.AfterAddressSynced(ctx, request.Chain, request.Address); err != nil {
+			return addressResult{}, err
+		}
+	}
 	return result, nil
 }
 
@@ -310,10 +321,10 @@ func (m *Manager) fetchRange(ctx context.Context, call func(context.Context, str
 		if transfers[index].AssetType == "erc20" {
 			transfers[index].Asset = strings.ToLower(transfers[index].Asset)
 		}
-		if addressPattern.MatchString(transfers[index].From) {
+		if _, err := ethaddr.Normalize(transfers[index].From); err == nil {
 			discovered[transfers[index].From] = struct{}{}
 		}
-		if addressPattern.MatchString(transfers[index].To) {
+		if _, err := ethaddr.Normalize(transfers[index].To); err == nil {
 			discovered[transfers[index].To] = struct{}{}
 		}
 	}

@@ -137,7 +137,11 @@ func TestManagerSyncsSeedAndReusesFreshCache(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	source := &fakeSource{latest: 100}
 	repository := newMemoryRepository()
-	manager := New(source, repository, Config{CacheTTL: 15 * time.Minute, Confirmations: 12, QueueSize: 10, Clock: func() time.Time { return now }})
+	profileCalls := 0
+	manager := New(source, repository, Config{
+		CacheTTL: 15 * time.Minute, Confirmations: 12, QueueSize: 10, Clock: func() time.Time { return now },
+		AfterAddressSynced: func(context.Context, string, string) error { profileCalls++; return nil },
+	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() { _ = manager.Run(ctx) }()
@@ -162,6 +166,9 @@ func TestManagerSyncsSeedAndReusesFreshCache(t *testing.T) {
 	}
 	if source.latestCalls != 1 || source.actionCalls != 3 {
 		t.Fatalf("latest calls = %d, action calls = %d, want 1 and 3", source.latestCalls, source.actionCalls)
+	}
+	if profileCalls != 2 {
+		t.Fatalf("profile calls = %d, want one after sync and one cached snapshot check", profileCalls)
 	}
 }
 

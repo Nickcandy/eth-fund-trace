@@ -13,6 +13,7 @@ import (
 	"github.com/Nickcandy/eth-fund-trace/internal/config"
 	"github.com/Nickcandy/eth-fund-trace/internal/etherscan"
 	"github.com/Nickcandy/eth-fund-trace/internal/httpapi"
+	"github.com/Nickcandy/eth-fund-trace/internal/profile"
 	"github.com/Nickcandy/eth-fund-trace/internal/store"
 	"github.com/Nickcandy/eth-fund-trace/internal/syncer"
 	"github.com/labstack/echo/v4"
@@ -50,8 +51,13 @@ func run(parent context.Context) error {
 		MaxPages: cfg.EtherscanMaxPages, RequestsPerSecond: float64(cfg.EtherscanRequestsPerSecond),
 		Burst: cfg.EtherscanBurst, MaxRetries: cfg.EtherscanMaxRetries, RetryBase: time.Duration(cfg.EtherscanRetryBaseMS) * time.Millisecond,
 	})
+	addressProfiler := profile.New(appStore, time.Now)
 	syncManager := syncer.New(etherscanClient, appStore, syncer.Config{
 		CacheTTL: time.Duration(cfg.SyncCacheTTLMinutes) * time.Minute, Confirmations: int64(cfg.SyncConfirmations), QueueSize: cfg.SyncQueueSize,
+		AfterAddressSynced: func(ctx context.Context, chain, address string) error {
+			_, err := addressProfiler.Get(ctx, chain, address)
+			return err
+		},
 	})
 
 	e := echo.New()
@@ -60,6 +66,7 @@ func run(parent context.Context) error {
 	syncHandler := httpapi.NewSyncHandler(syncManager)
 	e.POST("/api/v1/sync", syncHandler.Enqueue)
 	e.GET("/api/v1/sync-jobs/:id", syncHandler.Job)
+	e.GET("/api/v1/addresses/:address/profile", httpapi.NewProfileHandler(addressProfiler).Get)
 
 	serverCtx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer stop()
