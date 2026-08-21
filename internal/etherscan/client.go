@@ -1,6 +1,7 @@
 package etherscan
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -82,6 +83,7 @@ func (c *APIClient) list(ctx context.Context, address string, startBlock, endBlo
 		return nil, fmt.Errorf("%w: invalid block range", ErrMalformedResponse)
 	}
 	var transfers []store.Transfer
+	tokenOccurrences := make(map[string]int64)
 	for page := 1; page <= c.config.MaxPages; page++ {
 		if page > 1 && c.config.RequestInterval > 0 {
 			timer := time.NewTimer(c.config.RequestInterval)
@@ -96,7 +98,7 @@ func (c *APIClient) list(ctx context.Context, address string, startBlock, endBlo
 		if err != nil {
 			return nil, err
 		}
-		pageTransfers, err := normalize(items, action)
+		pageTransfers, err := normalizeWithState(items, action, tokenOccurrences)
 		if err != nil {
 			return nil, err
 		}
@@ -161,6 +163,9 @@ func (c *APIClient) fetchPage(ctx context.Context, address string, startBlock, e
 		return nil, fmt.Errorf("%w: %s", ErrRateLimited, envelope.Message)
 	}
 	if envelope.Status != "1" {
+		if isNoTransactions(envelope.Message, envelope.Result) {
+			return []json.RawMessage{}, nil
+		}
 		return nil, fmt.Errorf("%w: %s", ErrAPI, responseMessage(envelope.Message, envelope.Result))
 	}
 	var items []json.RawMessage
@@ -168,6 +173,18 @@ func (c *APIClient) fetchPage(ctx context.Context, address string, startBlock, e
 		return nil, fmt.Errorf("%w: result is not an array", ErrMalformedResponse)
 	}
 	return items, nil
+}
+
+func isNoTransactions(message string, result json.RawMessage) bool {
+	if message != "No transactions found" {
+		return false
+	}
+	trimmed := bytes.TrimSpace(result)
+	if len(trimmed) == 0 || trimmed[0] != '[' {
+		return false
+	}
+	var items []json.RawMessage
+	return json.Unmarshal(trimmed, &items) == nil && len(items) == 0
 }
 
 func responseMessage(message string, result json.RawMessage) string {

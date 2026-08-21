@@ -96,6 +96,7 @@ func TestClientErrors(t *testing.T) {
 		{name: "rate status", statusCode: http.StatusTooManyRequests, body: `{}`, want: ErrRateLimited},
 		{name: "rate message", statusCode: http.StatusOK, body: `{"status":"0","message":"Max rate limit reached","result":""}`, want: ErrRateLimited},
 		{name: "api", statusCode: http.StatusOK, body: `{"status":"0","message":"Invalid API Key","result":""}`, want: ErrAPI},
+		{name: "no transactions without array", statusCode: http.StatusOK, body: `{"status":"0","message":"No transactions found","result":null}`, want: ErrAPI},
 		{name: "malformed", statusCode: http.StatusOK, body: `{`, want: ErrMalformedResponse},
 	}
 	for _, tt := range tests {
@@ -113,6 +114,133 @@ func TestClientErrors(t *testing.T) {
 				t.Fatal("error leaked API key")
 			}
 		})
+	}
+}
+
+func TestClientNormalizesContractCreation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"1","message":"OK","result":[{"blockNumber":"341505","timeStamp":"1439471609","hash":"0xcreate","from":"0xcreator","to":"","contractAddress":"0xcontract","value":"0","isError":"0"}]}`))
+	}))
+	defer server.Close()
+
+	transfers, err := NewClient(Config{BaseURL: server.URL, HTTPClient: server.Client()}).ListTransactions(context.Background(), "0xcreator", 341505, 341505)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(transfers) != 1 || transfers[0].To != "0xcontract" {
+		t.Fatalf("transfers = %+v, want contract creation target", transfers)
+	}
+}
+
+func TestClientRejectsTransactionWithoutTarget(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"1","message":"OK","result":[{"blockNumber":"1","timeStamp":"1","hash":"0xmissing","from":"0xfrom","to":"","contractAddress":"","value":"1","isError":"0"}]}`))
+	}))
+	defer server.Close()
+
+	_, err := NewClient(Config{BaseURL: server.URL, HTTPClient: server.Client()}).ListTransactions(context.Background(), "0xfrom", 0, 1)
+	if !errors.Is(err, ErrMalformedResponse) {
+		t.Fatalf("error = %v, want malformed response", err)
+	}
+}
+
+func TestClientFiltersFailedTransactions(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"1","message":"OK","result":[` +
+			`{"blockNumber":"1","timeStamp":"1","hash":"0xsuccess","from":"0xfrom","to":"0xto","value":"1","isError":"0","txreceipt_status":"1"},` +
+			`{"blockNumber":"2","timeStamp":"2","hash":"0xerror","from":"0xfrom","to":"0xto","value":"2","isError":"1","txreceipt_status":"1"},` +
+			`{"blockNumber":"3","timeStamp":"3","hash":"0xreceipt","from":"0xfrom","to":"0xto","value":"3","isError":"0","txreceipt_status":"0"}]}`))
+	}))
+	defer server.Close()
+
+	transfers, err := NewClient(Config{BaseURL: server.URL, HTTPClient: server.Client()}).ListTransactions(context.Background(), "0xfrom", 0, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(transfers) != 1 || transfers[0].TxHash != "0xsuccess" {
+		t.Fatalf("transfers = %+v, want only successful transaction", transfers)
+	}
+}
+
+func TestClientFiltersFailedInternalTransactions(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"1","message":"OK","result":[` +
+			`{"blockNumber":"1","timeStamp":"1","hash":"0xsuccess","from":"0xfrom","to":"0xto","value":"1","traceId":"0","isError":"0"},` +
+			`{"blockNumber":"2","timeStamp":"2","hash":"0xerror","from":"0xfrom","to":"0xto","value":"2","traceId":"1","isError":"1"}]}`))
+	}))
+	defer server.Close()
+
+	transfers, err := NewClient(Config{BaseURL: server.URL, HTTPClient: server.Client()}).ListInternalTransactions(context.Background(), "0xfrom", 0, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(transfers) != 1 || transfers[0].TxHash != "0xsuccess" {
+		t.Fatalf("transfers = %+v, want only successful internal transaction", transfers)
+	}
+}
+
+func TestClientTreatsNoTransactionsAsEmpty(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"0","message":"No transactions found","result":[]}`))
+	}))
+	defer server.Close()
+
+	transfers, err := NewClient(Config{BaseURL: server.URL, HTTPClient: server.Client()}).ListTransactions(context.Background(), "0xempty", 0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(transfers) != 0 {
+		t.Fatalf("transfers = %+v, want empty result", transfers)
+	}
+}
+
+func TestClientAssignsSyntheticIndexWhenTokenLogIndexIsUnavailable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"1","message":"OK","result":[` +
+			`{"blockNumber":"1545550","timeStamp":"1462441651","hash":"0xtoken","from":"0xfrom","to":"0xto","value":"340000000000000000000","contractAddress":"0xasset","tokenSymbol":"","tokenDecimal":"1"},` +
+			`{"blockNumber":"1545550","timeStamp":"1462441651","hash":"0xtoken","from":"0xfrom","to":"0xto","value":"340000000000000000000","contractAddress":"0xasset","tokenSymbol":"","tokenDecimal":"1"}]}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{BaseURL: server.URL, HTTPClient: server.Client()})
+	first, err := client.ListTokenTransfers(context.Background(), "0xfrom", 1545550, 1545550)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := client.ListTokenTransfers(context.Background(), "0xfrom", 1545550, 1545550)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 2 || first[0].LogIndex >= 0 || first[1].LogIndex >= 0 || first[0].LogIndex == first[1].LogIndex {
+		t.Fatalf("transfers = %+v, want distinct negative synthetic indexes", first)
+	}
+	if len(second) != 2 || first[0].LogIndex != second[0].LogIndex || first[1].LogIndex != second[1].LogIndex {
+		t.Fatalf("first = %+v, second = %+v, want deterministic synthetic indexes", first, second)
+	}
+}
+
+func TestClientContinuesPagingWhenPageIsFullyFiltered(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		switch r.URL.Query().Get("page") {
+		case "1":
+			_, _ = w.Write([]byte(`{"status":"1","message":"OK","result":[{"blockNumber":"1","timeStamp":"1","hash":"0xfailed","from":"0xfrom","to":"0xto","value":"1","isError":"1"}]}`))
+		case "2":
+			_, _ = w.Write([]byte(`{"status":"1","message":"OK","result":[{"blockNumber":"2","timeStamp":"2","hash":"0xsuccess","from":"0xfrom","to":"0xto","value":"2","isError":"0"}]}`))
+		default:
+			_, _ = w.Write([]byte(`{"status":"0","message":"No transactions found","result":[]}`))
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{BaseURL: server.URL, PageSize: 1, MaxPages: 3, HTTPClient: server.Client()})
+	transfers, err := client.ListTransactions(context.Background(), "0xfrom", 0, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 3 || len(transfers) != 1 || transfers[0].TxHash != "0xsuccess" {
+		t.Fatalf("requests = %d, transfers = %+v, want three pages and successful transaction", requests, transfers)
 	}
 }
 

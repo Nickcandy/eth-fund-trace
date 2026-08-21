@@ -3,35 +3,55 @@ package etherscan
 import (
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Nickcandy/eth-fund-trace/internal/store"
 )
 
 type rawTransfer struct {
-	BlockNumber  string `json:"blockNumber"`
-	TimeStamp    string `json:"timeStamp"`
-	Hash         string `json:"hash"`
-	From         string `json:"from"`
-	To           string `json:"to"`
-	Value        string `json:"value"`
-	TraceID      string `json:"traceId"`
-	TokenName    string `json:"tokenName"`
-	TokenSymbol  string `json:"tokenSymbol"`
-	TokenDecimal string `json:"tokenDecimal"`
-	TokenAddress string `json:"contractAddress"`
-	LogIndex     string `json:"logIndex"`
+	BlockNumber     string `json:"blockNumber"`
+	TimeStamp       string `json:"timeStamp"`
+	Hash            string `json:"hash"`
+	From            string `json:"from"`
+	To              string `json:"to"`
+	Value           string `json:"value"`
+	TraceID         string `json:"traceId"`
+	TokenName       string `json:"tokenName"`
+	TokenSymbol     string `json:"tokenSymbol"`
+	TokenDecimal    string `json:"tokenDecimal"`
+	ContractAddress string `json:"contractAddress"`
+	LogIndex        string `json:"logIndex"`
+	IsError         string `json:"isError"`
+	ReceiptStatus   string `json:"txreceipt_status"`
 }
 
 func normalize(items []json.RawMessage, action string) ([]store.Transfer, error) {
+	return normalizeWithState(items, action, make(map[string]int64))
+}
+
+func normalizeWithState(items []json.RawMessage, action string, tokenOccurrences map[string]int64) ([]store.Transfer, error) {
 	transfers := make([]store.Transfer, 0, len(items))
 	for _, item := range items {
 		var raw rawTransfer
 		if err := json.Unmarshal(item, &raw); err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrMalformedResponse, err)
 		}
-		transfer, err := normalizeOne(raw, action)
+		if (action == "txlist" || action == "txlistinternal") && raw.IsError == "1" {
+			continue
+		}
+		if action == "txlist" && raw.ReceiptStatus == "0" {
+			continue
+		}
+		var missingLogIndex int64
+		if action == "tokentx" && raw.LogIndex == "" {
+			key := tokenIdentityKey(raw)
+			missingLogIndex = syntheticLogIndex(key, tokenOccurrences[key])
+			tokenOccurrences[key]++
+		}
+		transfer, err := normalizeOne(raw, action, missingLogIndex)
 		if err != nil {
 			return nil, err
 		}
@@ -40,7 +60,7 @@ func normalize(items []json.RawMessage, action string) ([]store.Transfer, error)
 	return transfers, nil
 }
 
-func normalizeOne(raw rawTransfer, action string) (store.Transfer, error) {
+func normalizeOne(raw rawTransfer, action string, missingLogIndex int64) (store.Transfer, error) {
 	blockNumber, err := parseInt(raw.BlockNumber, "blockNumber")
 	if err != nil {
 		return store.Transfer{}, err
@@ -49,7 +69,11 @@ func normalizeOne(raw rawTransfer, action string) (store.Transfer, error) {
 	if err != nil {
 		return store.Transfer{}, err
 	}
-	if raw.Hash == "" || raw.From == "" || raw.To == "" || raw.Value == "" {
+	to := raw.To
+	if action == "txlist" && to == "" {
+		to = raw.ContractAddress
+	}
+	if raw.Hash == "" || raw.From == "" || to == "" || raw.Value == "" {
 		return store.Transfer{}, fmt.Errorf("%w: missing required transaction field", ErrMalformedResponse)
 	}
 	transfer := store.Transfer{
@@ -59,7 +83,7 @@ func normalizeOne(raw rawTransfer, action string) (store.Transfer, error) {
 		BlockNumber: blockNumber,
 		BlockTime:   time.Unix(timestamp, 0).UTC(),
 		From:        raw.From,
-		To:          raw.To,
+		To:          to,
 		AssetType:   "eth",
 		Asset:       "ETH",
 		Amount:      raw.Value,
@@ -72,15 +96,18 @@ func normalizeOne(raw rawTransfer, action string) (store.Transfer, error) {
 		if err != nil {
 			return store.Transfer{}, err
 		}
-		logIndex, err := parseInt(raw.LogIndex, "logIndex")
-		if err != nil {
-			return store.Transfer{}, err
+		logIndex := missingLogIndex
+		if raw.LogIndex != "" {
+			logIndex, err = parseInt(raw.LogIndex, "logIndex")
+			if err != nil {
+				return store.Transfer{}, err
+			}
 		}
-		if raw.TokenAddress == "" {
+		if raw.ContractAddress == "" {
 			return store.Transfer{}, fmt.Errorf("%w: missing contractAddress", ErrMalformedResponse)
 		}
 		transfer.AssetType = "erc20"
-		transfer.Asset = raw.TokenAddress
+		transfer.Asset = raw.ContractAddress
 		transfer.Symbol = raw.TokenSymbol
 		transfer.Decimals = int32(decimals)
 		transfer.Amount = ""
@@ -88,6 +115,23 @@ func normalizeOne(raw rawTransfer, action string) (store.Transfer, error) {
 		transfer.LogIndex = logIndex
 	}
 	return transfer, nil
+}
+
+func tokenIdentityKey(raw rawTransfer) string {
+	return strings.Join([]string{
+		strings.ToLower(raw.Hash),
+		strings.ToLower(raw.ContractAddress),
+		strings.ToLower(raw.From),
+		strings.ToLower(raw.To),
+		raw.Value,
+	}, "\x00")
+}
+
+func syntheticLogIndex(key string, occurrence int64) int64 {
+	hasher := fnv.New64a()
+	_, _ = hasher.Write([]byte(key))
+	_, _ = hasher.Write([]byte("\x00" + strconv.FormatInt(occurrence, 10)))
+	return -int64(hasher.Sum64()&uint64(^uint64(0)>>1)) - 1
 }
 
 func parseInt(value, field string) (int64, error) {
