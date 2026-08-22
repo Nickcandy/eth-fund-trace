@@ -3,6 +3,7 @@ package tracer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -78,7 +79,7 @@ func (g *Graph) Trace(ctx context.Context, query Query) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	if !found || (metadata.SyncStatus != "synced" && metadata.LastSyncedAt.IsZero()) {
+	if !found || metadata.SyncStatus != "synced" {
 		return Result{}, AddressNotSyncedError{Address: seed}
 	}
 	result := Result{DataThroughBlock: metadata.LatestSyncedBlock, DataStatus: "synced", RuleVersion: "trace-v1"}
@@ -128,7 +129,12 @@ func (g *Graph) Trace(ctx context.Context, query Query) (Result, error) {
 					if other == address {
 						other = strings.ToLower(transfer.From)
 					}
-					if other == "" || visited[other] {
+					if other == "" {
+						continue
+					}
+					path := append(append([]string(nil), paths[address]...), other)
+					result.Edges = append(result.Edges, Edge{Transfer: transfer, Depth: depth + 1, Path: path})
+					if visited[other] || count >= q.TopN || len(visited) >= 5000 {
 						continue
 					}
 					otherMetadata, otherFound, metadataErr := g.repository.FindAddress(ctx, q.Chain, other)
@@ -147,10 +153,8 @@ func (g *Graph) Trace(ctx context.Context, query Query) (Result, error) {
 					if !terminal {
 						next = append(next, other)
 					}
-					path := append(append([]string(nil), paths[address]...), other)
 					paths[other] = path
 					result.Nodes = append(result.Nodes, Node{Address: other, Depth: depth + 1, Terminal: terminal})
-					result.Edges = append(result.Edges, Edge{Transfer: transfer, Depth: depth + 1, Path: path})
 					result.Paths = append(result.Paths, path)
 					count++
 				}
@@ -245,5 +249,5 @@ func contains(values []string, target string) bool {
 	return false
 }
 func edgeKey(t store.Transfer) string {
-	return t.TxHash + "|" + t.Source + "|" + t.TraceID + "|" + string(rune(t.LogIndex)) + "|" + t.Asset
+	return fmt.Sprintf("%020d|%s|%s|%s|%020d|%s", t.BlockNumber, t.TxHash, t.Source, t.TraceID, t.LogIndex, t.Asset)
 }

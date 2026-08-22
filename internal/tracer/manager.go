@@ -76,7 +76,7 @@ func (m *Manager) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case id := <-m.queue:
-			go m.process(ctx, id)
+			m.process(ctx, id)
 		}
 	}
 }
@@ -89,8 +89,9 @@ func (m *Manager) process(ctx context.Context, id primitive.ObjectID) {
 	job.StartedAt = m.clock().UTC()
 	_ = m.jobs.SaveTraceJob(ctx, job)
 	request := Query{Chain: job.Chain, Address: job.SeedAddress, Direction: job.Direction, Depth: job.Depth, TopN: job.TopN, Asset: job.Asset}
+	partialSync := false
 	if m.syncJobs != nil {
-		syncJob, syncErr := m.syncJobs.Enqueue(ctx, syncer.Request{Chain: job.Chain, Address: job.SeedAddress})
+		syncJob, syncErr := m.syncJobs.Enqueue(ctx, syncer.Request{Chain: job.Chain, Address: job.SeedAddress, NeighborLimit: 0})
 		if syncErr != nil {
 			m.fail(ctx, &job, syncErr)
 			return
@@ -104,6 +105,7 @@ func (m *Manager) process(ctx context.Context, id primitive.ObjectID) {
 				return
 			}
 			if current.Status == "succeeded" || current.Status == "partial" {
+				partialSync = current.Status == "partial"
 				break
 			}
 			if current.Status == "failed" {
@@ -125,7 +127,7 @@ func (m *Manager) process(ctx context.Context, id primitive.ObjectID) {
 		if errors.As(traceErr, &unsynced) && m.syncJobs != nil && unsynced.Address != "" && !strings.EqualFold(unsynced.Address, request.Address) {
 			job.Status = "waiting_sync"
 			_ = m.jobs.SaveTraceJob(ctx, job)
-			syncJob, syncErr := m.syncJobs.Enqueue(ctx, syncer.Request{Chain: job.Chain, Address: unsynced.Address})
+			syncJob, syncErr := m.syncJobs.Enqueue(ctx, syncer.Request{Chain: job.Chain, Address: unsynced.Address, NeighborLimit: 0})
 			if syncErr == nil {
 				job.SyncJobIDs = append(job.SyncJobIDs, syncJob.ID.Hex())
 				_ = m.jobs.SaveTraceJob(ctx, job)
@@ -162,6 +164,9 @@ func (m *Manager) process(ctx context.Context, id primitive.ObjectID) {
 		return
 	}
 	job.Status = "succeeded"
+	if partialSync {
+		job.Status = "partial"
+	}
 	job.Result = result
 	job.CurrentDepth = job.Depth
 	job.VisitedNodes = len(result.Nodes)

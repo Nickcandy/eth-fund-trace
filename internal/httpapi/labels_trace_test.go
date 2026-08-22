@@ -55,7 +55,6 @@ func (s traceStub) Enqueue(context.Context, tracer.Request) (store.TraceJob, err
 }
 func (s traceStub) Job(context.Context, string) (store.TraceJob, error) { return s.job, nil }
 
-var _ = primitive.NilObjectID
 
 func TestTraceHandlerReturnsAccepted(t *testing.T) {
 	id := primitive.NewObjectID()

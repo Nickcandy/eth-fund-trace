@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -76,5 +75,3 @@ func (h *LabelHandler) List(c echo.Context) error {
 	}
 	return c.JSON(200, labels)
 }
-
-var _ = errors.New
