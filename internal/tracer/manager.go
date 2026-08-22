@@ -3,10 +3,12 @@ package tracer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/Nickcandy/eth-fund-trace/internal/ethaddr"
 	"github.com/Nickcandy/eth-fund-trace/internal/store"
 	"github.com/Nickcandy/eth-fund-trace/internal/syncer"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -39,7 +41,18 @@ func NewManager(graph *Graph, jobs JobRepository, syncJobs SyncJobs) *Manager {
 	return &Manager{graph: graph, jobs: jobs, syncJobs: syncJobs, queue: make(chan primitive.ObjectID, 100), active: make(map[string]primitive.ObjectID), clock: time.Now}
 }
 func (m *Manager) Enqueue(ctx context.Context, request Request) (store.TraceJob, error) {
-	key := strings.ToLower(request.Query.Chain + ":" + request.Query.Address + ":" + request.Query.Direction + ":" + request.Query.Asset)
+	normalized, err := normalize(request.Query)
+	if err != nil {
+		return store.TraceJob{}, err
+	}
+	request.Query = normalized
+	address, addressErr := ethaddr.Normalize(request.Query.Address)
+	if addressErr != nil {
+		return store.TraceJob{}, ErrInvalidQuery
+	}
+	request.Query.Address = address
+	normalized.Address = address
+	key := queryKey(normalized)
 	m.mu.Lock()
 	if id, ok := m.active[key]; ok {
 		m.mu.Unlock()
@@ -83,11 +96,17 @@ func (m *Manager) Run(ctx context.Context) error {
 func (m *Manager) process(ctx context.Context, id primitive.ObjectID) {
 	job, err := m.jobs.GetTraceJob(ctx, id)
 	if err != nil {
+		m.releaseID(id)
 		return
 	}
+	key := queryKey(Query{Chain: job.Chain, Address: job.SeedAddress, Direction: job.Direction, Depth: job.Depth, TopN: job.TopN, Asset: job.Asset})
+	defer m.release(key)
 	job.Status = "waiting_sync"
 	job.StartedAt = m.clock().UTC()
-	_ = m.jobs.SaveTraceJob(ctx, job)
+	if !m.save(ctx, &job) {
+		m.fail(ctx, &job, errors.New("failed to persist trace job"))
+		return
+	}
 	request := Query{Chain: job.Chain, Address: job.SeedAddress, Direction: job.Direction, Depth: job.Depth, TopN: job.TopN, Asset: job.Asset}
 	partialSync := false
 	if m.syncJobs != nil {
@@ -97,67 +116,51 @@ func (m *Manager) process(ctx context.Context, id primitive.ObjectID) {
 			return
 		}
 		job.SyncJobIDs = []string{syncJob.ID.Hex()}
-		_ = m.jobs.SaveTraceJob(ctx, job)
-		for {
-			current, syncErr := m.syncJobs.Job(ctx, syncJob.ID.Hex())
-			if syncErr != nil {
-				m.fail(ctx, &job, syncErr)
-				return
-			}
-			if current.Status == "succeeded" || current.Status == "partial" {
-				partialSync = current.Status == "partial"
-				break
-			}
-			if current.Status == "failed" {
-				m.fail(ctx, &job, errors.New(current.Error))
-				return
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(100 * time.Millisecond):
-			}
+		if !m.save(ctx, &job) {
+			m.fail(ctx, &job, errors.New("failed to persist trace job"))
+			return
 		}
+		current, pollErr := m.waitSync(ctx, syncJob.ID.Hex())
+		if pollErr != nil {
+			m.fail(ctx, &job, pollErr)
+			return
+		}
+		partialSync = current.Status == "partial"
 	}
 	job.Status = "running"
-	_ = m.jobs.SaveTraceJob(ctx, job)
+	if !m.save(ctx, &job) {
+		m.fail(ctx, &job, errors.New("failed to persist trace job"))
+		return
+	}
 	result, traceErr := m.graph.Trace(ctx, request)
-	if traceErr != nil {
+	for traceErr != nil {
 		var unsynced AddressNotSyncedError
-		if errors.As(traceErr, &unsynced) && m.syncJobs != nil && unsynced.Address != "" && !strings.EqualFold(unsynced.Address, request.Address) {
+		if errors.As(traceErr, &unsynced) && m.syncJobs != nil && unsynced.Address != "" {
 			job.Status = "waiting_sync"
-			_ = m.jobs.SaveTraceJob(ctx, job)
-			syncJob, syncErr := m.syncJobs.Enqueue(ctx, syncer.Request{Chain: job.Chain, Address: unsynced.Address, NeighborLimit: 0})
-			if syncErr == nil {
-				job.SyncJobIDs = append(job.SyncJobIDs, syncJob.ID.Hex())
-				_ = m.jobs.SaveTraceJob(ctx, job)
-				for {
-					current, pollErr := m.syncJobs.Job(ctx, syncJob.ID.Hex())
-					if pollErr != nil {
-						traceErr = pollErr
-						break
-					}
-					if current.Status == "succeeded" || current.Status == "partial" {
-						traceErr = nil
-						break
-					}
-					if current.Status == "failed" {
-						traceErr = errors.New(current.Error)
-						break
-					}
-					select {
-					case <-ctx.Done():
-						return
-					case <-time.After(100 * time.Millisecond):
-					}
-				}
-				if traceErr == nil {
-					result, traceErr = m.graph.Trace(ctx, request)
-				}
-			} else {
-				traceErr = syncErr
+			if !m.save(ctx, &job) {
+				m.fail(ctx, &job, errors.New("failed to persist trace job"))
+				return
 			}
+			syncJob, syncErr := m.syncJobs.Enqueue(ctx, syncer.Request{Chain: job.Chain, Address: unsynced.Address, NeighborLimit: 0})
+			if syncErr != nil {
+				traceErr = syncErr
+				break
+			}
+			job.SyncJobIDs = append(job.SyncJobIDs, syncJob.ID.Hex())
+			if !m.save(ctx, &job) {
+				m.fail(ctx, &job, errors.New("failed to persist trace job"))
+				return
+			}
+			current, pollErr := m.waitSync(ctx, syncJob.ID.Hex())
+			if pollErr != nil {
+				traceErr = pollErr
+				break
+			}
+			partialSync = partialSync || current.Status == "partial"
+			result, traceErr = m.graph.Trace(ctx, request)
+			continue
 		}
+		break
 	}
 	if traceErr != nil {
 		m.fail(ctx, &job, traceErr)
@@ -173,16 +176,65 @@ func (m *Manager) process(ctx context.Context, id primitive.ObjectID) {
 	job.EdgeCount = len(result.Edges)
 	job.DataThroughBlock = result.DataThroughBlock
 	job.FinishedAt = m.clock().UTC()
-	_ = m.jobs.SaveTraceJob(ctx, job)
-	m.release(strings.ToLower(job.Chain + ":" + job.SeedAddress + ":" + job.Direction + ":" + job.Asset))
+	if !m.save(ctx, &job) {
+		m.fail(ctx, &job, errors.New("failed to persist trace job"))
+		return
+	}
 }
 func (m *Manager) fail(ctx context.Context, job *store.TraceJob, err error) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		job.ErrorCode = "interrupted"
+	} else {
+		job.ErrorCode = "trace_failed"
+	}
 	job.Status = "failed"
 	job.Error = err.Error()
-	job.ErrorCode = "trace_failed"
 	job.Retryable = true
 	job.FinishedAt = m.clock().UTC()
-	_ = m.jobs.SaveTraceJob(ctx, *job)
-	m.release(strings.ToLower(job.Chain + ":" + job.SeedAddress + ":" + job.Direction + ":" + job.Asset))
+	saveCtx := ctx
+	if ctx.Err() != nil {
+		saveCtx = context.Background()
+	}
+	_ = m.jobs.SaveTraceJob(saveCtx, *job)
 }
 func (m *Manager) release(key string) { m.mu.Lock(); delete(m.active, key); m.mu.Unlock() }
+
+func (m *Manager) releaseID(id primitive.ObjectID) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for key, activeID := range m.active {
+		if activeID == id {
+			delete(m.active, key)
+		}
+	}
+}
+
+func (m *Manager) save(ctx context.Context, job *store.TraceJob) bool {
+	return m.jobs.SaveTraceJob(ctx, *job) == nil
+}
+
+func (m *Manager) waitSync(ctx context.Context, id string) (store.SyncJob, error) {
+	for {
+		current, err := m.syncJobs.Job(ctx, id)
+		if err != nil {
+			return store.SyncJob{}, err
+		}
+		switch current.Status {
+		case "succeeded", "partial":
+			return current, nil
+		case "failed":
+			return current, errors.New(current.Error)
+		}
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return store.SyncJob{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func queryKey(q Query) string {
+	return strings.ToLower(q.Chain + ":" + q.Address + ":" + q.Direction + ":" + q.Asset + ":" + fmt.Sprint(q.Depth) + ":" + fmt.Sprint(q.TopN))
+}

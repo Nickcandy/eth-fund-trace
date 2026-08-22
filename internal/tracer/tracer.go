@@ -93,6 +93,8 @@ func (g *Graph) Trace(ctx context.Context, query Query) (Result, error) {
 	seedTerminal := metadata.IsTerminal || hasTerminalLabel(seedLabels)
 	result.Nodes = append(result.Nodes, Node{Address: seed, Depth: 0, Terminal: seedTerminal})
 	allTransfers := make([]store.Transfer, 0)
+	resultFacts := make(map[string]bool)
+	seenFacts := make(map[string]bool)
 	for depth := 0; depth < q.Depth && len(frontier) > 0 && len(visited) < 5000; depth++ {
 		sort.Strings(frontier)
 		next := make([]string, 0)
@@ -101,68 +103,100 @@ func (g *Graph) Trace(ctx context.Context, query Query) (Result, error) {
 			if end > len(frontier) {
 				end = len(frontier)
 			}
-			transfers, queryErr := g.repository.QueryTransfers(ctx, store.TransferQuery{Chain: q.Chain, Addresses: frontier[offset:end], Direction: q.Direction, AssetMode: assetMode(q.Asset), Asset: assetValue(q.Asset), Limit: 10000})
-			if queryErr != nil {
-				return Result{}, queryErr
-			}
-			byAddress := make(map[string][]store.Transfer)
-			for _, transfer := range transfers {
-				allTransfers = append(allTransfers, transfer)
-				for _, address := range []string{strings.ToLower(transfer.From), strings.ToLower(transfer.To)} {
-					if contains(frontier[offset:end], address) {
-						byAddress[address] = append(byAddress[address], transfer)
+			queries := []string{q.Direction}
+			for _, direction := range queries {
+				transfers, queryErr := g.repository.QueryTransfers(ctx, store.TransferQuery{Chain: q.Chain, Addresses: frontier[offset:end], Direction: direction, AssetMode: assetMode(q.Asset), Asset: assetValue(q.Asset), Limit: 10000})
+				if queryErr != nil {
+					return Result{}, queryErr
+				}
+				byAddress := make(map[string][]store.Transfer)
+				for _, transfer := range transfers {
+					if !seenFacts[edgeKey(transfer)] {
+						allTransfers = append(allTransfers, transfer)
+						seenFacts[edgeKey(transfer)] = true
+					}
+					for _, address := range frontier[offset:end] {
+						if direction == "both" {
+							if strings.EqualFold(transfer.To, address) {
+								byAddress[strings.ToLower(address)+"|in"] = append(byAddress[strings.ToLower(address)+"|in"], transfer)
+							}
+							if strings.EqualFold(transfer.From, address) {
+								byAddress[strings.ToLower(address)+"|out"] = append(byAddress[strings.ToLower(address)+"|out"], transfer)
+							}
+						} else if (direction == "in" && strings.EqualFold(transfer.To, address)) || (direction == "out" && strings.EqualFold(transfer.From, address)) {
+							byAddress[strings.ToLower(address)+"|"+direction] = append(byAddress[strings.ToLower(address)+"|"+direction], transfer)
+						}
 					}
 				}
-			}
-			for _, address := range frontier[offset:end] {
-				if nodeTerminal(result.Nodes, address) {
-					continue
-				}
-				candidates := byAddress[address]
-				sort.SliceStable(candidates, func(i, j int) bool { return edgeKey(candidates[i]) < edgeKey(candidates[j]) })
-				count := 0
-				for _, transfer := range candidates {
-					if count >= q.TopN {
-						break
-					}
-					other := strings.ToLower(transfer.To)
-					if other == address {
-						other = strings.ToLower(transfer.From)
-					}
-					if other == "" {
+				for _, address := range frontier[offset:end] {
+					if nodeTerminal(result.Nodes, address) {
 						continue
 					}
-					path := append(append([]string(nil), paths[address]...), other)
-					result.Edges = append(result.Edges, Edge{Transfer: transfer, Depth: depth + 1, Path: path})
-					if visited[other] || count >= q.TopN || len(visited) >= 5000 {
-						continue
+					directions := []string{q.Direction}
+					if q.Direction == "both" {
+						directions = []string{"in", "out"}
 					}
-					otherMetadata, otherFound, metadataErr := g.repository.FindAddress(ctx, q.Chain, other)
-					if metadataErr != nil {
-						return Result{}, metadataErr
+					for _, selectedDirection := range directions {
+						candidates := byAddress[strings.ToLower(address)+"|"+selectedDirection]
+						sort.SliceStable(candidates, func(i, j int) bool { return edgeKey(candidates[i]) > edgeKey(candidates[j]) })
+						count := 0
+						for _, transfer := range candidates {
+							if count >= q.TopN {
+								break
+							}
+							other := strings.ToLower(transfer.To)
+							if selectedDirection == "in" {
+								other = strings.ToLower(transfer.From)
+							} else if other == strings.ToLower(address) {
+								other = strings.ToLower(transfer.From)
+							}
+							if other == "" {
+								continue
+							}
+							path := append(append([]string(nil), paths[address]...), other)
+							if !resultFacts[edgeKey(transfer)] {
+								result.Edges = append(result.Edges, Edge{Transfer: transfer, Depth: depth + 1, Path: path})
+								resultFacts[edgeKey(transfer)] = true
+							}
+							count++
+							if visited[other] || count >= q.TopN || len(visited) >= 5000 {
+								continue
+							}
+							otherMetadata, otherFound, metadataErr := g.repository.FindAddress(ctx, q.Chain, other)
+							if metadataErr != nil {
+								return Result{}, metadataErr
+							}
+							if !otherFound || otherMetadata.SyncStatus != "synced" {
+								return Result{}, AddressNotSyncedError{Address: other}
+							}
+							otherLabels, labelsErr := g.repository.ListLabels(ctx, q.Chain, other)
+							if labelsErr != nil {
+								return Result{}, labelsErr
+							}
+							terminal := otherFound && otherMetadata.IsTerminal || hasTerminalLabel(otherLabels)
+							visited[other] = true
+							if !terminal {
+								next = append(next, other)
+							}
+							paths[other] = path
+							result.Nodes = append(result.Nodes, Node{Address: other, Depth: depth + 1, Terminal: terminal})
+							result.Paths = append(result.Paths, path)
+						}
 					}
-					if !otherFound || (otherMetadata.SyncStatus != "synced" && otherMetadata.LastSyncedAt.IsZero()) {
-						return Result{}, AddressNotSyncedError{Address: other}
-					}
-					otherLabels, labelsErr := g.repository.ListLabels(ctx, q.Chain, other)
-					if labelsErr != nil {
-						return Result{}, labelsErr
-					}
-					terminal := otherFound && otherMetadata.IsTerminal || hasTerminalLabel(otherLabels)
-					visited[other] = true
-					if !terminal {
-						next = append(next, other)
-					}
-					paths[other] = path
-					result.Nodes = append(result.Nodes, Node{Address: other, Depth: depth + 1, Terminal: terminal})
-					result.Paths = append(result.Paths, path)
-					count++
 				}
 			}
 		}
 		frontier = next
 	}
-	result.Risk = risk.Analyze(seed, allTransfers, seedLabels)
+	allLabels := append([]store.Label(nil), seedLabels...)
+	for _, node := range result.Nodes[1:] {
+		labels, labelErr := g.repository.ListLabels(ctx, q.Chain, node.Address)
+		if labelErr != nil {
+			return Result{}, labelErr
+		}
+		allLabels = append(allLabels, labels...)
+	}
+	result.Risk = risk.Analyze(seed, allTransfers, allLabels)
 	result.Labels = result.Risk.InferredLabels
 	return result, nil
 }
@@ -239,14 +273,6 @@ func assetValue(value string) string {
 		return a
 	}
 	return ""
-}
-func contains(values []string, target string) bool {
-	for _, value := range values {
-		if strings.EqualFold(value, target) {
-			return true
-		}
-	}
-	return false
 }
 func edgeKey(t store.Transfer) string {
 	return fmt.Sprintf("%020d|%s|%s|%s|%020d|%s", t.BlockNumber, t.TxHash, t.Source, t.TraceID, t.LogIndex, t.Asset)
