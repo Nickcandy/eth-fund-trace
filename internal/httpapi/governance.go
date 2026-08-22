@@ -56,7 +56,7 @@ func UseGovernance(e *echo.Echo, config GovernanceConfig) {
 func requireConfiguredAuth() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			if c.Path() == "/healthz" {
+			if !strings.HasPrefix(c.Request().URL.Path, "/api/") {
 				return next(c)
 			}
 			return writeError(c, http.StatusServiceUnavailable, "authentication_not_configured", "service authentication is not configured", false)
@@ -91,7 +91,7 @@ func governedErrorHandler(err error, c echo.Context) {
 func bearerAuth(expected string) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			if c.Path() == "/healthz" {
+			if !strings.HasPrefix(c.Request().URL.Path, "/api/") {
 				return next(c)
 			}
 			provided := strings.TrimPrefix(c.Request().Header.Get(echo.HeaderAuthorization), "Bearer ")

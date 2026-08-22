@@ -13,6 +13,7 @@ type Config struct {
 	HTTPBodyLimit              string
 	HTTPRequestsPerSecond      int
 	HTTPBurst                  int
+	WebDistDir                 string
 	MongoURI                   string
 	MongoDatabase              string
 	EtherscanAPIKey            string
@@ -37,6 +38,7 @@ func Load() Config {
 		HTTPBodyLimit:              value("HTTP_BODY_LIMIT", "1M"),
 		HTTPRequestsPerSecond:      intValue("HTTP_REQUESTS_PER_SECOND", 20),
 		HTTPBurst:                  intValue("HTTP_BURST", 10),
+		WebDistDir:                 value("WEB_DIST_DIR", "web/dist"),
 		MongoURI:                   value("MONGO_URI", "mongodb://localhost:27017"),
 		MongoDatabase:              value("MONGO_DATABASE", "eth_fund_trace"),
 		EtherscanAPIKey:            value("ETHERSCAN_API_KEY", ""),

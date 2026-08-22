@@ -91,6 +91,9 @@ func run(parent context.Context) error {
 	bridgeHandler := httpapi.NewBridgeHandler(bridge.New(appStore))
 	e.POST("/api/v1/bridge-links", bridgeHandler.Create)
 	e.GET("/api/v1/bridge-links", bridgeHandler.List)
+	if err := httpapi.RegisterWeb(e, cfg.WebDistDir); err != nil {
+		slog.Warn("web console not available", "directory", cfg.WebDistDir, "error", err)
+	}
 
 	serverCtx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer stop()

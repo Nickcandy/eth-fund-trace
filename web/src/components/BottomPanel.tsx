@@ -1,0 +1,17 @@
+import { useState } from "react";
+import type { BridgeInput, CrossChainLink, LabelInput, SyncJob, TraceJob, Transfer } from "../api/types";
+import { chainLabel, formatChainAmount, shortAddress } from "../lib/format";
+import { WriteForms } from "./WriteForms";
+
+type Tab = "facts" | "transactions" | "jobs" | "bridges" | "write";
+interface Props { facts: Transfer[]; hasMore?: boolean; loadingMore?: boolean; onMore: () => void; traceJob?: TraceJob; syncJobs: SyncJob[]; bridges: CrossChainLink[]; chain: "ethereum"|"base"; address: string; onLabel: (input: LabelInput) => Promise<void>; onBridge: (input: BridgeInput) => Promise<void> }
+export function BottomPanel({ facts, hasMore, loadingMore, onMore, traceJob, syncJobs, bridges, chain, address, onLabel, onBridge }: Props) {
+ const [tab,setTab]=useState<Tab>("facts");
+ return <section className="bottom-panel"><nav>{([['facts','事实边'],['transactions','交易明细'],['jobs','任务进度'],['bridges','桥接关系'],['write','写入证据']] as [Tab,string][]).map(([id,label])=><button className={tab===id?'active':''} onClick={()=>setTab(id)} key={id}>{label}{id==='facts'&&<span>{facts.length}</span>}</button>)}</nav><div className="tab-body">
+ {tab==='facts'&&<FactTable facts={facts} hasMore={hasMore} loadingMore={loadingMore} onMore={onMore}/>} {tab==='transactions'&&<FactTable facts={facts} detailed hasMore={hasMore} loadingMore={loadingMore} onMore={onMore}/>}
+ {tab==='jobs'&&<>{traceJob&&<div className="job-row"><code>{shortAddress(traceJob.id,6)}</code><span>{traceJob.status}</span><progress max={traceJob.depth||1} value={traceJob.currentDepth}/><strong>{traceJob.visitedNodes} 节点 / {traceJob.edgeCount} 边</strong></div>}{syncJobs.map(j=><div className="job-row" key={j.jobId}><code>{shortAddress(j.jobId,6)}</code><span>{j.status}</span><progress max={j.totalAddresses||1} value={j.completedAddresses}/><strong>{j.fetched} 条</strong></div>)}{!traceJob&&!syncJobs.length&&<Empty text="当前没有任务"/>}</>}
+ {tab==='bridges'&&(bridges.length?bridges.map(b=><div className="bridge-row" key={`${b.sourceTxHash}-${b.targetTxHash}`}><strong>{chainLabel(b.sourceChain)} → {chainLabel(b.targetChain)}</strong><code>{shortAddress(b.sourceTxHash,8)}</code><code>{shortAddress(b.targetTxHash,8)}</code><span>{b.status}</span></div>):<Empty text="当前地址没有已确认桥接关系"/>)}
+ {tab==='write'&&<WriteForms chain={chain} address={address} onLabel={onLabel} onBridge={onBridge}/>} </div></section>;
+}
+function FactTable({facts,detailed=false,hasMore,loadingMore,onMore}:{facts:Transfer[];detailed?:boolean;hasMore?:boolean;loadingMore?:boolean;onMore:()=>void}) { if(!facts.length)return <Empty text="当前查询没有事实边"/>; return <div className="fact-table"><div className="table-head"><span>区块 / 时间</span><span>方向</span><span>资产</span><span>原始金额</span><span>交易</span></div>{facts.map((f,i)=><div className="table-row" key={`${f.txHash}-${f.logIndex}-${i}`}><span>#{f.blockNumber}{detailed&&f.blockTime?<small>{new Date(f.blockTime).toLocaleString('zh-CN')}</small>:null}</span><span><code>{shortAddress(f.from)}</code> → <code>{shortAddress(f.to)}</code></span><span>{f.symbol||f.asset}<small>{f.source}{f.transferKind&&` · ${f.transferKind}`}</small></span><span>{formatChainAmount(f.amount||f.tokenValue,f.tokenMetadataComplete===false?undefined:f.decimals)}</span><code>{shortAddress(f.txHash,8)}</code></div>)}{hasMore&&<button className="load-more" disabled={loadingMore} onClick={onMore}>{loadingMore?'加载中':'加载更多事实边'}</button>}</div> }
+function Empty({text}:{text:string}){return <div className="tab-empty">{text}</div>}

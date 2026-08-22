@@ -79,3 +79,14 @@ func TestGovernanceFailsClosedWithoutAuthenticationConfiguration(t *testing.T) {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }
+
+func TestGovernanceLeavesWebConsolePublic(t *testing.T) {
+	e := echo.New()
+	UseGovernance(e, GovernanceConfig{APIKey: "secret", RequestsPerSecond: 100, Burst: 10})
+	e.GET("/*", func(c echo.Context) error { return c.String(http.StatusOK, "console") })
+	response := httptest.NewRecorder()
+	e.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/analysis", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("web status = %d", response.Code)
+	}
+}
