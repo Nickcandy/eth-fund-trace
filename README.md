@@ -16,9 +16,11 @@
 - `POST /api/v1/sync`：创建异步按需同步任务，补齐种子地址及最多 10 个直接邻居；
 - `GET /api/v1/sync-jobs/:id`：查询任务进度、缓存命中、抓取计数及部分失败；
 - `GET /api/v1/addresses/:address/profile`：读取或生成 `hot-wallet-v1` 版本化地址画像；
-- `GET /api/v1/edges`：按地址、方向、资产和区块范围查询正金额事实边，使用 Base64URL 游标稳定翻页。
+- `GET /api/v1/edges`：按地址、方向、资产和区块范围查询正金额事实边，使用 Base64URL 游标稳定翻页；
+- `GET /api/v1/trace`、`GET /api/v1/trace-jobs/:id`：异步分层追踪；
+- `POST/GET /api/v1/labels`：人工/公开标签管理，并在追踪结果中输出传播置信度和风险原因。
 
-Etherscan 请求在单进程内共享默认 5 QPS、突发 1 的令牌桶。同步缓存默认 15 分钟，安全链头为最新块减 12 个确认。M6 BFS、M7 标签风险和 M8 完整 HTTP 治理尚未实现。
+Etherscan 请求在单进程内共享默认 5 QPS、突发 1 的令牌桶。同步缓存默认 15 分钟，安全链头为最新块减 12 个确认。M6/M7 追踪任务使用 `trace-v1`、`propagation-v1` 和 `risk-v1` 规则；M8 完整 HTTP 治理尚未实现。
 
 ## 第一阶段核心能力
 

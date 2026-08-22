@@ -74,6 +74,9 @@ func run(parent context.Context) error {
 	traceHandler := httpapi.NewTraceHandler(traceManager)
 	e.GET("/api/v1/trace", traceHandler.Enqueue)
 	e.GET("/api/v1/trace-jobs/:id", traceHandler.Job)
+	labelHandler := httpapi.NewLabelHandler(appStore)
+	e.POST("/api/v1/labels", labelHandler.Create)
+	e.GET("/api/v1/labels", labelHandler.List)
 
 	serverCtx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer stop()
