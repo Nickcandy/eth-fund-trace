@@ -33,6 +33,8 @@ type Client interface {
 }
 
 type Config struct {
+	Chain             string
+	ChainID           int64
 	APIKey            string
 	BaseURL           string
 	PageSize          int
@@ -42,6 +44,7 @@ type Config struct {
 	MaxRetries        int
 	RetryBase         time.Duration
 	HTTPClient        *http.Client
+	Limiter           *rate.Limiter
 }
 
 type APIClient struct {
@@ -51,6 +54,12 @@ type APIClient struct {
 }
 
 func NewClient(config Config) *APIClient {
+	if config.Chain == "" {
+		config.Chain = "ethereum"
+	}
+	if config.ChainID <= 0 {
+		config.ChainID = 1
+	}
 	if config.BaseURL == "" {
 		config.BaseURL = "https://api.etherscan.io/v2/api"
 	}
@@ -76,10 +85,14 @@ func NewClient(config Config) *APIClient {
 	if client == nil {
 		client = &http.Client{Timeout: 15 * time.Second}
 	}
+	limiter := config.Limiter
+	if limiter == nil {
+		limiter = rate.NewLimiter(rate.Limit(config.RequestsPerSecond), config.Burst)
+	}
 	return &APIClient{
 		config:  config,
 		client:  client,
-		limiter: rate.NewLimiter(rate.Limit(config.RequestsPerSecond), config.Burst),
+		limiter: limiter,
 	}
 }
 
@@ -113,6 +126,10 @@ func (c *APIClient) list(ctx context.Context, address string, startBlock, endBlo
 		if err != nil {
 			return nil, err
 		}
+		for i := range pageTransfers {
+			pageTransfers[i].Chain, pageTransfers[i].ChainID = c.config.Chain, c.config.ChainID
+			pageTransfers[i].TransactionGroup = fmt.Sprintf("%d:%s", c.config.ChainID, strings.ToLower(pageTransfers[i].TxHash))
+		}
 		transfers = append(transfers, pageTransfers...)
 		if len(items) < c.config.PageSize {
 			return transfers, nil
@@ -127,7 +144,7 @@ func (c *APIClient) LatestBlock(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("%w: invalid base URL", ErrMalformedResponse)
 	}
 	query := endpoint.Query()
-	query.Set("chainid", "1")
+	query.Set("chainid", strconv.FormatInt(c.config.ChainID, 10))
 	query.Set("module", "proxy")
 	query.Set("action", "eth_blockNumber")
 	query.Set("apikey", c.config.APIKey)
@@ -157,7 +174,7 @@ func (c *APIClient) fetchPage(ctx context.Context, address string, startBlock, e
 		return nil, fmt.Errorf("%w: invalid base URL", ErrMalformedResponse)
 	}
 	query := endpoint.Query()
-	query.Set("chainid", "1")
+	query.Set("chainid", strconv.FormatInt(c.config.ChainID, 10))
 	query.Set("module", "account")
 	query.Set("action", action)
 	query.Set("address", address)

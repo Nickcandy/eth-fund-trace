@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"math/big"
 	"strconv"
 	"strings"
 	"time"
@@ -76,25 +77,34 @@ func normalizeOne(raw rawTransfer, action string, missingLogIndex int64) (store.
 	if raw.Hash == "" || raw.From == "" || to == "" || raw.Value == "" {
 		return store.Transfer{}, fmt.Errorf("%w: missing required transaction field", ErrMalformedResponse)
 	}
+	if value, ok := new(big.Int).SetString(raw.Value, 10); !ok || value.Sign() < 0 {
+		return store.Transfer{}, fmt.Errorf("%w: invalid value", ErrMalformedResponse)
+	}
 	transfer := store.Transfer{
-		Chain:       "ethereum",
-		ChainID:     1,
-		TxHash:      raw.Hash,
-		BlockNumber: blockNumber,
-		BlockTime:   time.Unix(timestamp, 0).UTC(),
-		From:        raw.From,
-		To:          to,
-		AssetType:   "eth",
-		Asset:       "ETH",
-		Amount:      raw.Value,
-		Source:      action,
-		TraceID:     raw.TraceID,
-		ObservedAt:  time.Now().UTC(),
+		Chain:            "ethereum",
+		ChainID:          1,
+		TxHash:           raw.Hash,
+		BlockNumber:      blockNumber,
+		BlockTime:        time.Unix(timestamp, 0).UTC(),
+		From:             raw.From,
+		To:               to,
+		AssetType:        "eth",
+		Asset:            "ETH",
+		Amount:           raw.Value,
+		Source:           action,
+		TraceID:          raw.TraceID,
+		ObservedAt:       time.Now().UTC(),
+		TransferKind:     "transfer",
+		TransactionGroup: "1:" + strings.ToLower(raw.Hash),
 	}
 	if action == "tokentx" {
-		decimals, err := parseInt(raw.TokenDecimal, "tokenDecimal")
-		if err != nil {
-			return store.Transfer{}, err
+		var decimals int64
+		metadataComplete := raw.TokenDecimal != ""
+		if metadataComplete {
+			decimals, err = parseInt(raw.TokenDecimal, "tokenDecimal")
+			if err != nil {
+				return store.Transfer{}, err
+			}
 		}
 		logIndex := missingLogIndex
 		if raw.LogIndex != "" {
@@ -109,10 +119,20 @@ func normalizeOne(raw rawTransfer, action string, missingLogIndex int64) (store.
 		transfer.AssetType = "erc20"
 		transfer.Asset = raw.ContractAddress
 		transfer.Symbol = raw.TokenSymbol
+		transfer.TokenName = raw.TokenName
 		transfer.Decimals = int32(decimals)
 		transfer.Amount = ""
 		transfer.TokenValue = raw.Value
 		transfer.LogIndex = logIndex
+		transfer.LogIndexSynthetic = raw.LogIndex == ""
+		transfer.TokenMetadataComplete = metadataComplete
+		const zero = "0x0000000000000000000000000000000000000000"
+		switch {
+		case strings.EqualFold(raw.From, zero):
+			transfer.TransferKind = "mint"
+		case strings.EqualFold(to, zero):
+			transfer.TransferKind = "burn"
+		}
 	}
 	return transfer, nil
 }

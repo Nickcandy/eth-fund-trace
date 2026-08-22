@@ -94,3 +94,17 @@ func TestLiveLatestBlock(t *testing.T) {
 	}
 	t.Logf("latest block %d", block)
 }
+
+func TestLiveBaseLatestBlock(t *testing.T) {
+	if os.Getenv("ETHERSCAN_LIVE_TEST") != "1" || os.Getenv("ETHERSCAN_API_KEY") == "" {
+		t.Skip("set ETHERSCAN_LIVE_TEST=1 and ETHERSCAN_API_KEY to run")
+	}
+	client := NewClient(Config{Chain: "base", ChainID: 8453, APIKey: os.Getenv("ETHERSCAN_API_KEY"), RequestsPerSecond: 5, MaxRetries: 3, RetryBase: 500 * time.Millisecond})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	block, err := client.LatestBlock(ctx)
+	if err != nil || block <= 0 {
+		t.Fatalf("latest Base block=%d err=%v", block, err)
+	}
+	t.Logf("latest Base block %d", block)
+}

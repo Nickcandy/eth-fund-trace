@@ -276,3 +276,21 @@ func waitForJob(t *testing.T, manager *Manager, id string) store.SyncJob {
 	t.Fatal("job did not finish")
 	return store.SyncJob{}
 }
+
+func TestManagerSynchronizesConfiguredBaseSource(t *testing.T) {
+	repository := newMemoryRepository()
+	baseSource := &fakeSource{latest: 20}
+	manager := NewMulti(map[string]Source{"base": baseSource}, repository, Config{Confirmations: 2})
+	seed := "0x0000000000000000000000000000000000000001"
+	job, err := manager.Enqueue(context.Background(), Request{Chain: "base", Address: seed})
+	if err != nil || job.ChainID != 8453 {
+		t.Fatalf("job=%+v err=%v", job, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = manager.Run(ctx) }()
+	completed := waitForJob(t, manager, job.ID.Hex())
+	if completed.Status != "succeeded" || len(repository.transfers) == 0 || repository.transfers[0].Chain != "base" || repository.transfers[0].ChainID != 8453 {
+		t.Fatalf("job=%+v transfers=%+v", completed, repository.transfers)
+	}
+}

@@ -7,6 +7,11 @@ import (
 
 type Config struct {
 	HTTPAddr                   string
+	HTTPAPIKey                 string
+	HTTPTimeoutSeconds         int
+	HTTPBodyLimit              string
+	HTTPRequestsPerSecond      int
+	HTTPBurst                  int
 	MongoURI                   string
 	MongoDatabase              string
 	EtherscanAPIKey            string
@@ -25,6 +30,11 @@ type Config struct {
 func Load() Config {
 	return Config{
 		HTTPAddr:                   value("HTTP_ADDR", ":8080"),
+		HTTPAPIKey:                 os.Getenv("HTTP_API_KEY"),
+		HTTPTimeoutSeconds:         intValue("HTTP_TIMEOUT_SECONDS", 30),
+		HTTPBodyLimit:              value("HTTP_BODY_LIMIT", "1M"),
+		HTTPRequestsPerSecond:      intValue("HTTP_REQUESTS_PER_SECOND", 20),
+		HTTPBurst:                  intValue("HTTP_BURST", 10),
 		MongoURI:                   value("MONGO_URI", "mongodb://localhost:27017"),
 		MongoDatabase:              value("MONGO_DATABASE", "eth_fund_trace"),
 		EtherscanAPIKey:            value("ETHERSCAN_API_KEY", ""),

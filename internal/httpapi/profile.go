@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
 
+	"github.com/Nickcandy/eth-fund-trace/internal/chains"
 	"github.com/Nickcandy/eth-fund-trace/internal/ethaddr"
 	"github.com/Nickcandy/eth-fund-trace/internal/profile"
 	"github.com/Nickcandy/eth-fund-trace/internal/store"
@@ -25,12 +25,10 @@ func NewProfileHandler(profiler ProfileProvider) *ProfileHandler {
 }
 
 func (h *ProfileHandler) Get(c echo.Context) error {
-	chain := strings.ToLower(c.QueryParam("chain"))
-	if chain == "" {
-		chain = "ethereum"
-	}
+	chainConfig, chainErr := chains.Resolve(c.QueryParam("chain"))
+	chain := chainConfig.Name
 	address, err := ethaddr.Normalize(c.Param("address"))
-	if err != nil || chain != "ethereum" {
+	if err != nil || chainErr != nil {
 		return writeError(c, http.StatusBadRequest, "invalid_request", "invalid chain or address", false)
 	}
 	result, err := h.profiler.Get(c.Request().Context(), chain, address)

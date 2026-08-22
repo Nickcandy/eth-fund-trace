@@ -51,6 +51,21 @@ chain, address, direction, depth, topN, asset
 
 根据当前数据和固定规则计算风险分数、等级和解释。也可以作为 `/trace` 的可选结果字段，但内部职责独立。
 
+### `POST/GET /api/v1/bridge-links`
+
+写入和查询有明确源链/目标链交易证据的确认式桥接关联。当前支持 Ethereum 与 Base。系统不使用相同地址、相同金额或时间接近做自动配对。
+
+## HTTP 治理
+
+- 所有响应生成 `X-Request-ID`；
+- 请求 Context 默认 30 秒超时；
+- Body 默认限制为 1 MiB；
+- 配置 `HTTP_API_KEY` 后启用 Bearer 鉴权，`/healthz` 保持公开；
+- 单进程按客户端 IP 使用令牌桶限流；
+- panic 恢复、结构化访问日志和统一错误结构由公共中间件处理。
+
+完整机器可读契约见 `openapi.yaml`。
+
 ## 错误和限制
 
 统一处理：

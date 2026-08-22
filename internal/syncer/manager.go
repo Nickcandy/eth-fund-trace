@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Nickcandy/eth-fund-trace/internal/chains"
 	"github.com/Nickcandy/eth-fund-trace/internal/ethaddr"
 	"github.com/Nickcandy/eth-fund-trace/internal/etherscan"
 	"github.com/Nickcandy/eth-fund-trace/internal/store"
@@ -59,7 +60,7 @@ type queuedJob struct {
 }
 
 type Manager struct {
-	source     Source
+	sources    map[string]Source
 	repository Repository
 	config     Config
 	queue      chan queuedJob
@@ -68,6 +69,10 @@ type Manager struct {
 }
 
 func New(source Source, repository Repository, config Config) *Manager {
+	return NewMulti(map[string]Source{"ethereum": source}, repository, config)
+}
+
+func NewMulti(sources map[string]Source, repository Repository, config Config) *Manager {
 	if config.CacheTTL <= 0 {
 		config.CacheTTL = 15 * time.Minute
 	}
@@ -80,17 +85,15 @@ func New(source Source, repository Repository, config Config) *Manager {
 	if config.Clock == nil {
 		config.Clock = time.Now
 	}
-	return &Manager{source: source, repository: repository, config: config, queue: make(chan queuedJob, config.QueueSize), active: make(map[string]primitive.ObjectID)}
+	return &Manager{sources: sources, repository: repository, config: config, queue: make(chan queuedJob, config.QueueSize), active: make(map[string]primitive.ObjectID)}
 }
 
 func (m *Manager) Enqueue(ctx context.Context, request Request) (store.SyncJob, error) {
-	request.Chain = strings.ToLower(strings.TrimSpace(request.Chain))
-	if request.Chain == "" {
-		request.Chain = "ethereum"
-	}
+	chain, chainErr := chains.Resolve(request.Chain)
+	request.Chain = chain.Name
 	normalizedAddress, err := ethaddr.Normalize(request.Address)
 	request.Address = normalizedAddress
-	if request.Chain != "ethereum" || err != nil || request.StartBlock < 0 || request.NeighborLimit < 0 || request.NeighborLimit > 10 {
+	if chainErr != nil || m.sources[request.Chain] == nil || err != nil || request.StartBlock < 0 || request.NeighborLimit < 0 || request.NeighborLimit > 10 {
 		return store.SyncJob{}, ErrInvalidRequest
 	}
 	key := request.Chain + ":" + request.Address
@@ -100,7 +103,7 @@ func (m *Manager) Enqueue(ctx context.Context, request Request) (store.SyncJob, 
 		return m.repository.GetSyncJob(ctx, id)
 	}
 	job := store.SyncJob{
-		ID: primitive.NewObjectID(), Chain: request.Chain, ChainID: 1, Address: request.Address,
+		ID: primitive.NewObjectID(), Chain: request.Chain, ChainID: chain.ID, Address: request.Address,
 		StartBlock: request.StartBlock, NeighborLimit: request.NeighborLimit, Status: "queued",
 		CreatedAt: m.config.Clock().UTC(), TotalAddresses: 1, ActionCounts: make(map[string]int64),
 	}
@@ -153,6 +156,8 @@ type addressResult struct {
 
 func (m *Manager) process(ctx context.Context, queued queuedJob) {
 	defer m.release(queued.request)
+	source := m.sources[queued.request.Chain]
+	chain, _ := chains.Resolve(queued.request.Chain)
 	job, err := m.repository.GetSyncJob(ctx, queued.id)
 	if err != nil {
 		return
@@ -168,7 +173,7 @@ func (m *Manager) process(ctx context.Context, queued queuedJob) {
 		if safeHead != nil {
 			return *safeHead, nil
 		}
-		latest, err := m.source.LatestBlock(ctx)
+		latest, err := source.LatestBlock(ctx)
 		if err != nil {
 			return 0, err
 		}
@@ -181,7 +186,7 @@ func (m *Manager) process(ctx context.Context, queued queuedJob) {
 		return value, nil
 	}
 
-	seedResult, err := m.syncAddress(ctx, queued.request, getSafeHead)
+	seedResult, err := m.syncAddress(ctx, source, chain.ID, queued.request, getSafeHead)
 	if err != nil {
 		m.finishFailed(ctx, &job, err)
 		return
@@ -202,7 +207,7 @@ func (m *Manager) process(ctx context.Context, queued queuedJob) {
 	for _, neighbor := range neighbors {
 		request := queued.request
 		request.Address, request.NeighborLimit = neighbor, 0
-		result, syncErr := m.syncAddress(ctx, request, getSafeHead)
+		result, syncErr := m.syncAddress(ctx, source, chain.ID, request, getSafeHead)
 		if syncErr != nil {
 			code, retryable := classify(syncErr)
 			job.FailedNeighbors = append(job.FailedNeighbors, store.SyncFailure{Address: neighbor, Code: code, Message: syncErr.Error(), Retryable: retryable})
@@ -221,7 +226,7 @@ func (m *Manager) process(ctx context.Context, queued queuedJob) {
 	m.finish(ctx, &job)
 }
 
-func (m *Manager) syncAddress(ctx context.Context, request Request, getSafeHead func() (int64, error)) (addressResult, error) {
+func (m *Manager) syncAddress(ctx context.Context, source Source, chainID int64, request Request, getSafeHead func() (int64, error)) (addressResult, error) {
 	now := m.config.Clock().UTC()
 	address, exists, err := m.repository.FindAddress(ctx, request.Chain, request.Address)
 	if err != nil {
@@ -239,7 +244,7 @@ func (m *Manager) syncAddress(ctx context.Context, request Request, getSafeHead 
 	if err != nil {
 		return addressResult{}, err
 	}
-	if err := m.repository.SetAddressSyncing(ctx, request.Chain, 1, request.Address); err != nil {
+	if err := m.repository.SetAddressSyncing(ctx, request.Chain, chainID, request.Address); err != nil {
 		return addressResult{}, err
 	}
 
@@ -265,8 +270,8 @@ func (m *Manager) syncAddress(ctx context.Context, request Request, getSafeHead 
 	result := addressResult{actionCounts: make(map[string]int64)}
 	discovered := make(map[string]struct{})
 	for _, interval := range intervals {
-		for _, action := range m.actions() {
-			count, fetchErr := m.fetchRange(ctx, action.call, action.name, request.Address, interval[0], interval[1], discovered)
+		for _, action := range m.actions(source) {
+			count, fetchErr := m.fetchRange(ctx, action.call, action.name, request.Chain, chainID, request.Address, interval[0], interval[1], discovered)
 			if fetchErr != nil {
 				if err := m.repository.FailAddressSync(ctx, request.Chain, request.Address, fetchErr.Error()); err != nil {
 					slog.Error("failed to persist address sync failure", "address", request.Address, "error", err)
@@ -282,7 +287,7 @@ func (m *Manager) syncAddress(ctx context.Context, request Request, getSafeHead 
 	for value := range discovered {
 		addresses = append(addresses, value)
 	}
-	if err := m.repository.UpsertDiscoveredAddresses(ctx, request.Chain, 1, addresses, now); err != nil {
+	if err := m.repository.UpsertDiscoveredAddresses(ctx, request.Chain, chainID, addresses, now); err != nil {
 		return addressResult{}, err
 	}
 	if err := m.repository.CompleteAddressSync(ctx, request.Chain, request.Address, earliest, latest, now); err != nil {
@@ -301,33 +306,34 @@ type action struct {
 	call func(context.Context, string, int64, int64) ([]store.Transfer, error)
 }
 
-func (m *Manager) actions() []action {
+func (m *Manager) actions(source Source) []action {
 	return []action{
-		{name: "txlist", call: m.source.ListTransactions},
-		{name: "txlistinternal", call: m.source.ListInternalTransactions},
-		{name: "tokentx", call: m.source.ListTokenTransfers},
+		{name: "txlist", call: source.ListTransactions},
+		{name: "txlistinternal", call: source.ListInternalTransactions},
+		{name: "tokentx", call: source.ListTokenTransfers},
 	}
 }
 
-func (m *Manager) fetchRange(ctx context.Context, call func(context.Context, string, int64, int64) ([]store.Transfer, error), actionName, address string, start, end int64, discovered map[string]struct{}) (int64, error) {
+func (m *Manager) fetchRange(ctx context.Context, call func(context.Context, string, int64, int64) ([]store.Transfer, error), actionName, chain string, chainID int64, address string, start, end int64, discovered map[string]struct{}) (int64, error) {
 	transfers, err := call(ctx, address, start, end)
 	if errors.Is(err, etherscan.ErrPageLimit) {
 		if start == end {
 			return 0, fmt.Errorf("%w: action=%s block=%d", etherscan.ErrPageLimit, actionName, start)
 		}
 		middle := start + (end-start)/2
-		left, leftErr := m.fetchRange(ctx, call, actionName, address, start, middle, discovered)
+		left, leftErr := m.fetchRange(ctx, call, actionName, chain, chainID, address, start, middle, discovered)
 		if leftErr != nil {
 			return 0, leftErr
 		}
-		right, rightErr := m.fetchRange(ctx, call, actionName, address, middle+1, end, discovered)
+		right, rightErr := m.fetchRange(ctx, call, actionName, chain, chainID, address, middle+1, end, discovered)
 		return left + right, rightErr
 	}
 	if err != nil {
 		return 0, err
 	}
 	for index := range transfers {
-		transfers[index].Chain, transfers[index].ChainID = "ethereum", 1
+		transfers[index].Chain, transfers[index].ChainID = chain, chainID
+		transfers[index].TransactionGroup = fmt.Sprintf("%d:%s", chainID, strings.ToLower(transfers[index].TxHash))
 		transfers[index].From = strings.ToLower(transfers[index].From)
 		transfers[index].To = strings.ToLower(transfers[index].To)
 		if transfers[index].AssetType == "erc20" {

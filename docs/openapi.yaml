@@ -1,0 +1,161 @@
+openapi: 3.1.0
+info:
+  title: ETH Fund Trace API
+  version: 1.0.0
+  description: Ethereum and Base read-only fund tracing API.
+servers:
+  - url: http://localhost:8080
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, retryable]
+          properties:
+            code: {type: string}
+            message: {type: string}
+            retryable: {type: boolean}
+    AsyncJob:
+      type: object
+      properties:
+        jobId: {type: string}
+        traceJobId: {type: string}
+        status: {type: string}
+    Label:
+      type: object
+      required: [chain, address, type, source]
+      properties:
+        chain: {type: string, enum: [ethereum, base]}
+        address: {type: string}
+        type: {type: string}
+        source: {type: string, enum: [manual, public-list]}
+        riskLevel: {type: string, enum: [low, medium, high]}
+        confidence: {type: number, minimum: 0, maximum: 1, default: 1}
+        note: {type: string}
+        evidence: {type: array, items: {type: string}}
+    BridgeLink:
+      type: object
+      required: [sourceChain, sourceTxHash, sourceAddress, targetChain, targetTxHash, targetAddress, bridgeAddress, evidence]
+      properties:
+        sourceChain: {type: string, enum: [ethereum, base]}
+        sourceTxHash: {type: string}
+        sourceLogIndex: {type: integer, minimum: 0}
+        sourceAddress: {type: string}
+        targetChain: {type: string, enum: [ethereum, base]}
+        targetTxHash: {type: string}
+        targetLogIndex: {type: integer, minimum: 0}
+        targetAddress: {type: string}
+        bridgeAddress: {type: string}
+        asset: {type: string}
+        amount: {type: string}
+        evidence: {type: array, minItems: 1, items: {type: string}}
+  responses:
+    BadRequest:
+      description: Invalid request
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+  parameters:
+    ObjectID: {name: id, in: path, required: true, schema: {type: string}}
+    AddressPath: {name: address, in: path, required: true, schema: {type: string}}
+    Chain: {name: chain, in: query, schema: {type: string, enum: [ethereum, base], default: ethereum}}
+security:
+  - bearerAuth: []
+paths:
+  /healthz:
+    get:
+      security: []
+      responses:
+        '200': {description: MongoDB is reachable}
+  /api/v1/sync:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [address]
+              properties:
+                chain: {type: string, enum: [ethereum, base], default: ethereum}
+                address: {type: string}
+                startBlock: {type: integer, minimum: 0, default: 0}
+                neighborLimit: {type: integer, minimum: 0, maximum: 10, default: 10}
+      responses:
+        '202': {description: Sync job accepted, content: {application/json: {schema: {$ref: '#/components/schemas/AsyncJob'}}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+  /api/v1/sync-jobs/{id}:
+    get:
+      parameters: [{$ref: '#/components/parameters/ObjectID'}]
+      responses: {'200': {description: Sync job}, '404': {description: Job not found}}
+  /api/v1/addresses/{address}:
+    get:
+      parameters: [{$ref: '#/components/parameters/AddressPath'}, {$ref: '#/components/parameters/Chain'}]
+      responses: {'200': {description: Address metadata and labels}, '404': {description: Address not discovered}}
+  /api/v1/addresses/{address}/profile:
+    get:
+      parameters: [{$ref: '#/components/parameters/AddressPath'}, {$ref: '#/components/parameters/Chain'}]
+      responses: {'200': {description: Versioned address profile}, '409': {description: Address not synced}}
+  /api/v1/edges:
+    get:
+      parameters:
+        - {$ref: '#/components/parameters/Chain'}
+        - {name: address, in: query, required: true, schema: {type: array, items: {type: string}}}
+        - {name: direction, in: query, schema: {type: string, enum: [in, out, both], default: both}}
+        - {name: asset, in: query, schema: {type: string, default: all}}
+        - {name: fromBlock, in: query, schema: {type: integer, minimum: 0}}
+        - {name: toBlock, in: query, schema: {type: integer, minimum: 0}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 500, default: 100}}
+        - {name: cursor, in: query, schema: {type: string}}
+      responses: {'200': {description: Stable page of positive fact edges}, '409': {description: Address not synced}}
+  /api/v1/trace:
+    get:
+      parameters:
+        - {$ref: '#/components/parameters/Chain'}
+        - {name: address, in: query, required: true, schema: {type: string}}
+        - {name: direction, in: query, schema: {type: string, enum: [in, out, both], default: both}}
+        - {name: depth, in: query, schema: {type: integer, minimum: 1, maximum: 5, default: 3}}
+        - {name: topN, in: query, schema: {type: integer, minimum: 1, maximum: 20, default: 10}}
+        - {name: asset, in: query, schema: {type: string, default: all}}
+      responses:
+        '202':
+          description: Trace job accepted
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AsyncJob'}
+  /api/v1/trace-jobs/{id}:
+    get:
+      parameters: [{$ref: '#/components/parameters/ObjectID'}]
+      responses: {'200': {description: Trace job and persisted result}, '404': {description: Job not found}}
+  /api/v1/risk:
+    get:
+      parameters:
+        - {$ref: '#/components/parameters/Chain'}
+        - {name: address, in: query, required: true, schema: {type: string}}
+        - {name: depth, in: query, schema: {type: integer, minimum: 1, maximum: 5}}
+        - {name: topN, in: query, schema: {type: integer, minimum: 1, maximum: 20}}
+      responses: {'200': {description: risk-v1 result}, '409': {description: Address not synced}}
+  /api/v1/labels:
+    post:
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/Label'}}}}
+      responses: {'201': {description: Label upserted}, '400': {$ref: '#/components/responses/BadRequest'} }
+    get:
+      parameters:
+        - {$ref: '#/components/parameters/Chain'}
+        - {name: address, in: query, required: true, schema: {type: string}}
+      responses: {'200': {description: Deterministic labels}}
+  /api/v1/bridge-links:
+    post:
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BridgeLink'}}}}
+      responses: {'201': {description: Confirmed bridge link}, '400': {$ref: '#/components/responses/BadRequest'} }
+    get:
+      parameters:
+        - {$ref: '#/components/parameters/Chain'}
+        - {name: address, in: query, required: true, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 500, default: 100}}
+      responses: {'200': {description: Confirmed links touching the chain/address node}}

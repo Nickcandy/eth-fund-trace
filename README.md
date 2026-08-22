@@ -9,9 +9,9 @@
 
 一句话概括：**输入一个地址，输出「钱从哪来、到哪去、经过谁、谁可能是谁，以及这条链路有多大风险」。**
 
-第一阶段只读取 Ethereum Mainnet 的公开数据，不发起交易、不托管资产，也不需要链上资金。数据通过 Etherscan API 获取，保存普通 ETH 交易、合约产生的 ETH 内部转账和 ERC-20 转账到本地 Docker MongoDB；数据模型预留 `chain` 字段，后续可以扩展到 Sepolia、Arbitrum、Base 等网络。
+系统只读取 Ethereum Mainnet 和 Base 的公开数据，不发起交易、不托管资产，也不需要链上资金。数据通过 Etherscan V2 API 获取，保存普通 ETH 交易、合约产生的 ETH 内部转账和 ERC-20 转账到本地 Docker MongoDB。
 
-## 当前实现（M0-M5）
+## 当前实现（M0-M9）
 
 - `POST /api/v1/sync`：创建异步按需同步任务，补齐种子地址及最多 10 个直接邻居；
 - `GET /api/v1/sync-jobs/:id`：查询任务进度、缓存命中、抓取计数及部分失败；
@@ -19,8 +19,11 @@
 - `GET /api/v1/edges`：按地址、方向、资产和区块范围查询正金额事实边，使用 Base64URL 游标稳定翻页；
 - `GET /api/v1/trace`、`GET /api/v1/trace-jobs/:id`：异步分层追踪；
 - `POST/GET /api/v1/labels`：人工/公开标签管理，并在追踪结果中输出传播置信度和风险原因。
+- `GET /api/v1/addresses/:address`、`GET /api/v1/risk`：地址元数据和独立风险结果；
+- `POST/GET /api/v1/bridge-links`：保存和查询有双链交易证据的确认式桥接关系；
+- 请求 ID、超时、Body 上限、可选 Bearer 鉴权、IP 令牌桶、恢复和结构化访问日志。
 
-Etherscan 请求在单进程内共享默认 5 QPS、突发 1 的令牌桶。同步缓存默认 15 分钟，安全链头为最新块减 12 个确认。M6/M7 追踪任务使用 `trace-v1`、`propagation-v1` 和 `risk-v1` 规则；M8 完整 HTTP 治理尚未实现。
+Ethereum 和 Base 的 Etherscan 请求在单进程内共享默认 5 QPS、突发 1 的令牌桶。同步缓存默认 15 分钟，安全链头为最新块减 12 个确认。追踪和风险使用 `trace-v1`、`propagation-v1` 和 `risk-v1`。
 
 ## 第一阶段核心能力
 
@@ -45,7 +48,10 @@ eth-fund-trace/
     ├── 05-实施计划.md            # 按里程碑拆解的编码顺序和验收标准
     ├── 06-数据与同步设计.md      # Etherscan、Mongo 集合、索引、按需同步
     ├── 07-追踪打标风险设计.md    # 分层 BFS、多资产、标签传播、固定风险规则
-    └── 08-API与验证设计.md       # HTTP 接口、错误处理和测试分层
+    ├── 08-API与验证设计.md       # HTTP 接口、错误处理和测试分层
+    ├── 09-架构决策记录.md        # M7.1-M9 的关键选择和限制
+    ├── 10-项目运行与实施手册.md  # 配置、部署、流程、验收和排障
+    └── openapi.yaml              # OpenAPI 3.1 HTTP 契约
 ```
 
 ## 建议阅读顺序

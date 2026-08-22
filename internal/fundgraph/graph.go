@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+
+	"github.com/Nickcandy/eth-fund-trace/internal/chains"
 	"time"
 
 	"github.com/Nickcandy/eth-fund-trace/internal/ethaddr"
@@ -109,7 +111,9 @@ func (g *Graph) normalize(ctx context.Context, query EdgeQuery) (store.TransferQ
 	if query.Chain == "" {
 		query.Chain = "ethereum"
 	}
-	if query.Chain != "ethereum" || len(query.Addresses) == 0 || query.FromBlock < 0 || query.ToBlock < 0 || (query.ToBlock > 0 && query.FromBlock > query.ToBlock) {
+	chain, chainErr := chains.Resolve(query.Chain)
+	query.Chain = chain.Name
+	if chainErr != nil || len(query.Addresses) == 0 || query.FromBlock < 0 || query.ToBlock < 0 || (query.ToBlock > 0 && query.FromBlock > query.ToBlock) {
 		return store.TransferQuery{}, 0, "", ErrInvalidQuery
 	}
 	seen := make(map[string]struct{}, len(query.Addresses))

@@ -55,7 +55,6 @@ func (s traceStub) Enqueue(context.Context, tracer.Request) (store.TraceJob, err
 }
 func (s traceStub) Job(context.Context, string) (store.TraceJob, error) { return s.job, nil }
 
-
 func TestTraceHandlerReturnsAccepted(t *testing.T) {
 	id := primitive.NewObjectID()
 	h := NewTraceHandler(traceStub{job: store.TraceJob{ID: id, Status: "queued"}})

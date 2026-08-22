@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/Nickcandy/eth-fund-trace/internal/chains"
 	"github.com/Nickcandy/eth-fund-trace/internal/store"
 )
 
@@ -32,6 +33,11 @@ func New(repository Repository, clock func() time.Time) *Profiler {
 }
 
 func (p *Profiler) Get(ctx context.Context, chain, address string) (store.AddressProfile, error) {
+	chainConfig, err := chains.Resolve(chain)
+	if err != nil {
+		return store.AddressProfile{}, err
+	}
+	chain = chainConfig.Name
 	metadata, found, err := p.repository.FindAddress(ctx, chain, address)
 	if err != nil {
 		return store.AddressProfile{}, err
@@ -56,9 +62,10 @@ func (p *Profiler) Get(ctx context.Context, chain, address string) (store.Addres
 }
 
 func evaluate(chain, address string, dataThroughBlock int64, activity store.AddressActivity, computedAt time.Time) store.AddressProfile {
+	chainConfig, _ := chains.Resolve(chain)
 	features := activity.Features
 	result := store.AddressProfile{
-		Chain: chain, ChainID: 1, Address: address, RuleVersion: RuleVersion,
+		Chain: chain, ChainID: chainConfig.ID, Address: address, RuleVersion: RuleVersion,
 		DataThroughBlock: dataThroughBlock, WindowEnd: activity.LatestTransferAt,
 		Features: features, ComputedAt: computedAt,
 	}

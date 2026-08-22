@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Nickcandy/eth-fund-trace/internal/chains"
 	"github.com/Nickcandy/eth-fund-trace/internal/ethaddr"
 	"github.com/Nickcandy/eth-fund-trace/internal/risk"
 	"github.com/Nickcandy/eth-fund-trace/internal/store"
@@ -221,13 +222,11 @@ func nodeTerminal(nodes []Node, address string) bool {
 }
 
 func normalize(q Query) (Query, error) {
-	q.Chain = strings.ToLower(strings.TrimSpace(q.Chain))
-	if q.Chain == "" {
-		q.Chain = "ethereum"
-	}
-	if q.Chain != "ethereum" {
+	chain, chainErr := chains.Resolve(q.Chain)
+	if chainErr != nil {
 		return q, ErrInvalidQuery
 	}
+	q.Chain = chain.Name
 	if q.Depth == 0 {
 		q.Depth = 3
 	}

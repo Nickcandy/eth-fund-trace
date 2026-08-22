@@ -220,6 +220,39 @@ func TestClientAssignsSyntheticIndexWhenTokenLogIndexIsUnavailable(t *testing.T)
 	}
 }
 
+func TestClientClassifiesTokenMintBurnAndIncompleteMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"1","message":"OK","result":[` +
+			`{"blockNumber":"1","timeStamp":"1","hash":"0xmint","from":"0x0000000000000000000000000000000000000000","to":"0x0000000000000000000000000000000000000001","value":"10","contractAddress":"0x0000000000000000000000000000000000000010","tokenDecimal":"","logIndex":"1"},` +
+			`{"blockNumber":"2","timeStamp":"2","hash":"0xburn","from":"0x0000000000000000000000000000000000000001","to":"0x0000000000000000000000000000000000000000","value":"5","contractAddress":"0x0000000000000000000000000000000000000010","tokenDecimal":"6","logIndex":"2"}]}`))
+	}))
+	defer server.Close()
+	transfers, err := NewClient(Config{BaseURL: server.URL, HTTPClient: server.Client()}).ListTokenTransfers(context.Background(), "0xseed", 0, 2)
+	if err != nil || len(transfers) != 2 {
+		t.Fatalf("transfers=%+v err=%v", transfers, err)
+	}
+	if transfers[0].TransferKind != "mint" || transfers[0].TokenMetadataComplete {
+		t.Fatalf("mint=%+v", transfers[0])
+	}
+	if transfers[1].TransferKind != "burn" || !transfers[1].TokenMetadataComplete {
+		t.Fatalf("burn=%+v", transfers[1])
+	}
+}
+
+func TestClientUsesConfiguredChainIdentity(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("chainid") != "8453" {
+			t.Fatalf("chainid=%s", r.URL.Query().Get("chainid"))
+		}
+		_, _ = w.Write([]byte(`{"status":"1","message":"OK","result":[{"blockNumber":"1","timeStamp":"1","hash":"0x1","from":"0xfrom","to":"0xto","value":"1"}]}`))
+	}))
+	defer server.Close()
+	transfers, err := NewClient(Config{Chain: "base", ChainID: 8453, BaseURL: server.URL, HTTPClient: server.Client()}).ListTransactions(context.Background(), "0xseed", 0, 1)
+	if err != nil || transfers[0].Chain != "base" || transfers[0].ChainID != 8453 {
+		t.Fatalf("transfers=%+v err=%v", transfers, err)
+	}
+}
+
 func TestClientContinuesPagingWhenPageIsFullyFiltered(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

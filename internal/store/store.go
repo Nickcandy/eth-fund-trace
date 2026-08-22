@@ -12,12 +12,13 @@ import (
 )
 
 const (
-	AddressesCollection = "addresses"
-	TransfersCollection = "transfers"
-	LabelsCollection    = "labels"
-	SyncJobsCollection  = "sync_jobs"
-	ProfilesCollection  = "address_profiles"
-	TraceJobsCollection = "trace_jobs"
+	AddressesCollection       = "addresses"
+	TransfersCollection       = "transfers"
+	LabelsCollection          = "labels"
+	SyncJobsCollection        = "sync_jobs"
+	ProfilesCollection        = "address_profiles"
+	TraceJobsCollection       = "trace_jobs"
+	CrossChainLinksCollection = "cross_chain_links"
 )
 
 type Store struct {
@@ -29,7 +30,7 @@ func New(db *mongo.Database) *Store {
 }
 
 func (s *Store) Initialize(ctx context.Context) error {
-	for _, name := range []string{AddressesCollection, TransfersCollection, LabelsCollection, SyncJobsCollection, ProfilesCollection, TraceJobsCollection} {
+	for _, name := range []string{AddressesCollection, TransfersCollection, LabelsCollection, SyncJobsCollection, ProfilesCollection, TraceJobsCollection, CrossChainLinksCollection} {
 		if err := s.ensureCollection(ctx, name); err != nil {
 			return err
 		}
@@ -73,6 +74,11 @@ func indexModels() map[string][]mongo.IndexModel {
 		TraceJobsCollection: {
 			{Keys: bson.D{{Key: "status", Value: 1}, {Key: "createdAt", Value: 1}}, Options: options.Index().SetName("idx_trace_jobs_status_created")},
 			{Keys: bson.D{{Key: "chain", Value: 1}, {Key: "seedAddress", Value: 1}, {Key: "createdAt", Value: -1}}, Options: options.Index().SetName("idx_trace_jobs_seed_created")},
+		},
+		CrossChainLinksCollection: {
+			{Keys: bson.D{{Key: "sourceChain", Value: 1}, {Key: "sourceTxHash", Value: 1}, {Key: "sourceLogIndex", Value: 1}, {Key: "targetChain", Value: 1}, {Key: "targetTxHash", Value: 1}, {Key: "targetLogIndex", Value: 1}}, Options: options.Index().SetUnique(true).SetName("uq_cross_chain_link_evidence")},
+			{Keys: bson.D{{Key: "sourceChain", Value: 1}, {Key: "sourceAddress", Value: 1}, {Key: "observedAt", Value: -1}}, Options: options.Index().SetName("idx_cross_chain_source_address")},
+			{Keys: bson.D{{Key: "targetChain", Value: 1}, {Key: "targetAddress", Value: 1}, {Key: "observedAt", Value: -1}}, Options: options.Index().SetName("idx_cross_chain_target_address")},
 		},
 	}
 }
@@ -490,4 +496,29 @@ func (s *Store) UpsertTransfer(ctx context.Context, transfer Transfer) error {
 	filter := bson.D{{Key: "chain", Value: transfer.Chain}, {Key: "txHash", Value: transfer.TxHash}, {Key: "source", Value: transfer.Source}, {Key: "traceId", Value: transfer.TraceID}, {Key: "logIndex", Value: transfer.LogIndex}, {Key: "asset", Value: transfer.Asset}}
 	_, err := s.db.Collection(TransfersCollection).UpdateOne(ctx, filter, bson.D{{Key: "$set", Value: transfer}}, options.Update().SetUpsert(true))
 	return err
+}
+
+func (s *Store) UpsertCrossChainLink(ctx context.Context, link CrossChainLink) (CrossChainLink, error) {
+	filter := bson.D{{Key: "sourceChain", Value: link.SourceChain}, {Key: "sourceTxHash", Value: link.SourceTxHash}, {Key: "sourceLogIndex", Value: link.SourceLogIndex}, {Key: "targetChain", Value: link.TargetChain}, {Key: "targetTxHash", Value: link.TargetTxHash}, {Key: "targetLogIndex", Value: link.TargetLogIndex}}
+	link.ID = primitive.NilObjectID
+	_, err := s.db.Collection(CrossChainLinksCollection).UpdateOne(ctx, filter, bson.D{{Key: "$set", Value: link}}, options.Update().SetUpsert(true))
+	if err != nil {
+		return CrossChainLink{}, err
+	}
+	err = s.db.Collection(CrossChainLinksCollection).FindOne(ctx, filter).Decode(&link)
+	return link, err
+}
+
+func (s *Store) ListCrossChainLinks(ctx context.Context, chain, address string, limit int64) ([]CrossChainLink, error) {
+	filter := bson.D{{Key: "$or", Value: bson.A{
+		bson.D{{Key: "sourceChain", Value: chain}, {Key: "sourceAddress", Value: address}},
+		bson.D{{Key: "targetChain", Value: chain}, {Key: "targetAddress", Value: address}},
+	}}}
+	cursor, err := s.db.Collection(CrossChainLinksCollection).Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "observedAt", Value: -1}}).SetLimit(limit))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = cursor.Close(ctx) }()
+	var result []CrossChainLink
+	return result, cursor.All(ctx, &result)
 }
