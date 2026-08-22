@@ -39,7 +39,7 @@ func TestGovernanceAddsRequestIDAndProtectsAPI(t *testing.T) {
 
 func TestGovernanceRejectsOversizedBodyAndRateLimit(t *testing.T) {
 	e := echo.New()
-	UseGovernance(e, GovernanceConfig{BodyLimit: "8B", Timeout: time.Second, RequestsPerSecond: 1, Burst: 1})
+	UseGovernance(e, GovernanceConfig{DisableAuth: true, BodyLimit: "8B", Timeout: time.Second, RequestsPerSecond: 1, Burst: 1})
 	e.POST("/api/v1/test", func(c echo.Context) error { return c.NoContent(200) })
 	large := httptest.NewRecorder()
 	e.ServeHTTP(large, httptest.NewRequest(http.MethodPost, "/api/v1/test", strings.NewReader("123456789")))
@@ -48,7 +48,7 @@ func TestGovernanceRejectsOversizedBodyAndRateLimit(t *testing.T) {
 	}
 
 	e2 := echo.New()
-	UseGovernance(e2, GovernanceConfig{BodyLimit: "1K", Timeout: time.Second, RequestsPerSecond: 1, Burst: 1})
+	UseGovernance(e2, GovernanceConfig{DisableAuth: true, BodyLimit: "1K", Timeout: time.Second, RequestsPerSecond: 1, Burst: 1})
 	e2.GET("/api/v1/test", func(c echo.Context) error { return c.NoContent(200) })
 	e2.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/test", nil))
 	limited := httptest.NewRecorder()
@@ -60,11 +60,22 @@ func TestGovernanceRejectsOversizedBodyAndRateLimit(t *testing.T) {
 
 func TestGovernanceReturnsGatewayTimeout(t *testing.T) {
 	e := echo.New()
-	UseGovernance(e, GovernanceConfig{Timeout: time.Millisecond, BodyLimit: "1K", RequestsPerSecond: 100, Burst: 10})
+	UseGovernance(e, GovernanceConfig{DisableAuth: true, Timeout: time.Millisecond, BodyLimit: "1K", RequestsPerSecond: 100, Burst: 10})
 	e.GET("/api/v1/slow", func(c echo.Context) error { <-c.Request().Context().Done(); return c.Request().Context().Err() })
 	response := httptest.NewRecorder()
 	e.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/slow", nil))
 	if response.Code != http.StatusGatewayTimeout || !strings.Contains(response.Body.String(), `"code":"request_timeout"`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestGovernanceFailsClosedWithoutAuthenticationConfiguration(t *testing.T) {
+	e := echo.New()
+	UseGovernance(e, GovernanceConfig{Timeout: time.Second, BodyLimit: "1K", RequestsPerSecond: 100, Burst: 10})
+	e.GET("/api/v1/test", func(c echo.Context) error { return c.NoContent(200) })
+	response := httptest.NewRecorder()
+	e.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/test", nil))
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "authentication_not_configured") {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }

@@ -8,6 +8,7 @@ import (
 type Config struct {
 	HTTPAddr                   string
 	HTTPAPIKey                 string
+	HTTPAuthDisabled           bool
 	HTTPTimeoutSeconds         int
 	HTTPBodyLimit              string
 	HTTPRequestsPerSecond      int
@@ -31,6 +32,7 @@ func Load() Config {
 	return Config{
 		HTTPAddr:                   value("HTTP_ADDR", ":8080"),
 		HTTPAPIKey:                 os.Getenv("HTTP_API_KEY"),
+		HTTPAuthDisabled:           boolValue("HTTP_AUTH_DISABLED", false),
 		HTTPTimeoutSeconds:         intValue("HTTP_TIMEOUT_SECONDS", 30),
 		HTTPBodyLimit:              value("HTTP_BODY_LIMIT", "1M"),
 		HTTPRequestsPerSecond:      intValue("HTTP_REQUESTS_PER_SECOND", 20),
@@ -49,6 +51,14 @@ func Load() Config {
 		SyncConfirmations:          nonNegativeIntValue("SYNC_CONFIRMATIONS", 12),
 		SyncQueueSize:              intValue("SYNC_QUEUE_SIZE", 100),
 	}
+}
+
+func boolValue(key string, fallback bool) bool {
+	parsed, err := strconv.ParseBool(os.Getenv(key))
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
 
 func nonNegativeIntValue(key string, fallback int) int {

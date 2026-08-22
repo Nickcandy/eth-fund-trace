@@ -7,7 +7,10 @@ import (
 	"github.com/Nickcandy/eth-fund-trace/internal/store"
 )
 
-type repositoryStub struct{ saved store.CrossChainLink }
+type repositoryStub struct {
+	saved       store.CrossChainLink
+	hasEvidence bool
+}
 
 func (r *repositoryStub) UpsertCrossChainLink(_ context.Context, link store.CrossChainLink) (store.CrossChainLink, error) {
 	r.saved = link
@@ -16,14 +19,17 @@ func (r *repositoryStub) UpsertCrossChainLink(_ context.Context, link store.Cros
 func (r *repositoryStub) ListCrossChainLinks(context.Context, string, string, int64) ([]store.CrossChainLink, error) {
 	return []store.CrossChainLink{r.saved}, nil
 }
+func (r *repositoryStub) HasTransferEvidence(context.Context, string, string, int64, string, string, string) (bool, error) {
+	return r.hasEvidence, nil
+}
 
 func TestServiceCreatesConfirmedEthereumBaseLink(t *testing.T) {
-	repository := &repositoryStub{}
+	repository := &repositoryStub{hasEvidence: true}
 	service := New(repository)
 	link, err := service.Create(context.Background(), CreateRequest{
 		SourceChain: "ethereum", SourceTxHash: txHash('a'), SourceAddress: address('1'), SourceLogIndex: 2,
 		TargetChain: "base", TargetTxHash: txHash('b'), TargetAddress: address('2'), TargetLogIndex: 3,
-		BridgeAddress: address('3'), Asset: "ETH", Amount: "10", Evidence: []string{"bridge-provider-id:1"},
+		BridgeAddress: address('3'), SourceAsset: "ETH", SourceAmount: "10", TargetAsset: "ETH", TargetAmount: "9", Evidence: []string{"bridge-provider-id:1"},
 	})
 	if err != nil || link.SourceChainID != 1 || link.TargetChainID != 8453 || link.Status != "confirmed" {
 		t.Fatalf("link=%+v err=%v", link, err)
@@ -31,7 +37,7 @@ func TestServiceCreatesConfirmedEthereumBaseLink(t *testing.T) {
 }
 
 func TestServiceRejectsUnprovenOrSameChainLink(t *testing.T) {
-	service := New(&repositoryStub{})
+	service := New(&repositoryStub{hasEvidence: true})
 	_, err := service.Create(context.Background(), CreateRequest{SourceChain: "ethereum", TargetChain: "ethereum", SourceTxHash: txHash('a'), TargetTxHash: txHash('b'), SourceAddress: address('1'), TargetAddress: address('2'), BridgeAddress: address('3')})
 	if err == nil {
 		t.Fatal("same-chain link must fail")
@@ -39,6 +45,14 @@ func TestServiceRejectsUnprovenOrSameChainLink(t *testing.T) {
 	_, err = service.Create(context.Background(), CreateRequest{SourceChain: "ethereum", TargetChain: "base", SourceTxHash: txHash('a'), TargetTxHash: txHash('b'), SourceAddress: address('1'), TargetAddress: address('2'), BridgeAddress: address('3')})
 	if err == nil {
 		t.Fatal("link without evidence must fail")
+	}
+}
+
+func TestServiceRejectsMissingStoredTransferEvidence(t *testing.T) {
+	service := New(&repositoryStub{})
+	_, err := service.Create(context.Background(), CreateRequest{SourceChain: "ethereum", TargetChain: "base", SourceTxHash: txHash('a'), TargetTxHash: txHash('b'), SourceAddress: address('1'), TargetAddress: address('2'), BridgeAddress: address('3'), SourceAsset: "ETH", SourceAmount: "10", TargetAsset: "ETH", TargetAmount: "9", Evidence: []string{"provider:1"}})
+	if err != ErrEvidenceNotFound {
+		t.Fatalf("err=%v", err)
 	}
 }
 

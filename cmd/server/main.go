@@ -72,7 +72,7 @@ func run(parent context.Context) error {
 
 	e := echo.New()
 	e.HideBanner = true
-	httpapi.UseGovernance(e, httpapi.GovernanceConfig{APIKey: cfg.HTTPAPIKey, Timeout: time.Duration(cfg.HTTPTimeoutSeconds) * time.Second, BodyLimit: cfg.HTTPBodyLimit, RequestsPerSecond: float64(cfg.HTTPRequestsPerSecond), Burst: cfg.HTTPBurst})
+	httpapi.UseGovernance(e, httpapi.GovernanceConfig{APIKey: cfg.HTTPAPIKey, DisableAuth: cfg.HTTPAuthDisabled, Timeout: time.Duration(cfg.HTTPTimeoutSeconds) * time.Second, BodyLimit: cfg.HTTPBodyLimit, RequestsPerSecond: float64(cfg.HTTPRequestsPerSecond), Burst: cfg.HTTPBurst})
 	e.GET("/healthz", httpapi.NewHealthHandler(client).Handle)
 	syncHandler := httpapi.NewSyncHandler(syncManager)
 	e.POST("/api/v1/sync", syncHandler.Enqueue)
@@ -81,11 +81,10 @@ func run(parent context.Context) error {
 	e.GET("/api/v1/addresses/:address", httpapi.NewAddressHandler(appStore).Get)
 	e.GET("/api/v1/edges", httpapi.NewEdgeHandler(fundgraph.New(appStore)).Get)
 	traceManager := tracer.NewManager(tracer.New(appStore), appStore, syncManager)
-	traceGraph := tracer.New(appStore)
 	traceHandler := httpapi.NewTraceHandler(traceManager)
 	e.GET("/api/v1/trace", traceHandler.Enqueue)
 	e.GET("/api/v1/trace-jobs/:id", traceHandler.Job)
-	e.GET("/api/v1/risk", httpapi.NewRiskHandler(traceGraph).Get)
+	e.GET("/api/v1/risk", httpapi.NewRiskHandler(traceManager).Get)
 	labelHandler := httpapi.NewLabelHandler(appStore)
 	e.POST("/api/v1/labels", labelHandler.Create)
 	e.GET("/api/v1/labels", labelHandler.List)

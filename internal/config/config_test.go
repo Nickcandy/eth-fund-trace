@@ -18,6 +18,7 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("SYNC_CONFIRMATIONS", "")
 	t.Setenv("SYNC_QUEUE_SIZE", "")
 	t.Setenv("HTTP_API_KEY", "")
+	t.Setenv("HTTP_AUTH_DISABLED", "")
 	t.Setenv("HTTP_TIMEOUT_SECONDS", "")
 	t.Setenv("HTTP_BODY_LIMIT", "")
 	t.Setenv("HTTP_REQUESTS_PER_SECOND", "")
@@ -45,13 +46,14 @@ func TestLoadEnvironment(t *testing.T) {
 	t.Setenv("SYNC_CONFIRMATIONS", "20")
 	t.Setenv("SYNC_QUEUE_SIZE", "50")
 	t.Setenv("HTTP_API_KEY", "api-secret")
+	t.Setenv("HTTP_AUTH_DISABLED", "true")
 	t.Setenv("HTTP_TIMEOUT_SECONDS", "12")
 	t.Setenv("HTTP_BODY_LIMIT", "2M")
 	t.Setenv("HTTP_REQUESTS_PER_SECOND", "8")
 	t.Setenv("HTTP_BURST", "3")
 
 	got := Load()
-	if got.HTTPAddr != ":9090" || got.HTTPAPIKey != "api-secret" || got.HTTPTimeoutSeconds != 12 || got.HTTPBodyLimit != "2M" || got.HTTPRequestsPerSecond != 8 || got.HTTPBurst != 3 || got.MongoURI != "mongodb://mongo:27017" || got.MongoDatabase != "test_db" || got.EtherscanAPIKey != "secret" || got.EtherscanBaseURL != "http://localhost:9999/api" || got.EtherscanPageSize != 25 || got.EtherscanMaxPages != 4 || got.EtherscanRequestsPerSecond != 7 || got.EtherscanBurst != 2 || got.EtherscanMaxRetries != 4 || got.EtherscanRetryBaseMS != 25 || got.SyncCacheTTLMinutes != 30 || got.SyncConfirmations != 20 || got.SyncQueueSize != 50 {
+	if got.HTTPAddr != ":9090" || got.HTTPAPIKey != "api-secret" || !got.HTTPAuthDisabled || got.HTTPTimeoutSeconds != 12 || got.HTTPBodyLimit != "2M" || got.HTTPRequestsPerSecond != 8 || got.HTTPBurst != 3 || got.MongoURI != "mongodb://mongo:27017" || got.MongoDatabase != "test_db" || got.EtherscanAPIKey != "secret" || got.EtherscanBaseURL != "http://localhost:9999/api" || got.EtherscanPageSize != 25 || got.EtherscanMaxPages != 4 || got.EtherscanRequestsPerSecond != 7 || got.EtherscanBurst != 2 || got.EtherscanMaxRetries != 4 || got.EtherscanRetryBaseMS != 25 || got.SyncCacheTTLMinutes != 30 || got.SyncConfirmations != 20 || got.SyncQueueSize != 50 {
 		t.Fatalf("unexpected environment config: %+v", got)
 	}
 }

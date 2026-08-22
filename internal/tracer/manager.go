@@ -141,7 +141,11 @@ func (m *Manager) process(ctx context.Context, id primitive.ObjectID) {
 				m.fail(ctx, &job, errors.New("failed to persist trace job"))
 				return
 			}
-			syncJob, syncErr := m.syncJobs.Enqueue(ctx, syncer.Request{Chain: job.Chain, Address: unsynced.Address, NeighborLimit: 0})
+			dependencyChain := unsynced.Chain
+			if dependencyChain == "" {
+				dependencyChain = job.Chain
+			}
+			syncJob, syncErr := m.syncJobs.Enqueue(ctx, syncer.Request{Chain: dependencyChain, Address: unsynced.Address, NeighborLimit: 0})
 			if syncErr != nil {
 				traceErr = syncErr
 				break

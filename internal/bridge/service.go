@@ -19,6 +19,7 @@ var transactionHash = regexp.MustCompile(`^0x[0-9a-fA-F]{64}$`)
 type Repository interface {
 	UpsertCrossChainLink(context.Context, store.CrossChainLink) (store.CrossChainLink, error)
 	ListCrossChainLinks(context.Context, string, string, int64) ([]store.CrossChainLink, error)
+	HasTransferEvidence(context.Context, string, string, int64, string, string, string) (bool, error)
 }
 
 type CreateRequest struct {
@@ -31,8 +32,10 @@ type CreateRequest struct {
 	TargetLogIndex int64    `json:"targetLogIndex"`
 	TargetAddress  string   `json:"targetAddress"`
 	BridgeAddress  string   `json:"bridgeAddress"`
-	Asset          string   `json:"asset"`
-	Amount         string   `json:"amount"`
+	SourceAsset    string   `json:"sourceAsset"`
+	SourceAmount   string   `json:"sourceAmount"`
+	TargetAsset    string   `json:"targetAsset"`
+	TargetAmount   string   `json:"targetAmount"`
 	Evidence       []string `json:"evidence"`
 }
 
@@ -49,18 +52,38 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (store.Cros
 	sourceAddress, sourceAddressErr := ethaddr.Normalize(request.SourceAddress)
 	targetAddress, targetAddressErr := ethaddr.Normalize(request.TargetAddress)
 	bridgeAddress, bridgeAddressErr := ethaddr.Normalize(request.BridgeAddress)
-	amount, amountOK := new(big.Int).SetString(request.Amount, 10)
-	asset := request.Asset
-	if strings.EqualFold(asset, "ETH") {
-		asset = "ETH"
-	} else {
-		asset, _ = ethaddr.Normalize(asset)
-	}
-	if sourceErr != nil || targetErr != nil || source.Name == target.Name || sourceAddressErr != nil || targetAddressErr != nil || bridgeAddressErr != nil || !transactionHash.MatchString(request.SourceTxHash) || !transactionHash.MatchString(request.TargetTxHash) || request.SourceLogIndex < 0 || request.TargetLogIndex < 0 || len(request.Evidence) == 0 || !amountOK || amount.Sign() < 0 || asset == "" {
+	sourceAsset, sourceAmount, sourceFactOK := normalizeFact(request.SourceAsset, request.SourceAmount)
+	targetAsset, targetAmount, targetFactOK := normalizeFact(request.TargetAsset, request.TargetAmount)
+	if sourceErr != nil || targetErr != nil || source.Name == target.Name || sourceAddressErr != nil || targetAddressErr != nil || bridgeAddressErr != nil || !transactionHash.MatchString(request.SourceTxHash) || !transactionHash.MatchString(request.TargetTxHash) || request.SourceLogIndex < 0 || request.TargetLogIndex < 0 || len(request.Evidence) == 0 || !sourceFactOK || !targetFactOK {
 		return store.CrossChainLink{}, ErrInvalidRequest
 	}
-	link := store.CrossChainLink{SourceChain: source.Name, SourceChainID: source.ID, SourceTxHash: strings.ToLower(request.SourceTxHash), SourceLogIndex: request.SourceLogIndex, SourceAddress: sourceAddress, TargetChain: target.Name, TargetChainID: target.ID, TargetTxHash: strings.ToLower(request.TargetTxHash), TargetLogIndex: request.TargetLogIndex, TargetAddress: targetAddress, BridgeAddress: bridgeAddress, Asset: asset, Amount: request.Amount, Evidence: request.Evidence, Status: "confirmed", ObservedAt: s.clock().UTC()}
+	sourceExists, err := s.repository.HasTransferEvidence(ctx, source.Name, strings.ToLower(request.SourceTxHash), request.SourceLogIndex, sourceAddress, sourceAsset, sourceAmount)
+	if err != nil {
+		return store.CrossChainLink{}, err
+	}
+	targetExists, err := s.repository.HasTransferEvidence(ctx, target.Name, strings.ToLower(request.TargetTxHash), request.TargetLogIndex, targetAddress, targetAsset, targetAmount)
+	if err != nil {
+		return store.CrossChainLink{}, err
+	}
+	if !sourceExists || !targetExists {
+		return store.CrossChainLink{}, ErrEvidenceNotFound
+	}
+	link := store.CrossChainLink{SourceChain: source.Name, SourceChainID: source.ID, SourceTxHash: strings.ToLower(request.SourceTxHash), SourceLogIndex: request.SourceLogIndex, SourceAddress: sourceAddress, TargetChain: target.Name, TargetChainID: target.ID, TargetTxHash: strings.ToLower(request.TargetTxHash), TargetLogIndex: request.TargetLogIndex, TargetAddress: targetAddress, BridgeAddress: bridgeAddress, SourceAsset: sourceAsset, SourceAmount: sourceAmount, TargetAsset: targetAsset, TargetAmount: targetAmount, Evidence: request.Evidence, Status: "confirmed", ObservedAt: s.clock().UTC()}
 	return s.repository.UpsertCrossChainLink(ctx, link)
+}
+
+var ErrEvidenceNotFound = errors.New("cross-chain transfer evidence not found")
+
+func normalizeFact(asset, amount string) (string, string, bool) {
+	value, ok := new(big.Int).SetString(amount, 10)
+	if !ok || value.Sign() < 0 {
+		return "", "", false
+	}
+	if strings.EqualFold(asset, "ETH") {
+		return "ETH", amount, true
+	}
+	normalized, err := ethaddr.Normalize(asset)
+	return normalized, amount, err == nil
 }
 
 func (s *Service) List(ctx context.Context, chainName, address string, limit int64) ([]store.CrossChainLink, error) {

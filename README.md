@@ -23,7 +23,7 @@
 - `POST/GET /api/v1/bridge-links`：保存和查询有双链交易证据的确认式桥接关系；
 - 请求 ID、超时、Body 上限、可选 Bearer 鉴权、IP 令牌桶、恢复和结构化访问日志。
 
-Ethereum 和 Base 的 Etherscan 请求在单进程内共享默认 5 QPS、突发 1 的令牌桶。同步缓存默认 15 分钟，安全链头为最新块减 12 个确认。追踪和风险使用 `trace-v1`、`propagation-v1` 和 `risk-v1`。
+Ethereum 和 Base 的 Etherscan 请求在单进程内共享默认 5 QPS、突发 1 的令牌桶。同步缓存默认 15 分钟，安全链头为最新块减 12 个确认。跨链追踪使用 `trace-v2`，同链风险规则使用 `propagation-v1`、`risk-v1`。
 
 ## 第一阶段核心能力
 

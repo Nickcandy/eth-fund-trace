@@ -339,10 +339,10 @@ func (m *Manager) fetchRange(ctx context.Context, call func(context.Context, str
 		if transfers[index].AssetType == "erc20" {
 			transfers[index].Asset = strings.ToLower(transfers[index].Asset)
 		}
-		if _, err := ethaddr.Normalize(transfers[index].From); err == nil {
+		if _, err := ethaddr.Normalize(transfers[index].From); err == nil && transfers[index].From != zeroAddress {
 			discovered[transfers[index].From] = struct{}{}
 		}
-		if _, err := ethaddr.Normalize(transfers[index].To); err == nil {
+		if _, err := ethaddr.Normalize(transfers[index].To); err == nil && transfers[index].To != zeroAddress {
 			discovered[transfers[index].To] = struct{}{}
 		}
 	}
@@ -354,6 +354,8 @@ func (m *Manager) fetchRange(ctx context.Context, call func(context.Context, str
 	}
 	return int64(len(transfers)), nil
 }
+
+const zeroAddress = "0x0000000000000000000000000000000000000000"
 
 func (m *Manager) mergeResult(job *store.SyncJob, result addressResult) {
 	if job.ActionCounts == nil {

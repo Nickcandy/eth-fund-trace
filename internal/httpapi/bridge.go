@@ -30,6 +30,9 @@ func (h *BridgeHandler) Create(c echo.Context) error {
 	if errors.Is(err, bridge.ErrInvalidRequest) {
 		return writeError(c, 400, "invalid_request", err.Error(), false)
 	}
+	if errors.Is(err, bridge.ErrEvidenceNotFound) {
+		return writeError(c, http.StatusConflict, "bridge_evidence_not_found", err.Error(), false)
+	}
 	if err != nil {
 		return writeError(c, 500, "internal_error", "internal server error", true)
 	}

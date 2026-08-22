@@ -42,7 +42,7 @@ components:
         evidence: {type: array, items: {type: string}}
     BridgeLink:
       type: object
-      required: [sourceChain, sourceTxHash, sourceAddress, targetChain, targetTxHash, targetAddress, bridgeAddress, evidence]
+      required: [sourceChain, sourceTxHash, sourceAddress, sourceAsset, sourceAmount, targetChain, targetTxHash, targetAddress, targetAsset, targetAmount, bridgeAddress, evidence]
       properties:
         sourceChain: {type: string, enum: [ethereum, base]}
         sourceTxHash: {type: string}
@@ -53,8 +53,10 @@ components:
         targetLogIndex: {type: integer, minimum: 0}
         targetAddress: {type: string}
         bridgeAddress: {type: string}
-        asset: {type: string}
-        amount: {type: string}
+        sourceAsset: {type: string}
+        sourceAmount: {type: string}
+        targetAsset: {type: string}
+        targetAmount: {type: string}
         evidence: {type: array, minItems: 1, items: {type: string}}
   responses:
     BadRequest:

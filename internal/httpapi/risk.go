@@ -2,17 +2,18 @@ package httpapi
 
 import (
 	"context"
-	"errors"
 	"net/http"
 
+	"github.com/Nickcandy/eth-fund-trace/internal/store"
 	"github.com/Nickcandy/eth-fund-trace/internal/tracer"
 	"github.com/labstack/echo/v4"
 )
 
-type RiskProvider interface {
-	Trace(context.Context, tracer.Query) (tracer.Result, error)
-}
 type RiskHandler struct{ provider RiskProvider }
+
+type RiskProvider interface {
+	Enqueue(context.Context, tracer.Request) (store.TraceJob, error)
+}
 
 func NewRiskHandler(provider RiskProvider) *RiskHandler { return &RiskHandler{provider: provider} }
 
@@ -29,12 +30,9 @@ func (h *RiskHandler) Get(c echo.Context) error {
 	if err := tracer.ValidateQuery(query); err != nil {
 		return writeError(c, 400, "invalid_request", err.Error(), false)
 	}
-	result, err := h.provider.Trace(c.Request().Context(), query)
-	switch {
-	case errors.Is(err, tracer.ErrAddressNotSynced):
-		return writeError(c, http.StatusConflict, "address_not_synced", err.Error(), false)
-	case err != nil:
+	job, err := h.provider.Enqueue(c.Request().Context(), tracer.Request{Query: query})
+	if err != nil {
 		return writeError(c, 500, "internal_error", "internal server error", true)
 	}
-	return c.JSON(http.StatusOK, result.Risk)
+	return c.JSON(http.StatusAccepted, map[string]any{"traceJobId": job.ID.Hex(), "status": job.Status})
 }

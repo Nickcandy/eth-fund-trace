@@ -13,6 +13,7 @@ type fakeRepository struct {
 	transfers []store.Transfer
 	labels    map[string][]store.Label
 	calls     []store.TransferQuery
+	bridges   map[string][]store.CrossChainLink
 }
 
 func (r *fakeRepository) FindAddress(_ context.Context, _, address string) (store.Address, bool, error) {
@@ -25,6 +26,9 @@ func (r *fakeRepository) QueryTransfers(_ context.Context, q store.TransferQuery
 }
 func (r *fakeRepository) ListLabels(_ context.Context, _, address string) ([]store.Label, error) {
 	return r.labels[address], nil
+}
+func (r *fakeRepository) ListCrossChainLinks(_ context.Context, chain, address string, _ int64) ([]store.CrossChainLink, error) {
+	return r.bridges[chain+":"+address], nil
 }
 
 func TestTraceBatchesFrontierAndPrunesTerminal(t *testing.T) {
@@ -49,5 +53,30 @@ func TestTraceRejectsInvalidAndUnsyncedQueries(t *testing.T) {
 	}
 	if _, err := New(r).Trace(context.Background(), Query{Address: seed}); !errors.Is(err, ErrAddressNotSynced) {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestTraceExpandsConfirmedBridgeIntoBase(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	target := "0x0000000000000000000000000000000000000002"
+	next := "0x0000000000000000000000000000000000000003"
+	link := store.CrossChainLink{SourceChain: "ethereum", SourceAddress: seed, SourceTxHash: "0xsource", TargetChain: "base", TargetAddress: target, TargetTxHash: "0xtarget", Status: "confirmed"}
+	r := &fakeRepository{addresses: map[string]store.Address{seed: {SyncStatus: "synced", LatestSyncedBlock: 100}, target: {SyncStatus: "synced", LatestSyncedBlock: 200}, next: {SyncStatus: "synced", LatestSyncedBlock: 200}}, transfers: []store.Transfer{{Chain: "base", TxHash: "0xbase", From: target, To: next, Asset: "ETH", Amount: "1"}}, labels: map[string][]store.Label{}, bridges: map[string][]store.CrossChainLink{"ethereum:" + seed: {link}}}
+	result, err := New(r).Trace(context.Background(), Query{Chain: "ethereum", Address: seed, Direction: "out", Depth: 2, TopN: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.RuleVersion != "trace-v2" || len(result.BridgeEdges) != 1 || len(result.Edges) != 1 || result.Edges[0].Transfer.Chain != "base" || result.DataThroughBlocks["base"] != 200 {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestTraceRetainsMintEdgeWithoutExpandingZeroAddress(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	zero := "0x0000000000000000000000000000000000000000"
+	r := &fakeRepository{addresses: map[string]store.Address{seed: {SyncStatus: "synced"}}, transfers: []store.Transfer{{Chain: "ethereum", TxHash: "0xmint", From: zero, To: seed, AssetType: "erc20", Asset: "0x0000000000000000000000000000000000000010", TokenValue: "1"}}, labels: map[string][]store.Label{}}
+	result, err := New(r).Trace(context.Background(), Query{Address: seed, Direction: "in", Depth: 2, TopN: 10})
+	if err != nil || len(result.Edges) != 1 || len(result.Nodes) != 2 || !result.Nodes[1].Terminal {
+		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }

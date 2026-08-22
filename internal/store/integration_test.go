@@ -288,12 +288,12 @@ func TestM9CrossChainLinksAreIdempotentAndChainScoped(t *testing.T) {
 	if _, err := db.Collection(AddressesCollection).InsertMany(ctx, []any{Address{Chain: "ethereum", ChainID: 1, Address: sharedAddress}, Address{Chain: "base", ChainID: 8453, Address: sharedAddress}}); err != nil {
 		t.Fatalf("same address must be isolated by chain: %v", err)
 	}
-	link := CrossChainLink{SourceChain: "ethereum", SourceChainID: 1, SourceTxHash: "0xsource", SourceLogIndex: 1, SourceAddress: "0x0000000000000000000000000000000000000001", TargetChain: "base", TargetChainID: 8453, TargetTxHash: "0xtarget", TargetLogIndex: 2, TargetAddress: "0x0000000000000000000000000000000000000002", BridgeAddress: "0x0000000000000000000000000000000000000003", Status: "confirmed", Evidence: []string{"provider:1"}, ObservedAt: time.Now()}
+	link := CrossChainLink{SourceChain: "ethereum", SourceChainID: 1, SourceTxHash: "0xsource", SourceLogIndex: 1, SourceAddress: "0x0000000000000000000000000000000000000001", SourceAsset: "ETH", SourceAmount: "2", TargetChain: "base", TargetChainID: 8453, TargetTxHash: "0xtarget", TargetLogIndex: 2, TargetAddress: "0x0000000000000000000000000000000000000002", TargetAsset: "ETH", TargetAmount: "2", BridgeAddress: "0x0000000000000000000000000000000000000003", Status: "confirmed", Evidence: []string{"provider:1"}, ObservedAt: time.Now()}
 	first, err := s.UpsertCrossChainLink(ctx, link)
 	if err != nil {
 		t.Fatal(err)
 	}
-	link.Amount = "2"
+	link.TargetAmount = "3"
 	second, err := s.UpsertCrossChainLink(ctx, link)
 	if err != nil {
 		t.Fatal(err)
@@ -302,7 +302,7 @@ func TestM9CrossChainLinksAreIdempotentAndChainScoped(t *testing.T) {
 		t.Fatalf("ids differ: %s %s", first.ID, second.ID)
 	}
 	source, err := s.ListCrossChainLinks(ctx, "ethereum", link.SourceAddress, 10)
-	if err != nil || len(source) != 1 || source[0].Amount != "2" {
+	if err != nil || len(source) != 1 || source[0].TargetAmount != "3" {
 		t.Fatalf("source=%+v err=%v", source, err)
 	}
 	wrongChain, err := s.ListCrossChainLinks(ctx, "base", link.SourceAddress, 10)

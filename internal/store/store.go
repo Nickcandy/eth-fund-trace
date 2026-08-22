@@ -522,3 +522,13 @@ func (s *Store) ListCrossChainLinks(ctx context.Context, chain, address string, 
 	var result []CrossChainLink
 	return result, cursor.All(ctx, &result)
 }
+
+func (s *Store) HasTransferEvidence(ctx context.Context, chain, txHash string, logIndex int64, address, asset, amount string) (bool, error) {
+	amountField := "tokenValue"
+	if asset == "ETH" {
+		amountField = "amount"
+	}
+	filter := bson.D{{Key: "chain", Value: chain}, {Key: "txHash", Value: txHash}, {Key: "logIndex", Value: logIndex}, {Key: "asset", Value: asset}, {Key: amountField, Value: amount}, {Key: "$or", Value: bson.A{bson.D{{Key: "from", Value: address}}, bson.D{{Key: "to", Value: address}}}}}
+	count, err := s.db.Collection(TransfersCollection).CountDocuments(ctx, filter, options.Count().SetLimit(1))
+	return count > 0, err
+}

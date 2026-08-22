@@ -2,16 +2,15 @@ package httpapi
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/Nickcandy/eth-fund-trace/internal/risk"
 	"github.com/Nickcandy/eth-fund-trace/internal/store"
 	"github.com/Nickcandy/eth-fund-trace/internal/tracer"
 	"github.com/labstack/echo/v4"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type addressProviderStub struct {
@@ -40,30 +39,23 @@ func TestAddressHandlerReturnsMetadataAndLabels(t *testing.T) {
 }
 
 type riskProviderStub struct {
-	result tracer.Result
-	err    error
+	job store.TraceJob
+	err error
 }
 
-func (s riskProviderStub) Trace(context.Context, tracer.Query) (tracer.Result, error) {
-	return s.result, s.err
+func (s riskProviderStub) Enqueue(context.Context, tracer.Request) (store.TraceJob, error) {
+	return s.job, s.err
 }
 
-func TestRiskHandlerReturnsVersionedResultAndUnsyncedConflict(t *testing.T) {
+func TestRiskHandlerCreatesAsynchronousTraceJob(t *testing.T) {
 	seed := "0x0000000000000000000000000000000000000001"
+	id := primitive.NewObjectID()
 	e := echo.New()
-	e.GET("/api/v1/risk", NewRiskHandler(riskProviderStub{result: tracer.Result{Risk: risk.Result{Score: 70, Level: "known_high", RuleVersion: "risk-v1"}}}).Get)
+	e.GET("/api/v1/risk", NewRiskHandler(riskProviderStub{job: store.TraceJob{ID: id, Status: "queued"}}).Get)
 	res := httptest.NewRecorder()
 	e.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/api/v1/risk?address="+seed, nil))
-	if res.Code != 200 || !containsAll(res.Body.String(), `"score":70`, `"risk-v1"`) {
+	if res.Code != http.StatusAccepted || !containsAll(res.Body.String(), id.Hex(), `"status":"queued"`) {
 		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
-	}
-
-	e2 := echo.New()
-	e2.GET("/api/v1/risk", NewRiskHandler(riskProviderStub{err: tracer.AddressNotSyncedError{Address: seed}}).Get)
-	conflict := httptest.NewRecorder()
-	e2.ServeHTTP(conflict, httptest.NewRequest(http.MethodGet, "/api/v1/risk?address="+seed, nil))
-	if conflict.Code != 409 || !errors.Is(tracer.AddressNotSyncedError{Address: seed}, tracer.ErrAddressNotSynced) {
-		t.Fatalf("status=%d body=%s", conflict.Code, conflict.Body.String())
 	}
 }
 

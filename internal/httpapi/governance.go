@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 
 type GovernanceConfig struct {
 	APIKey            string
+	DisableAuth       bool
 	Timeout           time.Duration
 	BodyLimit         string
 	RequestsPerSecond float64
@@ -46,6 +48,19 @@ func UseGovernance(e *echo.Echo, config GovernanceConfig) {
 	e.Use(ipRateLimit(config.RequestsPerSecond, config.Burst))
 	if config.APIKey != "" {
 		e.Use(bearerAuth(config.APIKey))
+	} else if !config.DisableAuth {
+		e.Use(requireConfiguredAuth())
+	}
+}
+
+func requireConfiguredAuth() echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			if c.Path() == "/healthz" {
+				return next(c)
+			}
+			return writeError(c, http.StatusServiceUnavailable, "authentication_not_configured", "service authentication is not configured", false)
+		}
 	}
 }
 
@@ -120,7 +135,10 @@ func ipRateLimit(requestsPerSecond float64, burst int) echo.MiddlewareFunc {
 	lastCleanup := time.Now()
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			key := c.RealIP()
+			key := c.Request().RemoteAddr
+			if host, _, err := net.SplitHostPort(key); err == nil {
+				key = host
+			}
 			mu.Lock()
 			now := time.Now()
 			if now.Sub(lastCleanup) >= time.Minute {

@@ -185,8 +185,10 @@ type CrossChainLink struct {
 	TargetLogIndex int64              `bson:"targetLogIndex" json:"targetLogIndex"`
 	TargetAddress  string             `bson:"targetAddress" json:"targetAddress"`
 	BridgeAddress  string             `bson:"bridgeAddress" json:"bridgeAddress"`
-	Asset          string             `bson:"asset" json:"asset"`
-	Amount         string             `bson:"amount" json:"amount"`
+	SourceAsset    string             `bson:"sourceAsset" json:"sourceAsset"`
+	SourceAmount   string             `bson:"sourceAmount" json:"sourceAmount"`
+	TargetAsset    string             `bson:"targetAsset" json:"targetAsset"`
+	TargetAmount   string             `bson:"targetAmount" json:"targetAmount"`
 	Status         string             `bson:"status" json:"status"`
 	Evidence       []string           `bson:"evidence" json:"evidence"`
 	ObservedAt     time.Time          `bson:"observedAt" json:"observedAt"`

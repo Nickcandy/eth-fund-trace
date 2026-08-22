@@ -102,7 +102,10 @@ func normalizeOne(raw rawTransfer, action string, missingLogIndex int64) (store.
 		metadataComplete := raw.TokenDecimal != ""
 		if metadataComplete {
 			decimals, err = parseInt(raw.TokenDecimal, "tokenDecimal")
-			if err != nil {
+			if err != nil || decimals > 255 {
+				if err == nil {
+					err = fmt.Errorf("%w: invalid tokenDecimal", ErrMalformedResponse)
+				}
 				return store.Transfer{}, err
 			}
 		}
