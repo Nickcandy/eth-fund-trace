@@ -48,7 +48,33 @@ type Label struct {
 	Source     string    `bson:"source"`
 	Note       string    `bson:"note,omitempty"`
 	RiskLevel  string    `bson:"riskLevel,omitempty"`
+	Confidence float64   `bson:"confidence"`
+	Evidence   []string  `bson:"evidence,omitempty"`
 	ObservedAt time.Time `bson:"observedAt"`
+}
+
+type TraceJob struct {
+	ID               primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Chain            string             `bson:"chain" json:"chain"`
+	SeedAddress      string             `bson:"seedAddress" json:"seedAddress"`
+	Direction        string             `bson:"direction" json:"direction"`
+	Depth            int                `bson:"depth" json:"depth"`
+	TopN             int                `bson:"topN" json:"topN"`
+	Asset            string             `bson:"asset" json:"asset"`
+	Status           string             `bson:"status" json:"status"`
+	CreatedAt        time.Time          `bson:"createdAt" json:"createdAt"`
+	StartedAt        time.Time          `bson:"startedAt,omitempty" json:"startedAt,omitempty"`
+	FinishedAt       time.Time          `bson:"finishedAt,omitempty" json:"finishedAt,omitempty"`
+	CurrentDepth     int                `bson:"currentDepth" json:"currentDepth"`
+	VisitedNodes     int                `bson:"visitedNodes" json:"visitedNodes"`
+	EdgeCount        int                `bson:"edgeCount" json:"edgeCount"`
+	SyncJobIDs       []string           `bson:"syncJobIds,omitempty" json:"syncJobIds,omitempty"`
+	Result           any                `bson:"result,omitempty" json:"result,omitempty"`
+	DataThroughBlock int64              `bson:"dataThroughBlock" json:"dataThroughBlock"`
+	RuleVersion      string             `bson:"ruleVersion" json:"ruleVersion"`
+	ErrorCode        string             `bson:"errorCode,omitempty" json:"errorCode,omitempty"`
+	Error            string             `bson:"error,omitempty" json:"error,omitempty"`
+	Retryable        bool               `bson:"retryable" json:"retryable"`
 }
 
 type SyncJob struct {

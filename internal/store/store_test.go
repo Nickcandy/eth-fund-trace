@@ -32,9 +32,10 @@ func TestModelBSONFields(t *testing.T) {
 	}{
 		{name: "address", model: Address{}, required: []string{"chain", "chainId", "address", "syncStatus"}},
 		{name: "transfer", model: Transfer{}, required: []string{"chain", "chainId", "txHash", "from", "to", "assetType", "asset", "source", "observedAt"}},
-		{name: "label", model: Label{}, required: []string{"chain", "chainId", "address", "type", "source", "observedAt"}},
+		{name: "label", model: Label{}, required: []string{"chain", "chainId", "address", "type", "source", "confidence", "observedAt"}},
 		{name: "sync job", model: SyncJob{}, required: []string{"chain", "chainId", "address", "status", "createdAt", "fetched"}},
 		{name: "address profile", model: AddressProfile{}, required: []string{"chain", "chainId", "address", "ruleVersion", "dataThroughBlock", "features", "score", "classification", "suspectedHotWallet", "computedAt"}},
+		{name: "trace job", model: TraceJob{}, required: []string{"chain", "seedAddress", "direction", "depth", "topN", "status", "ruleVersion"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -56,7 +57,7 @@ func TestModelBSONFields(t *testing.T) {
 }
 
 func TestCollectionNames(t *testing.T) {
-	if AddressesCollection != "addresses" || TransfersCollection != "transfers" || LabelsCollection != "labels" || SyncJobsCollection != "sync_jobs" || ProfilesCollection != "address_profiles" {
+	if AddressesCollection != "addresses" || TransfersCollection != "transfers" || LabelsCollection != "labels" || SyncJobsCollection != "sync_jobs" || ProfilesCollection != "address_profiles" || TraceJobsCollection != "trace_jobs" {
 		t.Fatal("unexpected collection name")
 	}
 }

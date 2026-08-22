@@ -224,6 +224,32 @@ func TestM5TransferQueryFiltersAndPaginates(t *testing.T) {
 	}
 }
 
+func TestM6M7TraceJobsAndLabels(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(os.Getenv("MONGO_URI")))
+	if err != nil { t.Fatal(err) }
+	defer client.Disconnect(context.Background())
+	db := client.Database("eth_fund_trace_m6_m7_test")
+	if err := db.Drop(ctx); err != nil { t.Fatal(err) }
+	s := New(db)
+	if err := s.Initialize(ctx); err != nil { t.Fatal(err) }
+
+	address := "0x0000000000000000000000000000000000000001"
+	label := Label{Chain: "ethereum", ChainID: 1, Address: address, Type: "hacker", RiskLevel: "high", Confidence: 0.8, Source: "manual", Evidence: []string{"case-1"}, ObservedAt: time.Now()}
+	if err := s.UpsertLabel(ctx, label); err != nil { t.Fatal(err) }
+	label.Confidence = 1
+	if err := s.UpsertLabel(ctx, label); err != nil { t.Fatal(err) }
+	labels, err := s.ListLabels(ctx, "ethereum", address)
+	if err != nil || len(labels) != 1 || labels[0].Confidence != 1 { t.Fatalf("labels=%+v err=%v", labels, err) }
+
+	job := TraceJob{Chain: "ethereum", SeedAddress: address, Direction: "both", Depth: 3, TopN: 10, Status: "running", RuleVersion: "trace-v1", CreatedAt: time.Now()}
+	if err := s.CreateTraceJob(ctx, &job); err != nil { t.Fatal(err) }
+	if err := s.FailInterruptedTraceJobs(ctx, time.Now()); err != nil { t.Fatal(err) }
+	stored, err := s.GetTraceJob(ctx, job.ID)
+	if err != nil || stored.Status != "failed" || stored.ErrorCode != "interrupted" { t.Fatalf("job=%+v err=%v", stored, err) }
+}
+
 func assertDuplicateKey(t *testing.T, ctx context.Context, collection *mongo.Collection, document any) {
 	t.Helper()
 	if _, err := collection.InsertOne(ctx, document); err != nil {

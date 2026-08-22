@@ -17,6 +17,7 @@ const (
 	LabelsCollection    = "labels"
 	SyncJobsCollection  = "sync_jobs"
 	ProfilesCollection  = "address_profiles"
+	TraceJobsCollection = "trace_jobs"
 )
 
 type Store struct {
@@ -28,7 +29,7 @@ func New(db *mongo.Database) *Store {
 }
 
 func (s *Store) Initialize(ctx context.Context) error {
-	for _, name := range []string{AddressesCollection, TransfersCollection, LabelsCollection, SyncJobsCollection, ProfilesCollection} {
+	for _, name := range []string{AddressesCollection, TransfersCollection, LabelsCollection, SyncJobsCollection, ProfilesCollection, TraceJobsCollection} {
 		if err := s.ensureCollection(ctx, name); err != nil {
 			return err
 		}
@@ -59,6 +60,7 @@ func indexModels() map[string][]mongo.IndexModel {
 		},
 		LabelsCollection: {
 			{Keys: bson.D{{Key: "chain", Value: 1}, {Key: "address", Value: 1}, {Key: "type", Value: 1}, {Key: "source", Value: 1}}, Options: options.Index().SetUnique(true).SetName("uq_labels_identity")},
+			{Keys: bson.D{{Key: "chain", Value: 1}, {Key: "address", Value: 1}, {Key: "observedAt", Value: -1}}, Options: options.Index().SetName("idx_labels_address_observed")},
 		},
 		SyncJobsCollection: {
 			{Keys: bson.D{{Key: "status", Value: 1}, {Key: "createdAt", Value: 1}}, Options: options.Index().SetName("idx_sync_jobs_status_created")},
@@ -67,6 +69,10 @@ func indexModels() map[string][]mongo.IndexModel {
 		ProfilesCollection: {
 			{Keys: bson.D{{Key: "chain", Value: 1}, {Key: "address", Value: 1}, {Key: "ruleVersion", Value: 1}, {Key: "dataThroughBlock", Value: 1}}, Options: options.Index().SetUnique(true).SetName("uq_profiles_version_block")},
 			{Keys: bson.D{{Key: "chain", Value: 1}, {Key: "address", Value: 1}, {Key: "computedAt", Value: -1}}, Options: options.Index().SetName("idx_profiles_address_computed")},
+		},
+		TraceJobsCollection: {
+			{Keys: bson.D{{Key: "status", Value: 1}, {Key: "createdAt", Value: 1}}, Options: options.Index().SetName("idx_trace_jobs_status_created")},
+			{Keys: bson.D{{Key: "chain", Value: 1}, {Key: "seedAddress", Value: 1}, {Key: "createdAt", Value: -1}}, Options: options.Index().SetName("idx_trace_jobs_seed_created")},
 		},
 	}
 }
@@ -238,6 +244,46 @@ func (s *Store) SaveAddressProfile(ctx context.Context, profile AddressProfile) 
 		{Key: "ruleVersion", Value: profile.RuleVersion}, {Key: "dataThroughBlock", Value: profile.DataThroughBlock},
 	}
 	_, err := s.db.Collection(ProfilesCollection).ReplaceOne(ctx, filter, profile, options.Replace().SetUpsert(true))
+	return err
+}
+
+func (s *Store) UpsertLabel(ctx context.Context, label Label) error {
+	filter := bson.D{{Key: "chain", Value: label.Chain}, {Key: "address", Value: label.Address}, {Key: "type", Value: label.Type}, {Key: "source", Value: label.Source}}
+	_, err := s.db.Collection(LabelsCollection).ReplaceOne(ctx, filter, label, options.Replace().SetUpsert(true))
+	return err
+}
+
+func (s *Store) ListLabels(ctx context.Context, chain, address string) ([]Label, error) {
+	cursor, err := s.db.Collection(LabelsCollection).Find(ctx, bson.D{{Key: "chain", Value: chain}, {Key: "address", Value: address}}, options.Find().SetSort(bson.D{{Key: "observedAt", Value: -1}}))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = cursor.Close(ctx) }()
+	var result []Label
+	return result, cursor.All(ctx, &result)
+}
+
+func (s *Store) CreateTraceJob(ctx context.Context, job *TraceJob) error {
+	if job.ID.IsZero() {
+		job.ID = primitive.NewObjectID()
+	}
+	_, err := s.db.Collection(TraceJobsCollection).InsertOne(ctx, job)
+	return err
+}
+
+func (s *Store) GetTraceJob(ctx context.Context, id primitive.ObjectID) (TraceJob, error) {
+	var job TraceJob
+	err := s.db.Collection(TraceJobsCollection).FindOne(ctx, bson.D{{Key: "_id", Value: id}}).Decode(&job)
+	return job, err
+}
+
+func (s *Store) SaveTraceJob(ctx context.Context, job TraceJob) error {
+	_, err := s.db.Collection(TraceJobsCollection).ReplaceOne(ctx, bson.D{{Key: "_id", Value: job.ID}}, job)
+	return err
+}
+
+func (s *Store) FailInterruptedTraceJobs(ctx context.Context, now time.Time) error {
+	_, err := s.db.Collection(TraceJobsCollection).UpdateMany(ctx, bson.D{{Key: "status", Value: bson.D{{Key: "$in", Value: bson.A{"queued", "waiting_sync", "running"}}}}}, bson.D{{Key: "$set", Value: bson.D{{Key: "status", Value: "failed"}, {Key: "finishedAt", Value: now}, {Key: "errorCode", Value: "interrupted"}, {Key: "error", Value: "service restarted before trace completed"}, {Key: "retryable", Value: true}}}})
 	return err
 }
 

@@ -17,6 +17,7 @@ import (
 	"github.com/Nickcandy/eth-fund-trace/internal/profile"
 	"github.com/Nickcandy/eth-fund-trace/internal/store"
 	"github.com/Nickcandy/eth-fund-trace/internal/syncer"
+	"github.com/Nickcandy/eth-fund-trace/internal/tracer"
 	"github.com/labstack/echo/v4"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -69,12 +70,21 @@ func run(parent context.Context) error {
 	e.GET("/api/v1/sync-jobs/:id", syncHandler.Job)
 	e.GET("/api/v1/addresses/:address/profile", httpapi.NewProfileHandler(addressProfiler).Get)
 	e.GET("/api/v1/edges", httpapi.NewEdgeHandler(fundgraph.New(appStore)).Get)
+	traceManager := tracer.NewManager(tracer.New(appStore), appStore, syncManager)
+	traceHandler := httpapi.NewTraceHandler(traceManager)
+	e.GET("/api/v1/trace", traceHandler.Enqueue)
+	e.GET("/api/v1/trace-jobs/:id", traceHandler.Job)
 
 	serverCtx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go func() {
 		if err := syncManager.Run(serverCtx); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("sync manager stopped", "error", err)
+		}
+	}()
+	go func() {
+		if err := traceManager.Run(serverCtx); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("trace manager stopped", "error", err)
 		}
 	}()
 	go func() {
