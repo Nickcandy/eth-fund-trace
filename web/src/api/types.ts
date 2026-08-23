@@ -118,8 +118,12 @@ export interface TraceAccepted { traceJobId: string; status: JobStatus }
 
 export interface SyncJob {
   jobId: string; chain: Chain; address: string; status: string; createdAt: string; startedAt?: string; finishedAt?: string;
-  safeHead: number; totalAddresses: number; completedAddresses: number; cachedAddresses: number; fetched: number;
+  safeHead: number; totalAddresses: number; completedAddresses: number; processedAddresses: number; cachedAddresses: number; fetched: number;
   actionCounts?: Record<string, number>; successfulNeighbors?: string[]; failedNeighbors?: Array<{ address: string; code: string; message: string; retryable: boolean }>;
+  progress?: {
+    currentAddress?: string; currentAction?: string; rangeStart?: number; rangeEnd?: number; currentPage?: number;
+    pagesFetched: number; recordsRead: number; recordsWritten: number; splitCount: number; updatedAt?: string;
+  };
   error?: string; errorCode?: string; retryable: boolean;
 }
 

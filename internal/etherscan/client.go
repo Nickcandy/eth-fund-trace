@@ -25,11 +25,41 @@ var (
 	ErrTransient         = errors.New("transient etherscan error")
 )
 
+type PageLimitError struct {
+	Action    string
+	MaxPages  int
+	LastBlock int64
+}
+
+func (e *PageLimitError) Error() string {
+	return fmt.Sprintf("%s: action=%s max_pages=%d last_block=%d", ErrPageLimit, e.Action, e.MaxPages, e.LastBlock)
+}
+
+func (e *PageLimitError) Unwrap() error { return ErrPageLimit }
+
 type Client interface {
 	ListTransactions(ctx context.Context, address string, startBlock, endBlock int64) ([]store.Transfer, error)
 	ListInternalTransactions(ctx context.Context, address string, startBlock, endBlock int64) ([]store.Transfer, error)
 	ListTokenTransfers(ctx context.Context, address string, startBlock, endBlock int64) ([]store.Transfer, error)
 	LatestBlock(ctx context.Context) (int64, error)
+}
+
+type PageProgress struct {
+	Action     string
+	Address    string
+	StartBlock int64
+	EndBlock   int64
+	Page       int
+	Items      int
+}
+
+type ProgressFunc func(PageProgress)
+
+// ProgressClient is optional so alternate chain sources can keep implementing Client.
+type ProgressClient interface {
+	ListTransactionsWithProgress(context.Context, string, int64, int64, ProgressFunc) ([]store.Transfer, error)
+	ListInternalTransactionsWithProgress(context.Context, string, int64, int64, ProgressFunc) ([]store.Transfer, error)
+	ListTokenTransfersWithProgress(context.Context, string, int64, int64, ProgressFunc) ([]store.Transfer, error)
 }
 
 type Config struct {
@@ -97,18 +127,30 @@ func NewClient(config Config) *APIClient {
 }
 
 func (c *APIClient) ListTransactions(ctx context.Context, address string, startBlock, endBlock int64) ([]store.Transfer, error) {
-	return c.list(ctx, address, startBlock, endBlock, "txlist")
+	return c.list(ctx, address, startBlock, endBlock, "txlist", nil)
 }
 
 func (c *APIClient) ListInternalTransactions(ctx context.Context, address string, startBlock, endBlock int64) ([]store.Transfer, error) {
-	return c.list(ctx, address, startBlock, endBlock, "txlistinternal")
+	return c.list(ctx, address, startBlock, endBlock, "txlistinternal", nil)
 }
 
 func (c *APIClient) ListTokenTransfers(ctx context.Context, address string, startBlock, endBlock int64) ([]store.Transfer, error) {
-	return c.list(ctx, address, startBlock, endBlock, "tokentx")
+	return c.list(ctx, address, startBlock, endBlock, "tokentx", nil)
 }
 
-func (c *APIClient) list(ctx context.Context, address string, startBlock, endBlock int64, action string) ([]store.Transfer, error) {
+func (c *APIClient) ListTransactionsWithProgress(ctx context.Context, address string, startBlock, endBlock int64, progress ProgressFunc) ([]store.Transfer, error) {
+	return c.list(ctx, address, startBlock, endBlock, "txlist", progress)
+}
+
+func (c *APIClient) ListInternalTransactionsWithProgress(ctx context.Context, address string, startBlock, endBlock int64, progress ProgressFunc) ([]store.Transfer, error) {
+	return c.list(ctx, address, startBlock, endBlock, "txlistinternal", progress)
+}
+
+func (c *APIClient) ListTokenTransfersWithProgress(ctx context.Context, address string, startBlock, endBlock int64, progress ProgressFunc) ([]store.Transfer, error) {
+	return c.list(ctx, address, startBlock, endBlock, "tokentx", progress)
+}
+
+func (c *APIClient) list(ctx context.Context, address string, startBlock, endBlock int64, action string, progress ProgressFunc) ([]store.Transfer, error) {
 	if address == "" {
 		return nil, fmt.Errorf("%w: empty address", ErrMalformedResponse)
 	}
@@ -117,6 +159,7 @@ func (c *APIClient) list(ctx context.Context, address string, startBlock, endBlo
 	}
 	var transfers []store.Transfer
 	tokenOccurrences := make(map[string]int64)
+	var lastRawBlock int64
 	for page := 1; page <= c.config.MaxPages; page++ {
 		items, err := c.fetchPage(ctx, address, startBlock, endBlock, page, action)
 		if err != nil {
@@ -131,11 +174,26 @@ func (c *APIClient) list(ctx context.Context, address string, startBlock, endBlo
 			pageTransfers[i].TransactionGroup = fmt.Sprintf("%d:%s", c.config.ChainID, strings.ToLower(pageTransfers[i].TxHash))
 		}
 		transfers = append(transfers, pageTransfers...)
+		if len(items) > 0 {
+			var boundary struct {
+				BlockNumber string `json:"blockNumber"`
+			}
+			if unmarshalErr := json.Unmarshal(items[len(items)-1], &boundary); unmarshalErr != nil {
+				return nil, fmt.Errorf("%w: invalid page boundary", ErrMalformedResponse)
+			}
+			lastRawBlock, err = parseInt(boundary.BlockNumber, "blockNumber")
+			if err != nil {
+				return nil, err
+			}
+		}
+		if progress != nil {
+			progress(PageProgress{Action: action, Address: address, StartBlock: startBlock, EndBlock: endBlock, Page: page, Items: len(items)})
+		}
 		if len(items) < c.config.PageSize {
 			return transfers, nil
 		}
 	}
-	return nil, fmt.Errorf("%w: action=%s max_pages=%d", ErrPageLimit, action, c.config.MaxPages)
+	return transfers, &PageLimitError{Action: action, MaxPages: c.config.MaxPages, LastBlock: lastRawBlock}
 }
 
 func (c *APIClient) LatestBlock(ctx context.Context) (int64, error) {

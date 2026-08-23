@@ -154,6 +154,8 @@ type addressResult struct {
 	actionCounts map[string]int64
 }
 
+type progressReporter func(func(*store.SyncProgress))
+
 func (m *Manager) process(ctx context.Context, queued queuedJob) {
 	defer m.release(queued.request)
 	source := m.sources[queued.request.Chain]
@@ -166,6 +168,11 @@ func (m *Manager) process(ctx context.Context, queued queuedJob) {
 	if err := m.repository.SaveSyncJob(ctx, job); err != nil {
 		slog.Error("failed to mark sync job running", "job_id", job.ID.Hex(), "error", err)
 		return
+	}
+	report := func(update func(*store.SyncProgress)) {
+		update(&job.Progress)
+		job.Progress.UpdatedAt = m.config.Clock().UTC()
+		m.saveProgress(ctx, job)
 	}
 
 	var safeHead *int64
@@ -186,13 +193,14 @@ func (m *Manager) process(ctx context.Context, queued queuedJob) {
 		return value, nil
 	}
 
-	seedResult, err := m.syncAddress(ctx, source, chain.ID, queued.request, getSafeHead)
+	seedResult, err := m.syncAddress(ctx, source, chain.ID, queued.request, getSafeHead, report)
 	if err != nil {
 		m.finishFailed(ctx, &job, err)
 		return
 	}
 	m.mergeResult(&job, seedResult)
 	job.CompletedAddresses = 1
+	job.ProcessedAddresses = 1
 
 	var neighbors []string
 	if queued.request.NeighborLimit > 0 {
@@ -207,15 +215,17 @@ func (m *Manager) process(ctx context.Context, queued queuedJob) {
 	for _, neighbor := range neighbors {
 		request := queued.request
 		request.Address, request.NeighborLimit = neighbor, 0
-		result, syncErr := m.syncAddress(ctx, source, chain.ID, request, getSafeHead)
+		result, syncErr := m.syncAddress(ctx, source, chain.ID, request, getSafeHead, report)
 		if syncErr != nil {
 			code, retryable := classify(syncErr)
 			job.FailedNeighbors = append(job.FailedNeighbors, store.SyncFailure{Address: neighbor, Code: code, Message: syncErr.Error(), Retryable: retryable})
+			job.ProcessedAddresses++
 			m.saveProgress(ctx, job)
 			continue
 		}
 		m.mergeResult(&job, result)
 		job.CompletedAddresses++
+		job.ProcessedAddresses++
 		job.SuccessfulNeighbors = append(job.SuccessfulNeighbors, neighbor)
 		m.saveProgress(ctx, job)
 	}
@@ -226,7 +236,7 @@ func (m *Manager) process(ctx context.Context, queued queuedJob) {
 	m.finish(ctx, &job)
 }
 
-func (m *Manager) syncAddress(ctx context.Context, source Source, chainID int64, request Request, getSafeHead func() (int64, error)) (addressResult, error) {
+func (m *Manager) syncAddress(ctx context.Context, source Source, chainID int64, request Request, getSafeHead func() (int64, error), report progressReporter) (addressResult, error) {
 	now := m.config.Clock().UTC()
 	address, exists, err := m.repository.FindAddress(ctx, request.Chain, request.Address)
 	if err != nil {
@@ -270,8 +280,18 @@ func (m *Manager) syncAddress(ctx context.Context, source Source, chainID int64,
 	result := addressResult{actionCounts: make(map[string]int64)}
 	discovered := make(map[string]struct{})
 	for _, interval := range intervals {
-		for _, action := range m.actions(source) {
-			count, fetchErr := m.fetchRange(ctx, action.call, action.name, request.Chain, chainID, request.Address, interval[0], interval[1], discovered)
+		for _, action := range m.actions(source, func(page etherscan.PageProgress) {
+			report(func(progress *store.SyncProgress) {
+				progress.CurrentAddress = request.Address
+				progress.CurrentAction = page.Action
+				progress.RangeStart = page.StartBlock
+				progress.RangeEnd = page.EndBlock
+				progress.CurrentPage = page.Page
+				progress.PagesFetched++
+				progress.RecordsRead += int64(page.Items)
+			})
+		}) {
+			count, fetchErr := m.fetchRange(ctx, action.call, action.name, request.Chain, chainID, request.Address, interval[0], interval[1], discovered, report)
 			if fetchErr != nil {
 				if err := m.repository.FailAddressSync(ctx, request.Chain, request.Address, fetchErr.Error()); err != nil {
 					slog.Error("failed to persist address sync failure", "address", request.Address, "error", err)
@@ -306,7 +326,20 @@ type action struct {
 	call func(context.Context, string, int64, int64) ([]store.Transfer, error)
 }
 
-func (m *Manager) actions(source Source) []action {
+func (m *Manager) actions(source Source, progress etherscan.ProgressFunc) []action {
+	if source, ok := source.(etherscan.ProgressClient); ok {
+		return []action{
+			{name: "txlist", call: func(ctx context.Context, address string, start, end int64) ([]store.Transfer, error) {
+				return source.ListTransactionsWithProgress(ctx, address, start, end, progress)
+			}},
+			{name: "txlistinternal", call: func(ctx context.Context, address string, start, end int64) ([]store.Transfer, error) {
+				return source.ListInternalTransactionsWithProgress(ctx, address, start, end, progress)
+			}},
+			{name: "tokentx", call: func(ctx context.Context, address string, start, end int64) ([]store.Transfer, error) {
+				return source.ListTokenTransfersWithProgress(ctx, address, start, end, progress)
+			}},
+		}
+	}
 	return []action{
 		{name: "txlist", call: source.ListTransactions},
 		{name: "txlistinternal", call: source.ListInternalTransactions},
@@ -314,23 +347,57 @@ func (m *Manager) actions(source Source) []action {
 	}
 }
 
-func (m *Manager) fetchRange(ctx context.Context, call func(context.Context, string, int64, int64) ([]store.Transfer, error), actionName, chain string, chainID int64, address string, start, end int64, discovered map[string]struct{}) (int64, error) {
+func (m *Manager) fetchRange(ctx context.Context, call func(context.Context, string, int64, int64) ([]store.Transfer, error), actionName, chain string, chainID int64, address string, start, end int64, discovered map[string]struct{}, report progressReporter) (int64, error) {
 	transfers, err := call(ctx, address, start, end)
 	if errors.Is(err, etherscan.ErrPageLimit) {
 		if start == end {
 			return 0, fmt.Errorf("%w: action=%s block=%d", etherscan.ErrPageLimit, actionName, start)
 		}
-		middle := start + (end-start)/2
-		left, leftErr := m.fetchRange(ctx, call, actionName, chain, chainID, address, start, middle, discovered)
-		if leftErr != nil {
-			return 0, leftErr
+		if len(transfers) == 0 {
+			middle := start + (end-start)/2
+			report(func(progress *store.SyncProgress) { progress.SplitCount++ })
+			left, leftErr := m.fetchRange(ctx, call, actionName, chain, chainID, address, start, middle, discovered, report)
+			if leftErr != nil {
+				return 0, leftErr
+			}
+			right, rightErr := m.fetchRange(ctx, call, actionName, chain, chainID, address, middle+1, end, discovered, report)
+			return left + right, rightErr
 		}
-		right, rightErr := m.fetchRange(ctx, call, actionName, chain, chainID, address, middle+1, end, discovered)
-		return left + right, rightErr
+		resumeBlock := transfers[len(transfers)-1].BlockNumber
+		var limitErr *etherscan.PageLimitError
+		if errors.As(err, &limitErr) {
+			resumeBlock = limitErr.LastBlock
+		}
+		complete := transfers[:0]
+		for _, transfer := range transfers {
+			if transfer.BlockNumber < resumeBlock {
+				complete = append(complete, transfer)
+			}
+		}
+		transfers = complete
+		written, writeErr := m.persistTransfers(ctx, transfers, chain, chainID, discovered, report)
+		if writeErr != nil {
+			return 0, writeErr
+		}
+		report(func(progress *store.SyncProgress) { progress.SplitCount++ })
+		if resumeBlock <= start {
+			blockCount, blockErr := m.fetchRange(ctx, call, actionName, chain, chainID, address, start, start, discovered, report)
+			if blockErr != nil || start == end {
+				return written + blockCount, blockErr
+			}
+			rest, restErr := m.fetchRange(ctx, call, actionName, chain, chainID, address, start+1, end, discovered, report)
+			return written + blockCount + rest, restErr
+		}
+		rest, restErr := m.fetchRange(ctx, call, actionName, chain, chainID, address, resumeBlock, end, discovered, report)
+		return written + rest, restErr
 	}
 	if err != nil {
 		return 0, err
 	}
+	return m.persistTransfers(ctx, transfers, chain, chainID, discovered, report)
+}
+
+func (m *Manager) persistTransfers(ctx context.Context, transfers []store.Transfer, chain string, chainID int64, discovered map[string]struct{}, report progressReporter) (int64, error) {
 	for index := range transfers {
 		transfers[index].Chain, transfers[index].ChainID = chain, chainID
 		transfers[index].TransactionGroup = fmt.Sprintf("%d:%s", chainID, strings.ToLower(transfers[index].TxHash))
@@ -351,6 +418,8 @@ func (m *Manager) fetchRange(ctx context.Context, call func(context.Context, str
 		if _, err := m.repository.BulkUpsertTransfers(ctx, transfers[startIndex:endIndex]); err != nil {
 			return 0, err
 		}
+		count := int64(endIndex - startIndex)
+		report(func(progress *store.SyncProgress) { progress.RecordsWritten += count })
 	}
 	return int64(len(transfers)), nil
 }

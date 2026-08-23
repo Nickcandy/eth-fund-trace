@@ -28,6 +28,44 @@ components:
         jobId: {type: string}
         traceJobId: {type: string}
         status: {type: string}
+    SyncProgress:
+      type: object
+      required: [pagesFetched, recordsRead, recordsWritten, splitCount]
+      properties:
+        currentAddress: {type: string}
+        currentAction: {type: string, enum: [txlist, txlistinternal, tokentx]}
+        rangeStart: {type: integer, minimum: 0}
+        rangeEnd: {type: integer, minimum: 0}
+        currentPage: {type: integer, minimum: 0}
+        pagesFetched: {type: integer, minimum: 0}
+        recordsRead: {type: integer, minimum: 0, description: Records returned by Etherscan, including records reread after a range split.}
+        recordsWritten: {type: integer, minimum: 0, description: Records submitted to idempotent Mongo upserts.}
+        splitCount: {type: integer, minimum: 0}
+        updatedAt: {type: string, format: date-time}
+    SyncJob:
+      type: object
+      required: [jobId, chain, address, status, totalAddresses, completedAddresses, processedAddresses, cachedAddresses, fetched, retryable]
+      properties:
+        jobId: {type: string}
+        chain: {type: string, enum: [ethereum, base]}
+        address: {type: string}
+        status: {type: string, enum: [queued, running, succeeded, partial, failed]}
+        createdAt: {type: string, format: date-time}
+        startedAt: {type: string, format: date-time}
+        finishedAt: {type: string, format: date-time}
+        safeHead: {type: integer, minimum: 0}
+        totalAddresses: {type: integer, minimum: 0}
+        completedAddresses: {type: integer, minimum: 0}
+        processedAddresses: {type: integer, minimum: 0, description: Addresses that reached a terminal success or failure outcome.}
+        cachedAddresses: {type: integer, minimum: 0}
+        fetched: {type: integer, minimum: 0}
+        actionCounts: {type: object, additionalProperties: {type: integer}}
+        progress: {$ref: '#/components/schemas/SyncProgress'}
+        successfulNeighbors: {type: array, items: {type: string}}
+        failedNeighbors: {type: array, items: {type: object}}
+        errorCode: {type: string}
+        error: {type: string}
+        retryable: {type: boolean}
     Label:
       type: object
       required: [chain, address, type, source]
@@ -249,7 +287,7 @@ paths:
   /api/v1/sync-jobs/{id}:
     get:
       parameters: [{$ref: '#/components/parameters/ObjectID'}]
-      responses: {'200': {description: Sync job}, '404': {description: Job not found}}
+      responses: {'200': {description: Sync job, content: {application/json: {schema: {$ref: '#/components/schemas/SyncJob'}}}}, '404': {description: Job not found}}
   /api/v1/addresses/{address}:
     get:
       parameters: [{$ref: '#/components/parameters/AddressPath'}, {$ref: '#/components/parameters/Chain'}]

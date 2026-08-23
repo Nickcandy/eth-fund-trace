@@ -284,9 +284,12 @@ func TestClientPageLimitAndContextCancellation(t *testing.T) {
 	}))
 	defer server.Close()
 	client := NewClient(Config{APIKey: "secret", BaseURL: server.URL, PageSize: 1, MaxPages: 1, HTTPClient: server.Client()})
-	_, err := client.ListTransactions(context.Background(), "0xseed", 0, 1)
+	transfers, err := client.ListTransactions(context.Background(), "0xseed", 0, 1)
 	if !errors.Is(err, ErrPageLimit) {
 		t.Fatalf("error = %v, want page limit", err)
+	}
+	if len(transfers) != 1 || transfers[0].BlockNumber != 1 {
+		t.Fatalf("transfers = %+v, want records fetched before the page limit", transfers)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -294,6 +297,42 @@ func TestClientPageLimitAndContextCancellation(t *testing.T) {
 	_, err = NewClient(Config{APIKey: "secret", BaseURL: server.URL, RequestsPerSecond: 1, HTTPClient: server.Client()}).ListTransactions(ctx, "0xseed", 0, 1)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context canceled", err)
+	}
+}
+
+func TestClientReportsEachFetchedPage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("page") == "1" {
+			_, _ = w.Write([]byte(`{"status":"1","message":"OK","result":[{"blockNumber":"7","timeStamp":"1","hash":"0xhash","from":"0xfrom","to":"0xto","value":"1"}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"0","message":"No transactions found","result":[]}`))
+	}))
+	defer server.Close()
+	client := NewClient(Config{BaseURL: server.URL, PageSize: 1, MaxPages: 3, HTTPClient: server.Client()})
+	var pages []PageProgress
+	_, err := client.ListTransactionsWithProgress(context.Background(), "0xseed", 5, 9, func(page PageProgress) { pages = append(pages, page) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pages) != 2 || pages[0].Page != 1 || pages[0].Items != 1 || pages[1].Page != 2 || pages[1].Items != 0 || pages[0].StartBlock != 5 || pages[0].EndBlock != 9 {
+		t.Fatalf("pages = %+v", pages)
+	}
+}
+
+func TestPageLimitUsesLastRawRecordForBoundary(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"1","message":"OK","result":[{"blockNumber":"1","timeStamp":"1","hash":"0xok","from":"0xfrom","to":"0xto","value":"1","isError":"0"},{"blockNumber":"9","timeStamp":"1","hash":"0xfailed","from":"0xfrom","to":"0xto","value":"1","isError":"1"}]}`))
+	}))
+	defer server.Close()
+	client := NewClient(Config{BaseURL: server.URL, PageSize: 2, MaxPages: 1, HTTPClient: server.Client()})
+	transfers, err := client.ListTransactions(context.Background(), "0xseed", 0, 20)
+	var limitErr *PageLimitError
+	if !errors.As(err, &limitErr) || limitErr.LastBlock != 9 {
+		t.Fatalf("error = %#v, want raw boundary block 9", err)
+	}
+	if len(transfers) != 1 || transfers[0].BlockNumber != 1 {
+		t.Fatalf("transfers = %+v, want only successful transfer", transfers)
 	}
 }
 

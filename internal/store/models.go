@@ -97,14 +97,29 @@ type SyncJob struct {
 	SafeHead            int64              `bson:"safeHead,omitempty" json:"safeHead,omitempty"`
 	TotalAddresses      int                `bson:"totalAddresses" json:"totalAddresses"`
 	CompletedAddresses  int                `bson:"completedAddresses" json:"completedAddresses"`
+	ProcessedAddresses  int                `bson:"processedAddresses" json:"processedAddresses"`
 	CachedAddresses     int                `bson:"cachedAddresses" json:"cachedAddresses"`
 	Fetched             int64              `bson:"fetched" json:"fetched"`
 	ActionCounts        map[string]int64   `bson:"actionCounts,omitempty" json:"actionCounts,omitempty"`
+	Progress            SyncProgress       `bson:"progress,omitempty" json:"progress,omitempty"`
 	SuccessfulNeighbors []string           `bson:"successfulNeighbors,omitempty" json:"successfulNeighbors,omitempty"`
 	FailedNeighbors     []SyncFailure      `bson:"failedNeighbors,omitempty" json:"failedNeighbors,omitempty"`
 	ErrorCode           string             `bson:"errorCode,omitempty" json:"errorCode,omitempty"`
 	Error               string             `bson:"error,omitempty" json:"error,omitempty"`
 	Retryable           bool               `bson:"retryable" json:"retryable"`
+}
+
+type SyncProgress struct {
+	CurrentAddress string    `bson:"currentAddress,omitempty" json:"currentAddress,omitempty"`
+	CurrentAction  string    `bson:"currentAction,omitempty" json:"currentAction,omitempty"`
+	RangeStart     int64     `bson:"rangeStart,omitempty" json:"rangeStart,omitempty"`
+	RangeEnd       int64     `bson:"rangeEnd,omitempty" json:"rangeEnd,omitempty"`
+	CurrentPage    int       `bson:"currentPage,omitempty" json:"currentPage,omitempty"`
+	PagesFetched   int64     `bson:"pagesFetched" json:"pagesFetched"`
+	RecordsRead    int64     `bson:"recordsRead" json:"recordsRead"`
+	RecordsWritten int64     `bson:"recordsWritten" json:"recordsWritten"`
+	SplitCount     int64     `bson:"splitCount" json:"splitCount"`
+	UpdatedAt      time.Time `bson:"updatedAt,omitempty" json:"updatedAt,omitempty"`
 }
 
 type SyncFailure struct {

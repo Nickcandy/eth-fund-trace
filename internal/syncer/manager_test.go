@@ -13,12 +13,56 @@ import (
 )
 
 type fakeSource struct {
-	mu          sync.Mutex
-	latestCalls int
-	actionCalls int
-	latest      int64
-	failAddress string
-	maxRange    int64
+	mu               sync.Mutex
+	latestCalls      int
+	actionCalls      int
+	latest           int64
+	failAddress      string
+	maxRange         int64
+	progressOnce     sync.Once
+	progressSeen     chan struct{}
+	progressContinue chan struct{}
+}
+
+type boundarySource struct {
+	transactionRanges [][2]int64
+}
+
+func (s *boundarySource) LatestBlock(context.Context) (int64, error) { return 20, nil }
+
+func (s *boundarySource) ListTransactions(_ context.Context, address string, start, end int64) ([]store.Transfer, error) {
+	s.transactionRanges = append(s.transactionRanges, [2]int64{start, end})
+	if start == 0 && end == 20 {
+		return []store.Transfer{{TxHash: "0xearly", BlockNumber: 1, From: address, To: "0x0000000000000000000000000000000000000002", AssetType: "eth", Asset: "ETH", Amount: "1", Source: "txlist"}}, &etherscan.PageLimitError{Action: "txlist", MaxPages: 100, LastBlock: 9}
+	}
+	return []store.Transfer{{TxHash: "0xlate", BlockNumber: end, From: address, To: "0x0000000000000000000000000000000000000002", AssetType: "eth", Asset: "ETH", Amount: "1", Source: "txlist"}}, nil
+}
+
+func (*boundarySource) ListInternalTransactions(context.Context, string, int64, int64) ([]store.Transfer, error) {
+	return nil, nil
+}
+
+func (*boundarySource) ListTokenTransfers(context.Context, string, int64, int64) ([]store.Transfer, error) {
+	return nil, nil
+}
+
+func (f *fakeSource) transfersWithProgress(ctx context.Context, address, source string, start, end int64, progress etherscan.ProgressFunc) ([]store.Transfer, error) {
+	transfers, err := f.transfers(address, source, start, end)
+	if err == nil && progress != nil {
+		progress(etherscan.PageProgress{Action: source, Address: address, StartBlock: start, EndBlock: end, Page: 1, Items: len(transfers)})
+		f.progressOnce.Do(func() {
+			if f.progressSeen != nil {
+				close(f.progressSeen)
+			}
+			if f.progressContinue != nil {
+				select {
+				case <-ctx.Done():
+				case <-f.progressContinue:
+				}
+			}
+		})
+	}
+	return transfers, err
 }
 
 func (f *fakeSource) LatestBlock(context.Context) (int64, error) {
@@ -51,6 +95,18 @@ func (f *fakeSource) ListInternalTransactions(_ context.Context, address string,
 
 func (f *fakeSource) ListTokenTransfers(_ context.Context, address string, start, end int64) ([]store.Transfer, error) {
 	return f.transfers(address, "tokentx", start, end)
+}
+
+func (f *fakeSource) ListTransactionsWithProgress(ctx context.Context, address string, start, end int64, progress etherscan.ProgressFunc) ([]store.Transfer, error) {
+	return f.transfersWithProgress(ctx, address, "txlist", start, end, progress)
+}
+
+func (f *fakeSource) ListInternalTransactionsWithProgress(ctx context.Context, address string, start, end int64, progress etherscan.ProgressFunc) ([]store.Transfer, error) {
+	return f.transfersWithProgress(ctx, address, "txlistinternal", start, end, progress)
+}
+
+func (f *fakeSource) ListTokenTransfersWithProgress(ctx context.Context, address string, start, end int64, progress etherscan.ProgressFunc) ([]store.Transfer, error) {
+	return f.transfersWithProgress(ctx, address, "tokentx", start, end, progress)
 }
 
 type memoryRepository struct {
@@ -177,6 +233,38 @@ func TestManagerSyncsSeedAndReusesFreshCache(t *testing.T) {
 	}
 }
 
+func TestManagerExposesPageProgressBeforeAddressCompletes(t *testing.T) {
+	seen, proceed := make(chan struct{}), make(chan struct{})
+	source := &fakeSource{latest: 100, progressSeen: seen, progressContinue: proceed}
+	repository := newMemoryRepository()
+	manager := New(source, repository, Config{Confirmations: 12, QueueSize: 10})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = manager.Run(ctx) }()
+
+	job, err := manager.Enqueue(context.Background(), Request{Chain: "ethereum", Address: "0x0000000000000000000000000000000000000001"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-seen:
+	case <-time.After(time.Second):
+		t.Fatal("page progress was not reported")
+	}
+	current, err := manager.Job(context.Background(), job.ID.Hex())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Status != "running" || current.Progress.PagesFetched != 1 || current.Progress.RecordsRead != 1 || current.Progress.CurrentAction != "txlist" || current.Progress.RangeEnd != 88 {
+		t.Fatalf("progress = %+v, status = %s", current.Progress, current.Status)
+	}
+	close(proceed)
+	completed := waitForJob(t, manager, job.ID.Hex())
+	if completed.Progress.RecordsWritten != 3 || completed.Progress.PagesFetched != 3 {
+		t.Fatalf("completed progress = %+v", completed.Progress)
+	}
+}
+
 func TestManagerHandlesOmittedEmptyActionCountsAfterPersistence(t *testing.T) {
 	source := &fakeSource{latest: 100}
 	repository := newMemoryRepository()
@@ -214,6 +302,31 @@ func TestManagerSplitsRangesAtPageLimit(t *testing.T) {
 	}
 }
 
+func TestManagerPersistsCompleteBlocksAndResumesAtRawPageBoundary(t *testing.T) {
+	source := &boundarySource{}
+	repository := newMemoryRepository()
+	manager := New(source, repository, Config{QueueSize: 10})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = manager.Run(ctx) }()
+
+	job, err := manager.Enqueue(context.Background(), Request{Chain: "ethereum", Address: "0x0000000000000000000000000000000000000001"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job = waitForJob(t, manager, job.ID.Hex())
+	if job.Status != "succeeded" || job.Fetched != 2 {
+		t.Fatalf("job = %+v", job)
+	}
+	wantRanges := [][2]int64{{0, 20}, {9, 20}}
+	if fmt.Sprint(source.transactionRanges) != fmt.Sprint(wantRanges) {
+		t.Fatalf("transaction ranges = %v, want %v", source.transactionRanges, wantRanges)
+	}
+	if len(repository.transfers) != 2 || repository.transfers[0].BlockNumber != 1 || repository.transfers[1].BlockNumber != 20 {
+		t.Fatalf("transfers = %+v, want early and late records", repository.transfers)
+	}
+}
+
 func TestManagerKeepsSeedWhenNeighborFails(t *testing.T) {
 	failing := "0x0000000000000000000000000000000000000003"
 	source := &fakeSource{latest: 100, failAddress: failing}
@@ -229,7 +342,7 @@ func TestManagerKeepsSeedWhenNeighborFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	job = waitForJob(t, manager, job.ID.Hex())
-	if job.Status != "partial" || job.CompletedAddresses != 2 || len(job.FailedNeighbors) != 1 || job.FailedNeighbors[0].Address != failing || job.FailedNeighbors[0].Code != "etherscan_rate_limited" {
+	if job.Status != "partial" || job.CompletedAddresses != 2 || job.ProcessedAddresses != 3 || len(job.FailedNeighbors) != 1 || job.FailedNeighbors[0].Address != failing || job.FailedNeighbors[0].Code != "etherscan_rate_limited" {
 		t.Fatalf("unexpected partial job: %+v", job)
 	}
 }
