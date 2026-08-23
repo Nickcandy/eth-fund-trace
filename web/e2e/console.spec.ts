@@ -5,6 +5,7 @@ const upstream = "0x0000000000000000000000000000000000000002";
 const downstream = "0x0000000000000000000000000000000000000003";
 const baseAddress = "0x0000000000000000000000000000000000000004";
 const token = "0x0000000000000000000000000000000000000010";
+const traceJobID = "6a8a8c307fcbef52929d0d09";
 let jobPolls = 0;
 
 const transfer = (from: string, to: string, hash: string, source = "txlist", asset = "ETH", amount = "1000000000000000000") => ({ chain: "ethereum", chainId: 1, txHash: hash, blockNumber: 19876543, blockTime: "2026-08-22T10:00:00Z", from, to, assetType: source === "tokentx" ? "erc20" : "native", asset, symbol: source === "tokentx" ? "USDC" : "ETH", decimals: source === "tokentx" ? 6 : 18, amount, tokenMetadataComplete: true, source, traceId: "", logIndex: source === "tokentx" ? 1 : 0, transferKind: "transfer" });
@@ -24,10 +25,10 @@ async function mockAPI(page: Page) {
   await page.route("**/api/v1/**", async route => {
     const url = new URL(route.request().url()); const path = url.pathname;
     const json = (body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
-    if (path === "/api/v1/trace") { const address = url.searchParams.get("address"); return json({ traceJobId: address?.endsWith("9") ? "job-fail" : address?.endsWith("8") ? "job-partial" : "job-1", status: "queued" }, 202); }
+    if (path === "/api/v1/trace") { const address = url.searchParams.get("address"); return json({ traceJobId: address?.endsWith("9") ? "job-fail" : address?.endsWith("8") ? "job-partial" : traceJobID, status: "queued" }, 202); }
     if (path === "/api/v1/trace-jobs/job-fail") return json({ id: "job-fail", chain: "ethereum", seedAddress: seed, direction: "both", depth: 3, topN: 10, asset: "all", status: "failed", createdAt: "2026-08-22T00:00:00Z", currentDepth: 1, visitedNodes: 2, edgeCount: 1, dataThroughBlock: 0, ruleVersion: "trace-v2", errorCode: "sync_failed", error: "上游同步失败", retryable: true });
     if (path === "/api/v1/trace-jobs/job-partial") return json({ id: "job-partial", chain: "ethereum", seedAddress: seed, direction: "both", depth: 3, topN: 10, asset: "all", status: "partial", createdAt: "2026-08-22T00:00:00Z", currentDepth: 2, visitedNodes: 4, edgeCount: 3, result, dataThroughBlock: 19876543, ruleVersion: "trace-v2", errorCode: "neighbor_sync_failed", error: "一个邻居同步失败", retryable: true });
-    if (path === "/api/v1/trace-jobs/job-1") { jobPolls++; return json({ id: "job-1", chain: "ethereum", seedAddress: seed, direction: "both", depth: 3, topN: 10, asset: "all", status: jobPolls < 2 ? "running" : "succeeded", createdAt: "2026-08-22T00:00:00Z", currentDepth: jobPolls < 2 ? 1 : 3, visitedNodes: jobPolls < 2 ? 2 : 4, edgeCount: jobPolls < 2 ? 1 : 3, result: jobPolls < 2 ? undefined : result, dataThroughBlock: 19876543, ruleVersion: "trace-v2", retryable: false }); }
+    if (path === `/api/v1/trace-jobs/${traceJobID}`) { jobPolls++; return json({ id: traceJobID, chain: "ethereum", seedAddress: seed, direction: "both", depth: 3, topN: 10, asset: "all", status: jobPolls < 2 ? "running" : "succeeded", createdAt: "2026-08-22T00:00:00Z", currentDepth: jobPolls < 2 ? 1 : 3, visitedNodes: jobPolls < 2 ? 2 : 4, edgeCount: jobPolls < 2 ? 1 : 3, result: jobPolls < 2 ? undefined : result, dataThroughBlock: 19876543, ruleVersion: "trace-v2", retryable: false }); }
     if (path.includes("/profile")) return json({ chain:"ethereum",chainId:1,address:seed,ruleVersion:"hot-wallet-v1",dataThroughBlock:19876543,features:{lifetimeTransfers:320,lifetimeIncoming:160,lifetimeOutgoing:160,windowTransfers:120,incoming:60,outgoing:60,uniqueCounterparties:80,uniqueSenders:40,uniqueRecipients:40,activeDays:22,ethTransfers:80,erc20Transfers:40},score:72,classification:"suspected_hot_wallet",suspectedHotWallet:true,computedAt:"2026-08-22T00:00:00Z" });
     if (path === "/api/v1/edges") return json({ items: facts, dataThroughBlock: 19876543, dataStatus: "synced" });
     if (path === "/api/v1/bridge-links" && route.request().method() === "GET") return json({ items: [result.bridgeEdges[0].link] });
@@ -50,6 +51,16 @@ test("creates an async trace and renders upstream, downstream, and bridge eviden
   await expect(page.locator(".react-flow__edge").last().locator(".react-flow__edge-path")).toHaveCSS("stroke-dasharray", "8px, 6px");
   await page.getByRole("button", { name: /桥接关系/ }).click(); await expect(page.getByText("Ethereum → Base")).toBeVisible();
   await page.screenshot({ path: test.info().outputPath("analysis-console.png"), fullPage: true });
+});
+
+test("restores the active trace job after a page refresh", async ({ page }) => {
+  await page.getByLabel("分析地址").fill(seed);
+  await page.getByRole("button", { name: "开始分析" }).click();
+  await expect(page.getByText("分析完成")).toBeVisible({ timeout: 10_000 });
+  await expect(page).toHaveURL(new RegExp(`traceJobId=${traceJobID}`));
+  await page.reload();
+  await expect(page.getByText("分析完成")).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator(".fund-node")).toHaveCount(4);
 });
 
 test("keeps the analysis controls usable on every viewport", async ({ page }) => {

@@ -1,6 +1,7 @@
 import type { Chain, Direction, TraceQuery } from "../api/types";
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
+const OBJECT_ID = /^[0-9a-fA-F]{24}$/;
 
 export function validateTraceQuery(query: TraceQuery): string | undefined {
   if (!ADDRESS.test(query.address)) return "请输入 0x 开头的 40 位十六进制地址";
@@ -29,8 +30,14 @@ export function readTraceQuery(search: string): TraceQuery {
   };
 }
 
-export function writeTraceQuery(query: TraceQuery): string {
+export function readTraceJobID(search: string): string | undefined {
+  const value = new URLSearchParams(search).get("traceJobId") ?? "";
+  return OBJECT_ID.test(value) ? value.toLowerCase() : undefined;
+}
+
+export function writeTraceQuery(query: TraceQuery, traceJobID?: string): string {
   const params = new URLSearchParams();
   Object.entries(query).forEach(([key, value]) => params.set(key, String(value)));
+  if (traceJobID) params.set("traceJobId", traceJobID);
   return `?${params.toString()}`;
 }
