@@ -87,6 +87,17 @@ func TestClientPagesAndNormalizesAllActions(t *testing.T) {
 	}
 }
 
+func TestNewClientClampsPagesToEtherscanResultWindow(t *testing.T) {
+	client := NewClient(Config{PageSize: 1000, MaxPages: 50})
+	if client.config.MaxPages != 10 {
+		t.Fatalf("max pages = %d, want 10 for a 10,000-record result window", client.config.MaxPages)
+	}
+	client = NewClient(Config{PageSize: 100, MaxPages: 0})
+	if client.config.MaxPages != 100 {
+		t.Fatalf("default max pages = %d, want 100 for page size 100", client.config.MaxPages)
+	}
+}
+
 func TestClientErrors(t *testing.T) {
 	tests := []struct {
 		name       string

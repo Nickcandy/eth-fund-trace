@@ -56,7 +56,7 @@ func Load() Config {
 		EtherscanAPIKey:                 value("ETHERSCAN_API_KEY", ""),
 		EtherscanBaseURL:                value("ETHERSCAN_BASE_URL", "https://api.etherscan.io/v2/api"),
 		EtherscanPageSize:               intValue("ETHERSCAN_PAGE_SIZE", 1000),
-		EtherscanMaxPages:               intValue("ETHERSCAN_MAX_PAGES", 50),
+		EtherscanMaxPages:               intValue("ETHERSCAN_MAX_PAGES", 10),
 		EtherscanRequestsPerSecond:      intValue("ETHERSCAN_REQUESTS_PER_SECOND", 3),
 		EtherscanBurst:                  intValue("ETHERSCAN_BURST", 1),
 		EtherscanMaxRetries:             nonNegativeIntValue("ETHERSCAN_MAX_RETRIES", 5),

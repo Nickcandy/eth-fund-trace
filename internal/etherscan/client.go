@@ -27,6 +27,8 @@ var (
 	ErrPending           = errors.New("etherscan receipt pending")
 )
 
+const maxResultWindow = 10_000
+
 // RPCTransaction is the subset of an Ethereum transaction used by analysis.
 type RPCTransaction struct {
 	Hash        string `json:"hash"`
@@ -135,7 +137,17 @@ func NewClient(config Config) *APIClient {
 		config.PageSize = 100
 	}
 	if config.MaxPages <= 0 {
-		config.MaxPages = 100
+		config.MaxPages = maxResultWindow / config.PageSize
+		if config.MaxPages < 1 {
+			config.MaxPages = 1
+		}
+	}
+	maxPagesForWindow := maxResultWindow / config.PageSize
+	if maxPagesForWindow < 1 {
+		maxPagesForWindow = 1
+	}
+	if config.MaxPages > maxPagesForWindow {
+		config.MaxPages = maxPagesForWindow
 	}
 	if config.RequestsPerSecond <= 0 {
 		config.RequestsPerSecond = 5
