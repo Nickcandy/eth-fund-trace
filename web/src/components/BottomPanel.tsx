@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { RefreshCw, Search } from "lucide-react";
 import type { BridgeInput, CrossChainLink, LabelInput, SyncJob, TraceJob, Transfer } from "../api/types";
 import { chainLabel, formatChainAmount, shortAddress } from "../lib/format";
@@ -8,6 +8,8 @@ type Tab = "facts" | "transactions" | "jobs" | "bridges" | "write";
 interface Props { facts: Transfer[]; hasMore?: boolean; loadingMore?: boolean; onMore: () => void; traceJob?: TraceJob; syncJobs: SyncJob[]; bridges: CrossChainLink[]; chain: "ethereum"|"base"; address: string; onLabel: (input: LabelInput) => Promise<void>; onBridge: (input: BridgeInput) => Promise<void>; onAnalyzeBridge?:(txHash:string)=>Promise<void>; onSyncBridge?:(id:string)=>Promise<void> }
 export function BottomPanel({ facts, hasMore, loadingMore, onMore, traceJob, syncJobs, bridges, chain, address, onLabel, onBridge, onAnalyzeBridge=async()=>{}, onSyncBridge=async()=>{} }: Props) {
  const [tab,setTab]=useState<Tab>("facts");
+ const hasActiveSync=syncJobs.some(job=>["queued","running"].includes(job.status));
+ useEffect(()=>{if(hasActiveSync)setTab("jobs")},[hasActiveSync]);
  return <section className="bottom-panel"><nav>{([['facts','事实边'],['transactions','交易明细'],['jobs','任务进度'],['bridges','桥接关系'],['write','写入证据']] as [Tab,string][]).map(([id,label])=><button className={tab===id?'active':''} onClick={()=>setTab(id)} key={id}>{label}{id==='facts'&&<span>{facts.length}</span>}</button>)}</nav><div className="tab-body">
  {tab==='facts'&&<FactTable facts={facts} hasMore={hasMore} loadingMore={loadingMore} onMore={onMore}/>} {tab==='transactions'&&<FactTable facts={facts} detailed hasMore={hasMore} loadingMore={loadingMore} onMore={onMore}/>}
  {tab==='jobs'&&<div className="job-list">{traceJob&&<div className="job-card trace-job"><div className="job-heading"><div><span className="job-kind">追踪任务</span><code>{shortAddress(traceJob.id,6)}</code></div><Status value={traceJob.status}/></div><progress max={traceJob.depth||1} value={traceJob.currentDepth}/><div className="job-metrics"><Metric label="当前深度" value={`${traceJob.currentDepth} / ${traceJob.depth}`}/><Metric label="已访问节点" value={traceJob.visitedNodes}/><Metric label="事实边" value={traceJob.edgeCount}/></div></div>}{syncJobs.map(j=><SyncProgressCard job={j} key={j.jobId}/>)}{!traceJob&&!syncJobs.length&&<Empty text="当前没有任务"/>}</div>}
