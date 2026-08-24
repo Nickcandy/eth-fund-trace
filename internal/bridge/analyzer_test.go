@@ -45,6 +45,12 @@ func (r *analyzerRepository) QueryCrossChainLinks(context.Context, store.BridgeL
 	}
 	return result, nil
 }
+func (r *analyzerRepository) HasTargetTransferEvidence(context.Context, string, string, string, string, string) (bool, error) {
+	return true, nil
+}
+func (r *analyzerRepository) HasSourceTransferEvidence(context.Context, string, string, string, string, string) (bool, error) {
+	return true, nil
+}
 
 func TestAnalyzerRecognizesETHDepositWithoutClaimingUnlinkedCompletion(t *testing.T) {
 	from, to := addressWord("1"), addressWord("2")
@@ -75,6 +81,14 @@ func TestAnalyzerRecognizesERC20WithdrawalAndUnknownContract(t *testing.T) {
 	links, err = analyzer.Analyze(context.Background(), "base", "0xunknown")
 	if err != nil || len(links) != 0 {
 		t.Fatalf("unknown links=%+v err=%v", links, err)
+	}
+}
+
+func TestTargetERC20EventReversesLocalAndRemoteTokens(t *testing.T) {
+	link := store.CrossChainLink{Direction: "withdrawal", SourceAsset: "0x000000000000000000000000000000000000000a", TargetAsset: "0x000000000000000000000000000000000000000b", SourceAddress: "0x0000000000000000000000000000000000000001", TargetAddress: "0x0000000000000000000000000000000000000002", SourceAmount: "99"}
+	log := chainrpc.Log{Address: EthereumL1StandardBridge, Topics: []string{eventTopic("ERC20BridgeFinalized(address,address,address,address,uint256,bytes)"), addressWord("b"), addressWord("a"), addressWord("1")}, Data: addressWord("2") + uintWord(99)[2:]}
+	if _, ok, err := parseTargetEvent(link, log); err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
 	}
 }
 

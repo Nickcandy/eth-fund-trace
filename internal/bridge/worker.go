@@ -3,6 +3,7 @@ package bridge
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -78,11 +79,15 @@ func (w *Worker) Run(ctx context.Context) error {
 		case id := <-w.queue:
 			if link, err := w.repo.FindCrossChainLink(ctx, id); err == nil {
 				w.process(ctx, []store.CrossChainLink{link})
+			} else {
+				slog.Error("bridge worker link lookup failed", "link_id", id.Hex(), "error", err)
 			}
 		case <-ticker.C:
 			links, err := w.repo.QueryCrossChainLinks(ctx, store.BridgeLinkQuery{DueBefore: w.config.Clock().UTC(), Limit: w.config.BatchSize})
 			if err == nil {
 				w.process(ctx, links)
+			} else {
+				slog.Error("bridge worker due query failed", "error", err)
 			}
 		}
 	}
@@ -110,7 +115,9 @@ func (w *Worker) process(ctx context.Context, links []store.CrossChainLink) {
 			updated.LastErrorCode = classifyBridgeError(err)
 			delay := w.config.Interval * time.Duration(1<<min(updated.RetryCount, 6))
 			updated.NextCheckAt = w.config.Clock().UTC().Add(delay)
-			_, _ = w.repo.UpsertCrossChainLink(ctx, updated)
+			if _, saveErr := w.repo.UpsertCrossChainLink(ctx, updated); saveErr != nil {
+				slog.Error("bridge retry persistence failed", "identity_key", updated.IdentityKey, "error", saveErr)
+			}
 		}(link)
 	}
 	group.Wait()

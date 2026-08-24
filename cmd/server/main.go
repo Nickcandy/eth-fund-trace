@@ -68,6 +68,7 @@ func run(parent context.Context) error {
 	addressProfiler := profile.New(appStore, time.Now)
 	var bridgeAnalyzer *bridge.Analyzer
 	var bridgeWorker *bridge.Worker
+	var bridgeCandidates chan struct{ chain, hash string }
 	if cfg.EthereumRPCURL != "" || cfg.BaseRPCURL != "" {
 		if cfg.EthereumRPCURL == "" || cfg.BaseRPCURL == "" {
 			return errors.New("both ETHEREUM_RPC_URL and BASE_RPC_URL are required")
@@ -82,6 +83,7 @@ func run(parent context.Context) error {
 		}
 		bridgeAnalyzer = bridge.NewAnalyzer(map[string]bridge.BridgeSource{"ethereum": ethereumRPC, "base": baseRPC}, appStore, time.Now).WithConfirmations(map[string]int64{"ethereum": int64(cfg.EthereumBridgeConfirmations), "base": int64(cfg.BaseBridgeConfirmations)})
 		bridgeWorker = bridge.NewWorker(bridgeAnalyzer, appStore, bridge.WorkerConfig{Interval: time.Duration(cfg.BridgeSyncIntervalSeconds) * time.Second, BatchSize: int64(cfg.BridgeSyncBatchSize), MaxRetries: cfg.BridgeSyncMaxRetries, MaxConcurrency: cfg.BridgeSyncMaxConcurrency})
+		bridgeCandidates = make(chan struct{ chain, hash string }, cfg.BridgeSyncBatchSize)
 	}
 	syncManager := syncer.NewMulti(etherscanClients, appStore, syncer.Config{
 		CacheTTL: time.Duration(cfg.SyncCacheTTLMinutes) * time.Minute, Confirmations: int64(cfg.SyncConfirmations), QueueSize: cfg.SyncQueueSize,
@@ -100,7 +102,8 @@ func run(parent context.Context) error {
 				if chain == "base" {
 					bridgeAddress = bridge.BaseL2StandardBridge
 				}
-				if !strings.EqualFold(transfer.From, bridgeAddress) && !strings.EqualFold(transfer.To, bridgeAddress) {
+				baseBurn := chain == "base" && transfer.AssetType == "erc20" && strings.EqualFold(transfer.To, "0x0000000000000000000000000000000000000000")
+				if !strings.EqualFold(transfer.From, bridgeAddress) && !strings.EqualFold(transfer.To, bridgeAddress) && !baseBurn {
 					continue
 				}
 				hash := strings.ToLower(transfer.TxHash)
@@ -108,8 +111,10 @@ func run(parent context.Context) error {
 					continue
 				}
 				seen[hash] = struct{}{}
-				if _, err := bridgeAnalyzer.Analyze(ctx, chain, hash); err != nil && !errors.Is(err, chainrpc.ErrPending) {
-					slog.Warn("bridge analysis failed", "chain", chain, "tx_hash", hash, "error", err)
+				select {
+				case bridgeCandidates <- struct{ chain, hash string }{chain, hash}:
+				default:
+					slog.Warn("bridge candidate queue full", "chain", chain, "tx_hash", hash)
 				}
 			}
 		},
@@ -154,6 +159,18 @@ func run(parent context.Context) error {
 		go func() {
 			if err := bridgeWorker.Run(serverCtx); err != nil && !errors.Is(err, context.Canceled) {
 				slog.Error("bridge worker stopped", "error", err)
+			}
+		}()
+		go func() {
+			for {
+				select {
+				case <-serverCtx.Done():
+					return
+				case candidate := <-bridgeCandidates:
+					if _, err := bridgeAnalyzer.Analyze(serverCtx, candidate.chain, candidate.hash); err != nil && !errors.Is(err, chainrpc.ErrPending) {
+						slog.Warn("bridge analysis failed", "chain", candidate.chain, "tx_hash", candidate.hash, "error", err)
+					}
+				}
 			}
 		}()
 	}

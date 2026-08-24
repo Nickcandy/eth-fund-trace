@@ -20,8 +20,9 @@ const (
 	ProtocolOfficialOPStack = "official_opstack_bridge"
 	AdapterVersion          = "bridge-opstack-v1"
 
-	// Base mainnet deployments. Sources: Base contract-address reference and
-	// OP Stack contracts-bedrock Predeploys library, verified 2026-08-24.
+	// Base mainnet deployments, adapter bridge-opstack-v1. Sources verified 2026-08-24:
+	// https://docs.base.org/base-chain-reference/contract-addresses
+	// https://github.com/ethereum-optimism/optimism/tree/develop/packages/contracts-bedrock
 	EthereumL1StandardBridge = "0x3154cf16ccdb4c6d922629664174b904d80f2c35"
 	EthereumOptimismPortal   = "0x49048044d57e1c92a77f79988d21fa8faf74e97e"
 	EthereumL1Messenger      = "0x866e82a600a1414e583f7f13623f1aC5d58b0aFa"
@@ -43,6 +44,8 @@ type BridgeSource interface {
 type AnalyzerRepository interface {
 	UpsertCrossChainLink(context.Context, store.CrossChainLink) (store.CrossChainLink, error)
 	QueryCrossChainLinks(context.Context, store.BridgeLinkQuery) ([]store.CrossChainLink, error)
+	HasTargetTransferEvidence(context.Context, string, string, string, string, string) (bool, error)
+	HasSourceTransferEvidence(context.Context, string, string, string, string, string) (bool, error)
 }
 
 type Analyzer struct {
@@ -50,13 +53,14 @@ type Analyzer struct {
 	repo          AnalyzerRepository
 	now           func() time.Time
 	confirmations map[string]int64
+	lookback      map[string]int64
 }
 
 func NewAnalyzer(sources map[string]BridgeSource, repo AnalyzerRepository, now func() time.Time) *Analyzer {
 	if now == nil {
 		now = time.Now
 	}
-	return &Analyzer{sources: sources, repo: repo, now: now, confirmations: map[string]int64{}}
+	return &Analyzer{sources: sources, repo: repo, now: now, confirmations: map[string]int64{}, lookback: map[string]int64{"ethereum": 500000, "base": 2000000}}
 }
 
 func (a *Analyzer) WithConfirmations(values map[string]int64) *Analyzer {
@@ -96,6 +100,12 @@ func (a *Analyzer) Analyze(ctx context.Context, chain, txHash string) ([]store.C
 	}
 
 	result := make([]store.CrossChainLink, 0)
+	sourceEvents, messageEvents := 0, countMessageEvents(chain, receipt.Logs)
+	for _, log := range receipt.Logs {
+		if _, recognized, _ := parseSourceEvent(chain, log); recognized {
+			sourceEvents++
+		}
+	}
 	for _, log := range receipt.Logs {
 		fact, recognized, parseErr := parseSourceEvent(chain, log)
 		if parseErr != nil {
@@ -120,12 +130,33 @@ func (a *Analyzer) Analyze(ctx context.Context, chain, txHash string) ([]store.C
 		}
 		fact.IdentityKey = identityKey(fact)
 		fact.Status, fact.EvidenceLevel = "initiated", "strong"
+		if fact.SourceAsset != "ETH" {
+			found, evidenceErr := a.repo.HasSourceTransferEvidence(ctx, fact.SourceChain, fact.SourceTxHash, fact.SourceAddress, fact.SourceAsset, fact.SourceAmount)
+			if evidenceErr != nil {
+				return nil, evidenceErr
+			}
+			if !found {
+				fact.Status, fact.EvidenceLevel = "ambiguous", "partial"
+				fact.Evidence = append(fact.Evidence, "bridge_source_transfer_missing")
+			}
+		}
+		if sourceEvents > 1 || messageEvents > 1 {
+			fact.Status, fact.EvidenceLevel, fact.MessageHash = "ambiguous", "partial", ""
+			fact.Evidence = append(fact.Evidence, "bridge_ambiguous_match")
+		}
 		fact.ObservedAt, fact.LastCheckedAt = a.now().UTC(), a.now().UTC()
 		fact.NextCheckAt = fact.LastCheckedAt.Add(time.Minute)
 
 		matches, matchErr := a.findTarget(ctx, fact)
 		if matchErr != nil {
-			return nil, matchErr
+			fact.LastErrorCode = classifyBridgeError(matchErr)
+			fact.NextCheckAt = fact.LastCheckedAt.Add(5 * time.Minute)
+			saved, saveErr := a.repo.UpsertCrossChainLink(ctx, fact)
+			if saveErr != nil {
+				return nil, saveErr
+			}
+			result = append(result, saved)
+			return result, matchErr
 		}
 		if len(matches) > 1 {
 			fact.Status, fact.EvidenceLevel = "ambiguous", "partial"
@@ -140,6 +171,23 @@ func (a *Analyzer) Analyze(ctx context.Context, chain, txHash string) ([]store.C
 		result = append(result, saved)
 	}
 	return result, nil
+}
+
+func countMessageEvents(chain string, logs []etherscan.RPCLog) int {
+	count := 0
+	for _, log := range logs {
+		topic := ""
+		if len(log.Topics) > 0 {
+			topic = strings.ToLower(log.Topics[0])
+		}
+		if chain == "ethereum" && strings.EqualFold(log.Address, EthereumL1Messenger) && topic == eventTopic("SentMessage(address,address,bytes,uint256,uint256)") {
+			count++
+		}
+		if chain == "base" && strings.EqualFold(log.Address, BaseL2ToL1MessagePasser) && topic == eventTopic("MessagePassed(uint256,address,address,uint256,uint256,bytes,bytes32)") {
+			count++
+		}
+	}
+	return count
 }
 
 func (a *Analyzer) Refresh(ctx context.Context, link store.CrossChainLink) (store.CrossChainLink, error) {
@@ -184,7 +232,11 @@ func (a *Analyzer) advanceWithdrawalLifecycle(ctx context.Context, link *store.C
 		return nil
 	}
 	messageTopic := []string{strings.ToLower(link.MessageHash)}
-	proven, err := source.Logs(ctx, chainrpc.LogFilter{FromBlock: "0x0", ToBlock: "latest", Address: EthereumOptimismPortal, Topics: [][]string{{eventTopic("WithdrawalProven(bytes32,address,address)")}, messageTopic}})
+	filter, err := a.logFilter(ctx, "ethereum", EthereumOptimismPortal, [][]string{{eventTopic("WithdrawalProven(bytes32,address,address)")}, messageTopic})
+	if err != nil {
+		return err
+	}
+	proven, err := source.Logs(ctx, filter)
 	if err != nil {
 		return err
 	}
@@ -196,7 +248,11 @@ func (a *Analyzer) advanceWithdrawalLifecycle(ctx context.Context, link *store.C
 			link.Evidence = append(link.Evidence, "portal_withdrawal_proven:"+strings.ToLower(proven[0].TransactionHash))
 		}
 	}
-	finalized, err := source.Logs(ctx, chainrpc.LogFilter{FromBlock: "0x0", ToBlock: "latest", Address: EthereumOptimismPortal, Topics: [][]string{{eventTopic("WithdrawalFinalized(bytes32,bool)")}, messageTopic}})
+	filter, err = a.logFilter(ctx, "ethereum", EthereumOptimismPortal, [][]string{{eventTopic("WithdrawalFinalized(bytes32,bool)")}, messageTopic})
+	if err != nil {
+		return err
+	}
+	finalized, err := source.Logs(ctx, filter)
 	if err != nil {
 		return err
 	}
@@ -234,7 +290,11 @@ func (a *Analyzer) findTarget(ctx context.Context, link store.CrossChainLink) ([
 	address := BaseL2StandardBridge
 	topic := finalizedTopic(link.SourceAsset == "ETH")
 	if link.Direction == "withdrawal" && link.MessageHash != "" {
-		portalLogs, err := source.Logs(ctx, chainrpc.LogFilter{FromBlock: "0x0", ToBlock: "latest", Address: EthereumOptimismPortal, Topics: [][]string{{eventTopic("WithdrawalFinalized(bytes32,bool)")}, {strings.ToLower(link.MessageHash)}}})
+		filter, filterErr := a.logFilter(ctx, "ethereum", EthereumOptimismPortal, [][]string{{eventTopic("WithdrawalFinalized(bytes32,bool)")}, {strings.ToLower(link.MessageHash)}})
+		if filterErr != nil {
+			return nil, filterErr
+		}
+		portalLogs, err := source.Logs(ctx, filter)
 		if err != nil {
 			return nil, err
 		}
@@ -253,7 +313,7 @@ func (a *Analyzer) findTarget(ctx context.Context, link store.CrossChainLink) ([
 			}
 			for _, receiptLog := range receipt.Logs {
 				candidate := chainrpc.Log{Address: receiptLog.Address, Topics: receiptLog.Topics, Data: receiptLog.Data, LogIndex: receiptLog.LogIndex, TransactionHash: portalLog.TransactionHash, BlockNumber: portalLog.BlockNumber}
-				if _, ok, _ := parseTargetEvent(link, candidate); ok {
+				if _, ok, _ := parseTargetEvent(link, candidate); ok && a.hasTargetEvidence(ctx, link, candidate.TransactionHash) {
 					verified = append(verified, candidate)
 				}
 			}
@@ -264,7 +324,11 @@ func (a *Analyzer) findTarget(ctx context.Context, link store.CrossChainLink) ([
 		return nil, nil
 	}
 	if link.Direction == "deposit" && link.MessageHash != "" {
-		relayLogs, err := source.Logs(ctx, chainrpc.LogFilter{FromBlock: "0x0", ToBlock: "latest", Address: BaseL2Messenger, Topics: [][]string{{eventTopic("RelayedMessage(bytes32)")}, {strings.ToLower(link.MessageHash)}}})
+		filter, filterErr := a.logFilter(ctx, "base", BaseL2Messenger, [][]string{{eventTopic("RelayedMessage(bytes32)")}, {strings.ToLower(link.MessageHash)}})
+		if filterErr != nil {
+			return nil, filterErr
+		}
+		relayLogs, err := source.Logs(ctx, filter)
 		if err != nil {
 			return nil, err
 		}
@@ -283,7 +347,7 @@ func (a *Analyzer) findTarget(ctx context.Context, link store.CrossChainLink) ([
 			}
 			for _, receiptLog := range receipt.Logs {
 				candidate := chainrpc.Log{Address: receiptLog.Address, Topics: receiptLog.Topics, Data: receiptLog.Data, LogIndex: receiptLog.LogIndex, TransactionHash: relayLog.TransactionHash, BlockNumber: relayLog.BlockNumber}
-				if _, ok, _ := parseTargetEvent(link, candidate); ok {
+				if _, ok, _ := parseTargetEvent(link, candidate); ok && a.hasTargetEvidence(ctx, link, candidate.TransactionHash) {
 					verified = append(verified, candidate)
 				}
 			}
@@ -322,6 +386,29 @@ func (a *Analyzer) findTarget(ctx context.Context, link store.CrossChainLink) ([
 		}
 	}
 	return matched, nil
+}
+
+func (a *Analyzer) logFilter(ctx context.Context, chain, address string, topics [][]string) (chainrpc.LogFilter, error) {
+	filter := chainrpc.LogFilter{FromBlock: "0x0", ToBlock: "latest", Address: address, Topics: topics}
+	if source, ok := a.sources[chain].(interface {
+		BlockNumber(context.Context) (int64, error)
+	}); ok {
+		head, err := source.BlockNumber(ctx)
+		if err != nil {
+			return filter, err
+		}
+		from := head - a.lookback[chain]
+		if from < 0 {
+			from = 0
+		}
+		filter.FromBlock = fmt.Sprintf("0x%x", from)
+	}
+	return filter, nil
+}
+
+func (a *Analyzer) hasTargetEvidence(ctx context.Context, link store.CrossChainLink, txHash string) bool {
+	found, err := a.repo.HasTargetTransferEvidence(ctx, link.TargetChain, strings.ToLower(txHash), link.TargetAddress, link.TargetAsset, link.TargetAmount)
+	return err == nil && found
 }
 
 func (a *Analyzer) logConfirmed(ctx context.Context, chain string, log chainrpc.Log) (bool, error) {
@@ -526,7 +613,7 @@ func parseTargetEvent(link store.CrossChainLink, log chainrpc.Log) (chainrpc.Log
 	if err != nil {
 		return log, false, err
 	}
-	return log, topicAddress(log.Topics[1]) == link.SourceAsset && topicAddress(log.Topics[2]) == link.TargetAsset && topicAddress(log.Topics[3]) == link.SourceAddress && to == link.TargetAddress && amount == link.SourceAmount, nil
+	return log, topicAddress(log.Topics[1]) == link.TargetAsset && topicAddress(log.Topics[2]) == link.SourceAsset && topicAddress(log.Topics[3]) == link.SourceAddress && to == link.TargetAddress && amount == link.SourceAmount, nil
 }
 
 func applyTarget(link *store.CrossChainLink, log chainrpc.Log) {
@@ -595,5 +682,5 @@ func parseHexInt(value string) (int64, error) {
 }
 
 func statusRank(status string) int {
-	return map[string]int{"initiated": 1, "proven": 2, "finalized": 3, "completed": 4, "confirmed": 4, "failed": 5, "ambiguous": 5}[status]
+	return map[string]int{"ambiguous": 1, "initiated": 1, "proven": 2, "finalized": 3, "completed": 4, "confirmed": 4, "failed": 5}[status]
 }

@@ -22,7 +22,15 @@ func (r *repositoryStub) ListCrossChainLinks(context.Context, string, string, in
 func (r *repositoryStub) HasTransferEvidence(context.Context, string, string, int64, string, string, string) (bool, error) {
 	return r.hasEvidence, nil
 }
-func (r *repositoryStub) QueryCrossChainLinks(context.Context, store.BridgeLinkQuery) ([]store.CrossChainLink, error) { return []store.CrossChainLink{r.saved}, nil }
+func (r *repositoryStub) QueryCrossChainLinks(context.Context, store.BridgeLinkQuery) ([]store.CrossChainLink, error) {
+	return []store.CrossChainLink{r.saved}, nil
+}
+func (r *repositoryStub) HasTargetTransferEvidence(context.Context, string, string, string, string, string) (bool, error) {
+	return r.hasEvidence, nil
+}
+func (r *repositoryStub) HasSourceTransferEvidence(context.Context, string, string, string, string, string) (bool, error) {
+	return r.hasEvidence, nil
+}
 
 func TestServiceCreatesConfirmedEthereumBaseLink(t *testing.T) {
 	repository := &repositoryStub{hasEvidence: true}

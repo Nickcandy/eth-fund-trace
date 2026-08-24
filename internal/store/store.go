@@ -512,21 +512,41 @@ func (s *Store) UpsertTransfer(ctx context.Context, transfer Transfer) error {
 func (s *Store) UpsertCrossChainLink(ctx context.Context, link CrossChainLink) (CrossChainLink, error) {
 	filter := bson.D{{Key: "sourceChain", Value: link.SourceChain}, {Key: "sourceTxHash", Value: link.SourceTxHash}, {Key: "sourceLogIndex", Value: link.SourceLogIndex}, {Key: "targetChain", Value: link.TargetChain}, {Key: "targetTxHash", Value: link.TargetTxHash}, {Key: "targetLogIndex", Value: link.TargetLogIndex}}
 	if link.IdentityKey != "" {
-		filter = bson.D{{Key: "identityKey", Value: link.IdentityKey}}
+		filter = bson.D{{Key: "$or", Value: bson.A{
+			bson.D{{Key: "identityKey", Value: link.IdentityKey}},
+			bson.D{{Key: "protocol", Value: link.Protocol}, {Key: "sourceChain", Value: link.SourceChain}, {Key: "sourceTxHash", Value: link.SourceTxHash}, {Key: "sourceLogIndex", Value: link.SourceLogIndex}, {Key: "targetChain", Value: link.TargetChain}},
+		}}}
 	}
-	var existing CrossChainLink
-	if err := s.db.Collection(CrossChainLinksCollection).FindOne(ctx, filter).Decode(&existing); err == nil {
-		link = mergeCrossChainLink(existing, link)
-	} else if !errors.Is(err, mongo.ErrNoDocuments) {
-		return CrossChainLink{}, err
+	collection := s.db.Collection(CrossChainLinksCollection)
+	for attempt := 0; attempt < 5; attempt++ {
+		var existing CrossChainLink
+		err := collection.FindOne(ctx, filter).Decode(&existing)
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			link.ID = primitive.NilObjectID
+			if _, err = collection.InsertOne(ctx, link); mongo.IsDuplicateKeyError(err) {
+				continue
+			} else if err != nil {
+				return CrossChainLink{}, err
+			}
+			err = collection.FindOne(ctx, filter).Decode(&link)
+			return link, err
+		}
+		if err != nil {
+			return CrossChainLink{}, err
+		}
+		merged := mergeCrossChainLink(existing, link)
+		merged.ID = primitive.NilObjectID
+		result, err := collection.UpdateOne(ctx, bson.D{{Key: "_id", Value: existing.ID}, {Key: "status", Value: existing.Status}, {Key: "evidence", Value: existing.Evidence}}, bson.D{{Key: "$set", Value: merged}})
+		if err != nil {
+			return CrossChainLink{}, err
+		}
+		if result.ModifiedCount == 0 {
+			continue
+		}
+		err = collection.FindOne(ctx, bson.D{{Key: "_id", Value: existing.ID}}).Decode(&merged)
+		return merged, err
 	}
-	link.ID = primitive.NilObjectID
-	_, err := s.db.Collection(CrossChainLinksCollection).UpdateOne(ctx, filter, bson.D{{Key: "$set", Value: link}}, options.Update().SetUpsert(true))
-	if err != nil {
-		return CrossChainLink{}, err
-	}
-	err = s.db.Collection(CrossChainLinksCollection).FindOne(ctx, filter).Decode(&link)
-	return link, err
+	return CrossChainLink{}, errors.New("cross-chain link changed concurrently")
 }
 
 func mergeCrossChainLink(existing, incoming CrossChainLink) CrossChainLink {
@@ -573,7 +593,7 @@ func mergeCrossChainLink(existing, incoming CrossChainLink) CrossChainLink {
 }
 
 func statusRank(status string) int {
-	return map[string]int{"initiated": 1, "proven": 2, "finalized": 3, "confirmed": 4, "completed": 4, "failed": 5, "ambiguous": 5}[status]
+	return map[string]int{"ambiguous": 1, "initiated": 1, "proven": 2, "finalized": 3, "confirmed": 4, "completed": 4, "failed": 5}[status]
 }
 
 func (s *Store) FindCrossChainLink(ctx context.Context, id primitive.ObjectID) (CrossChainLink, error) {
@@ -636,6 +656,22 @@ func (s *Store) HasTransferEvidence(ctx context.Context, chain, txHash string, l
 		amountField = "amount"
 	}
 	filter := bson.D{{Key: "chain", Value: chain}, {Key: "txHash", Value: txHash}, {Key: "logIndex", Value: logIndex}, {Key: "asset", Value: asset}, {Key: amountField, Value: amount}, {Key: "$or", Value: bson.A{bson.D{{Key: "from", Value: address}}, bson.D{{Key: "to", Value: address}}}}}
+	count, err := s.db.Collection(TransfersCollection).CountDocuments(ctx, filter, options.Count().SetLimit(1))
+	return count > 0, err
+}
+
+func (s *Store) HasTargetTransferEvidence(ctx context.Context, chain, txHash, address, asset, amount string) (bool, error) {
+	amountField := "tokenValue"
+	if asset == "ETH" {
+		amountField = "amount"
+	}
+	filter := bson.D{{Key: "chain", Value: chain}, {Key: "txHash", Value: txHash}, {Key: "to", Value: address}, {Key: "asset", Value: asset}, {Key: amountField, Value: amount}}
+	count, err := s.db.Collection(TransfersCollection).CountDocuments(ctx, filter, options.Count().SetLimit(1))
+	return count > 0, err
+}
+
+func (s *Store) HasSourceTransferEvidence(ctx context.Context, chain, txHash, address, asset, amount string) (bool, error) {
+	filter := bson.D{{Key: "chain", Value: chain}, {Key: "txHash", Value: txHash}, {Key: "from", Value: address}, {Key: "asset", Value: asset}, {Key: "tokenValue", Value: amount}}
 	count, err := s.db.Collection(TransfersCollection).CountDocuments(ctx, filter, options.Count().SetLimit(1))
 	return count > 0, err
 }
