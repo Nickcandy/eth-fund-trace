@@ -27,12 +27,33 @@ function queryString(values: object): string {
   return params.toString();
 }
 
+async function requestSyncJobs(ids: string[], signal?: AbortSignal): Promise<SyncJob[]> {
+  const jobs: SyncJob[] = [];
+  const batchSize = 5;
+  for (let offset = 0; offset < ids.length; offset += batchSize) {
+    const batch = ids.slice(offset, offset + batchSize);
+    const results = await Promise.allSettled(batch.map((id) => request<SyncJob>(`/api/v1/sync-jobs/${encodeURIComponent(id)}`, { signal })));
+    for (const result of results) if (result.status === "fulfilled") jobs.push(result.value);
+    if (offset + batchSize < ids.length) await abortableDelay(400, signal);
+  }
+  return jobs;
+}
+
+function abortableDelay(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason);
+    const timer = window.setTimeout(resolve, milliseconds);
+    signal?.addEventListener("abort", () => { window.clearTimeout(timer); reject(signal.reason); }, { once: true });
+  });
+}
+
 export const api = {
   createTrace: (query: TraceQuery, signal?: AbortSignal) => request<TraceAccepted>(`/api/v1/trace?${queryString(query)}`, { signal }),
   traceJob: (id: string, signal?: AbortSignal) => request<TraceJob>(`/api/v1/trace-jobs/${encodeURIComponent(id)}`, { signal }),
   latestTraceJob: (query: TraceQuery, signal?: AbortSignal) => request<TraceJob>(`/api/v1/trace-jobs/latest?${queryString(query)}`, { signal }),
   createSync: (chain: string, address: string) => request<SyncJob>("/api/v1/sync", { method: "POST", body: JSON.stringify({ chain, address, neighborLimit: 0 }) }),
   syncJob: (id: string, signal?: AbortSignal) => request<SyncJob>(`/api/v1/sync-jobs/${encodeURIComponent(id)}`, { signal }),
+  syncJobs: requestSyncJobs,
   latestSyncJob: (chain: string, address: string, signal?: AbortSignal) => request<SyncJob>(`/api/v1/sync-jobs/latest?${queryString({ chain, address })}`, { signal }),
   address: (chain: string, address: string, signal?: AbortSignal) => request<AddressResponse>(`/api/v1/addresses/${address}?${queryString({ chain })}`, { signal }),
   profile: (chain: string, address: string, signal?: AbortSignal) => request<AddressProfile>(`/api/v1/addresses/${address}/profile?${queryString({ chain })}`, { signal }),

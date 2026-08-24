@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, setBearerToken } from "./client";
 
 describe("API authentication", () => {
-  afterEach(() => { setBearerToken(""); vi.unstubAllGlobals(); });
+  afterEach(() => { setBearerToken(""); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
   it("sends a session-only Bearer token when configured", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify([]), { status: 200 }));
@@ -39,5 +39,19 @@ describe("API authentication", () => {
     await api.createSync("ethereum", "0x0000000000000000000000000000000000000001");
     expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/sync");
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ chain: "ethereum", address: "0x0000000000000000000000000000000000000001", neighborLimit: 0 });
+  });
+
+  it("loads sync job progress in bounded batches and keeps successful rows", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn((path: string) => Promise.resolve(new Response(
+      path.endsWith("job-3") ? JSON.stringify({ error: { code: "rate_limited", message: "slow down", retryable: true } }) : JSON.stringify({ jobId: path.split("/").pop() }),
+      { status: path.endsWith("job-3") ? 429 : 200 },
+    )));
+    vi.stubGlobal("fetch", fetchMock);
+    const promise = api.syncJobs(Array.from({ length: 7 }, (_, index) => `job-${index + 1}`));
+    await vi.advanceTimersByTimeAsync(400);
+    const jobs = await promise;
+    expect(jobs.map((job) => job.jobId)).toEqual(["job-1", "job-2", "job-4", "job-5", "job-6", "job-7"]);
+    expect(fetchMock).toHaveBeenCalledTimes(7);
   });
 });
