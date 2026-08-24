@@ -53,17 +53,17 @@ type Edge struct {
 	Path     []string       `json:"path"`
 }
 type Result struct {
-	Nodes             []Node               `json:"nodes"`
-	Edges             []Edge               `json:"edges"`
-	BridgeEdges       []BridgeEdge         `json:"bridgeEdges,omitempty"`
-	CrossChainPaths   [][]NodeRef          `json:"crossChainPaths,omitempty"`
-	Paths             [][]string           `json:"paths,omitempty"`
-	DataThroughBlock  int64                `json:"dataThroughBlock"`
-	DataThroughBlocks map[string]int64     `json:"dataThroughBlocks,omitempty"`
-	DataStatus        string               `json:"dataStatus"`
-	Labels            []risk.InferredLabel `json:"labels,omitempty"`
-	Risk              risk.Result          `json:"risk"`
-	RuleVersion       string               `json:"ruleVersion"`
+	Nodes             []Node               `bson:"nodes" json:"nodes"`
+	Edges             []Edge               `bson:"edges" json:"edges"`
+	BridgeEdges       []BridgeEdge         `bson:"bridgeEdges,omitempty" json:"bridgeEdges,omitempty"`
+	CrossChainPaths   [][]NodeRef          `bson:"crossChainPaths,omitempty" json:"crossChainPaths,omitempty"`
+	Paths             [][]string           `bson:"paths,omitempty" json:"paths,omitempty"`
+	DataThroughBlock  int64                `bson:"dataThroughBlock" json:"dataThroughBlock"`
+	DataThroughBlocks map[string]int64     `bson:"dataThroughBlocks,omitempty" json:"dataThroughBlocks,omitempty"`
+	DataStatus        string               `bson:"dataStatus" json:"dataStatus"`
+	Labels            []risk.InferredLabel `bson:"labels,omitempty" json:"labels,omitempty"`
+	Risk              risk.Result          `bson:"risk" json:"risk"`
+	RuleVersion       string               `bson:"ruleVersion" json:"ruleVersion"`
 }
 
 type Graph struct{ repository Repository }

@@ -378,7 +378,7 @@ func normalizeBSON(value any) any {
 	case primitive.D:
 		result := make(map[string]any, len(value))
 		for _, entry := range value {
-			result[entry.Key] = normalizeBSON(entry.Value)
+			result[traceResultJSONKey(entry.Key)] = normalizeBSON(entry.Value)
 		}
 		return result
 	case primitive.A:
@@ -396,12 +396,25 @@ func normalizeBSON(value any) any {
 	case map[string]any:
 		result := make(map[string]any, len(value))
 		for key, entry := range value {
-			result[key] = normalizeBSON(entry)
+			result[traceResultJSONKey(key)] = normalizeBSON(entry)
 		}
 		return result
 	default:
 		return value
 	}
+}
+
+func traceResultJSONKey(key string) string {
+	legacy := map[string]string{
+		"bridgeedges": "bridgeEdges", "crosschainpaths": "crossChainPaths",
+		"datathroughblock": "dataThroughBlock", "datathroughblocks": "dataThroughBlocks", "datastatus": "dataStatus",
+		"ruleversion": "ruleVersion", "inferredlabels": "inferredLabels", "propagationversion": "propagationVersion",
+		"labeltype": "labelType", "basescore": "baseScore", "txhashes": "txHashes",
+	}
+	if normalized, ok := legacy[key]; ok {
+		return normalized
+	}
+	return key
 }
 
 func (s *Store) SaveTraceJob(ctx context.Context, job TraceJob) error {

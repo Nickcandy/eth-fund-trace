@@ -13,39 +13,39 @@ const (
 )
 
 type InferredLabel struct {
-	Address    string     `json:"address"`
-	Type       string     `json:"type"`
-	Source     string     `json:"source"`
-	Confidence float64    `json:"confidence"`
-	Direction  string     `json:"direction"`
-	Distance   int        `json:"distance"`
-	Path       []string   `json:"path"`
-	Paths      [][]string `json:"paths,omitempty"`
-	TxHashes   []string   `json:"txHashes"`
-	Evidence   []string   `json:"evidence,omitempty"`
+	Address    string     `bson:"address" json:"address"`
+	Type       string     `bson:"type" json:"type"`
+	Source     string     `bson:"source" json:"source"`
+	Confidence float64    `bson:"confidence" json:"confidence"`
+	Direction  string     `bson:"direction" json:"direction"`
+	Distance   int        `bson:"distance" json:"distance"`
+	Path       []string   `bson:"path" json:"path"`
+	Paths      [][]string `bson:"paths,omitempty" json:"paths,omitempty"`
+	TxHashes   []string   `bson:"txHashes" json:"txHashes"`
+	Evidence   []string   `bson:"evidence,omitempty" json:"evidence,omitempty"`
 }
 
 type Evidence struct {
-	Address    string   `json:"address"`
-	LabelType  string   `json:"labelType"`
-	BaseScore  int      `json:"baseScore"`
-	Score      int      `json:"score"`
-	Confidence float64  `json:"confidence"`
-	Distance   int      `json:"distance"`
-	Direction  string   `json:"direction"`
-	Path       []string `json:"path"`
-	TxHashes   []string `json:"txHashes"`
-	Evidence   []string `json:"evidence,omitempty"`
-	Rule       string   `json:"rule"`
+	Address    string   `bson:"address" json:"address"`
+	LabelType  string   `bson:"labelType" json:"labelType"`
+	BaseScore  int      `bson:"baseScore" json:"baseScore"`
+	Score      int      `bson:"score" json:"score"`
+	Confidence float64  `bson:"confidence" json:"confidence"`
+	Distance   int      `bson:"distance" json:"distance"`
+	Direction  string   `bson:"direction" json:"direction"`
+	Path       []string `bson:"path" json:"path"`
+	TxHashes   []string `bson:"txHashes" json:"txHashes"`
+	Evidence   []string `bson:"evidence,omitempty" json:"evidence,omitempty"`
+	Rule       string   `bson:"rule" json:"rule"`
 }
 
 type Result struct {
-	Score              int             `json:"score"`
-	Level              string          `json:"level"`
-	InferredLabels     []InferredLabel `json:"inferredLabels,omitempty"`
-	Evidence           []Evidence      `json:"evidence,omitempty"`
-	RuleVersion        string          `json:"ruleVersion"`
-	PropagationVersion string          `json:"propagationVersion"`
+	Score              int             `bson:"score" json:"score"`
+	Level              string          `bson:"level" json:"level"`
+	InferredLabels     []InferredLabel `bson:"inferredLabels,omitempty" json:"inferredLabels,omitempty"`
+	Evidence           []Evidence      `bson:"evidence,omitempty" json:"evidence,omitempty"`
+	RuleVersion        string          `bson:"ruleVersion" json:"ruleVersion"`
+	PropagationVersion string          `bson:"propagationVersion" json:"propagationVersion"`
 }
 
 type step struct {

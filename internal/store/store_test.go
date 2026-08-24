@@ -8,13 +8,20 @@ import (
 )
 
 func TestNormalizeBSON(t *testing.T) {
-	value := normalizeBSON(bson.D{{Key: "nodes", Value: bson.A{bson.D{{Key: "address", Value: "0x1"}}}}})
+	value := normalizeBSON(bson.D{{Key: "datathroughblock", Value: int64(12)}, {Key: "risk", Value: bson.D{{Key: "ruleversion", Value: "risk-v1"}, {Key: "inferredlabels", Value: bson.A{}}}}, {Key: "nodes", Value: bson.A{bson.D{{Key: "address", Value: "0x1"}}}}})
 	object, ok := value.(map[string]any)
 	if !ok {
 		t.Fatalf("type=%T, want map", value)
 	}
 	if _, ok := object["nodes"].([]any); !ok {
 		t.Fatalf("nodes type=%T, want slice", object["nodes"])
+	}
+	if object["dataThroughBlock"] != int64(12) {
+		t.Fatalf("dataThroughBlock=%v", object["dataThroughBlock"])
+	}
+	risk := object["risk"].(map[string]any)
+	if risk["ruleVersion"] != "risk-v1" {
+		t.Fatalf("risk=%v", risk)
 	}
 }
 
