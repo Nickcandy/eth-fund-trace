@@ -144,15 +144,15 @@ func TestClientNormalizesContractCreation(t *testing.T) {
 	}
 }
 
-func TestClientRejectsTransactionWithoutTarget(t *testing.T) {
+func TestClientSkipsTransactionWithoutTarget(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"status":"1","message":"OK","result":[{"blockNumber":"1","timeStamp":"1","hash":"0xmissing","from":"0xfrom","to":"","contractAddress":"","value":"1","isError":"0"}]}`))
 	}))
 	defer server.Close()
 
-	_, err := NewClient(Config{BaseURL: server.URL, HTTPClient: server.Client()}).ListTransactions(context.Background(), "0xfrom", 0, 1)
-	if !errors.Is(err, ErrMalformedResponse) {
-		t.Fatalf("error = %v, want malformed response", err)
+	transfers, err := NewClient(Config{BaseURL: server.URL, HTTPClient: server.Client()}).ListTransactions(context.Background(), "0xfrom", 0, 1)
+	if err != nil || len(transfers) != 0 {
+		t.Fatalf("transfers=%+v error=%v, want skipped row", transfers, err)
 	}
 }
 

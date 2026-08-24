@@ -38,7 +38,6 @@ func normalize(items []json.RawMessage, action string) ([]store.Transfer, error)
 
 func normalizeWithState(items []json.RawMessage, action string, tokenOccurrences map[string]int64) ([]store.Transfer, error) {
 	transfers := make([]store.Transfer, 0, len(items))
-	missingRequired := 0
 	for _, item := range items {
 		var raw rawTransfer
 		if err := json.Unmarshal(item, &raw); err != nil {
@@ -61,15 +60,11 @@ func normalizeWithState(items []json.RawMessage, action string, tokenOccurrences
 			if errors.Is(err, errMissingRequiredTransactionField) {
 				// Etherscan occasionally emits incomplete contract-creation/internal rows.
 				// Keep the valid rows from this page and let the next scan retry the range.
-				missingRequired++
 				continue
 			}
 			return nil, err
 		}
 		transfers = append(transfers, transfer)
-	}
-	if missingRequired > 0 && len(transfers) == 0 {
-		return nil, fmt.Errorf("%w: %w", ErrMalformedResponse, errMissingRequiredTransactionField)
 	}
 	return transfers, nil
 }
