@@ -15,6 +15,8 @@ type Address struct {
 	EarliestSyncedBlock  int64     `bson:"earliestSyncedBlock" json:"earliestSyncedBlock"`
 	HistorySyncedToBlock int64     `bson:"historySyncedToBlock" json:"historySyncedToBlock"`
 	LatestSyncedBlock    int64     `bson:"latestSyncedBlock" json:"latestSyncedBlock"`
+	InternalSyncedFrom   int64     `bson:"internalSyncedFrom,omitempty" json:"internalSyncedFrom,omitempty"`
+	InternalSyncedTo     int64     `bson:"internalSyncedTo,omitempty" json:"internalSyncedTo,omitempty"`
 	LastSyncedAt         time.Time `bson:"lastSyncedAt,omitempty" json:"lastSyncedAt,omitempty"`
 	SyncStatus           string    `bson:"syncStatus" json:"syncStatus"`
 	SyncError            string    `bson:"syncError,omitempty" json:"syncError,omitempty"`
@@ -83,30 +85,31 @@ type TraceJob struct {
 }
 
 type SyncJob struct {
-	ID                  primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	Chain               string             `bson:"chain" json:"chain"`
-	ChainID             int64              `bson:"chainId" json:"chainId"`
-	Address             string             `bson:"address" json:"address"`
-	StartBlock          int64              `bson:"startBlock" json:"startBlock"`
-	NeighborLimit       int                `bson:"neighborLimit" json:"neighborLimit"`
-	Status              string             `bson:"status" json:"status"`
-	CreatedAt           time.Time          `bson:"createdAt" json:"createdAt"`
-	StartedAt           time.Time          `bson:"startedAt,omitempty" json:"startedAt,omitempty"`
-	FinishedAt          time.Time          `bson:"finishedAt,omitempty" json:"finishedAt,omitempty"`
-	DurationMS          int64              `bson:"durationMs,omitempty" json:"durationMs,omitempty"`
-	SafeHead            int64              `bson:"safeHead,omitempty" json:"safeHead,omitempty"`
-	TotalAddresses      int                `bson:"totalAddresses" json:"totalAddresses"`
-	CompletedAddresses  int                `bson:"completedAddresses" json:"completedAddresses"`
-	ProcessedAddresses  int                `bson:"processedAddresses" json:"processedAddresses"`
-	CachedAddresses     int                `bson:"cachedAddresses" json:"cachedAddresses"`
-	Fetched             int64              `bson:"fetched" json:"fetched"`
-	ActionCounts        map[string]int64   `bson:"actionCounts,omitempty" json:"actionCounts,omitempty"`
-	Progress            SyncProgress       `bson:"progress,omitempty" json:"progress,omitempty"`
-	SuccessfulNeighbors []string           `bson:"successfulNeighbors,omitempty" json:"successfulNeighbors,omitempty"`
-	FailedNeighbors     []SyncFailure      `bson:"failedNeighbors,omitempty" json:"failedNeighbors,omitempty"`
-	ErrorCode           string             `bson:"errorCode,omitempty" json:"errorCode,omitempty"`
-	Error               string             `bson:"error,omitempty" json:"error,omitempty"`
-	Retryable           bool               `bson:"retryable" json:"retryable"`
+	ID                     primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Chain                  string             `bson:"chain" json:"chain"`
+	ChainID                int64              `bson:"chainId" json:"chainId"`
+	Address                string             `bson:"address" json:"address"`
+	StartBlock             int64              `bson:"startBlock" json:"startBlock"`
+	NeighborLimit          int                `bson:"neighborLimit" json:"neighborLimit"`
+	InternalLookbackBlocks int64              `bson:"internalLookbackBlocks" json:"internalLookbackBlocks"`
+	Status                 string             `bson:"status" json:"status"`
+	CreatedAt              time.Time          `bson:"createdAt" json:"createdAt"`
+	StartedAt              time.Time          `bson:"startedAt,omitempty" json:"startedAt,omitempty"`
+	FinishedAt             time.Time          `bson:"finishedAt,omitempty" json:"finishedAt,omitempty"`
+	DurationMS             int64              `bson:"durationMs,omitempty" json:"durationMs,omitempty"`
+	SafeHead               int64              `bson:"safeHead,omitempty" json:"safeHead,omitempty"`
+	TotalAddresses         int                `bson:"totalAddresses" json:"totalAddresses"`
+	CompletedAddresses     int                `bson:"completedAddresses" json:"completedAddresses"`
+	ProcessedAddresses     int                `bson:"processedAddresses" json:"processedAddresses"`
+	CachedAddresses        int                `bson:"cachedAddresses" json:"cachedAddresses"`
+	Fetched                int64              `bson:"fetched" json:"fetched"`
+	ActionCounts           map[string]int64   `bson:"actionCounts,omitempty" json:"actionCounts,omitempty"`
+	Progress               SyncProgress       `bson:"progress,omitempty" json:"progress,omitempty"`
+	SuccessfulNeighbors    []string           `bson:"successfulNeighbors,omitempty" json:"successfulNeighbors,omitempty"`
+	FailedNeighbors        []SyncFailure      `bson:"failedNeighbors,omitempty" json:"failedNeighbors,omitempty"`
+	ErrorCode              string             `bson:"errorCode,omitempty" json:"errorCode,omitempty"`
+	Error                  string             `bson:"error,omitempty" json:"error,omitempty"`
+	Retryable              bool               `bson:"retryable" json:"retryable"`
 }
 
 type SyncProgress struct {

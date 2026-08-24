@@ -30,7 +30,8 @@ type boundarySource struct {
 
 type recordingSource struct {
 	fakeSource
-	ranges [][2]int64
+	ranges       [][2]int64
+	actionRanges map[string][][2]int64
 }
 
 func (s *recordingSource) ListTransactions(_ context.Context, address string, start, end int64) ([]store.Transfer, error) {
@@ -39,7 +40,25 @@ func (s *recordingSource) ListTransactions(_ context.Context, address string, st
 }
 func (s *recordingSource) ListTransactionsWithProgress(ctx context.Context, address string, start, end int64, progress etherscan.ProgressFunc) ([]store.Transfer, error) {
 	s.ranges = append(s.ranges, [2]int64{start, end})
+	s.record("txlist", start, end)
 	return s.transfersWithProgress(ctx, address, "txlist", start, end, progress)
+}
+
+func (s *recordingSource) ListInternalTransactionsWithProgress(ctx context.Context, address string, start, end int64, progress etherscan.ProgressFunc) ([]store.Transfer, error) {
+	s.record("txlistinternal", start, end)
+	return s.transfersWithProgress(ctx, address, "txlistinternal", start, end, progress)
+}
+
+func (s *recordingSource) ListTokenTransfersWithProgress(ctx context.Context, address string, start, end int64, progress etherscan.ProgressFunc) ([]store.Transfer, error) {
+	s.record("tokentx", start, end)
+	return s.transfersWithProgress(ctx, address, "tokentx", start, end, progress)
+}
+
+func (s *recordingSource) record(action string, start, end int64) {
+	if s.actionRanges == nil {
+		s.actionRanges = make(map[string][][2]int64)
+	}
+	s.actionRanges[action] = append(s.actionRanges[action], [2]int64{start, end})
 }
 
 func (s *boundarySource) LatestBlock(context.Context) (int64, error) { return 20, nil }
@@ -132,16 +151,21 @@ type memoryRepository struct {
 	omitEmptyActionCounts bool
 }
 
-func (r *memoryRepository) FindSyncCheckpoints(_ context.Context, chain, address string, startBlock int64) (map[string]int64, error) {
+func (r *memoryRepository) FindSyncCheckpoints(_ context.Context, chain, address string, startBlock, internalLookbackBlocks int64) (map[string]int64, error) {
 	var latest store.SyncJob
 	for _, job := range r.jobs {
-		if job.Chain == chain && job.Address == address && job.StartBlock == startBlock && job.Status == "failed" && job.CreatedAt.After(latest.CreatedAt) {
+		if job.Chain == chain && job.Address == address && job.StartBlock == startBlock && job.CreatedAt.After(latest.CreatedAt) {
 			latest = job
 		}
 	}
 	result := map[string]int64{}
+	if latest.Status != "failed" {
+		return result, nil
+	}
 	for k, v := range latest.Progress.ActionCheckpoints {
-		result[k] = v
+		if k != "txlistinternal" || latest.InternalLookbackBlocks == internalLookbackBlocks {
+			result[k] = v
+		}
 	}
 	return result, nil
 }
@@ -166,11 +190,12 @@ func (r *memoryRepository) SetAddressSyncing(_ context.Context, chain string, ch
 	return nil
 }
 
-func (r *memoryRepository) CompleteAddressSync(_ context.Context, _, address string, earliest, latest int64, syncedAt time.Time) error {
+func (r *memoryRepository) CompleteAddressSync(_ context.Context, _, address string, earliest, latest, internalFrom, internalTo int64, syncedAt time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	value := r.addresses[address]
 	value.EarliestSyncedBlock, value.LatestSyncedBlock, value.HistorySyncedToBlock = earliest, latest, latest
+	value.InternalSyncedFrom, value.InternalSyncedTo = internalFrom, internalTo
 	value.LastSyncedAt, value.SyncStatus = syncedAt, "synced"
 	r.addresses[address] = value
 	return nil
@@ -337,6 +362,65 @@ func TestManagerUsesChainDefaultStartBlock(t *testing.T) {
 		if job.StartBlock != test.want {
 			t.Fatalf("chain %s start block = %d, want %d", test.chain, job.StartBlock, test.want)
 		}
+	}
+}
+
+func TestManagerLimitsOnlyInternalTransactionLookback(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	source := &recordingSource{fakeSource: fakeSource{latest: 1_000_000}}
+	repository := newMemoryRepository()
+	manager := New(source, repository, Config{QueueSize: 10, InternalLookbackBlocks: 100_000})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = manager.Run(ctx) }()
+
+	job, err := manager.Enqueue(context.Background(), Request{Chain: "ethereum", Address: seed, StartBlock: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job = waitForJob(t, manager, job.ID.Hex())
+	if job.Status != "succeeded" {
+		t.Fatalf("job=%+v", job)
+	}
+	if got := source.actionRanges["txlist"]; fmt.Sprint(got) != fmt.Sprint([][2]int64{{1, 1_000_000}}) {
+		t.Fatalf("txlist ranges=%v", got)
+	}
+	if got := source.actionRanges["txlistinternal"]; fmt.Sprint(got) != fmt.Sprint([][2]int64{{900_001, 1_000_000}}) {
+		t.Fatalf("txlistinternal ranges=%v", got)
+	}
+	if got := source.actionRanges["tokentx"]; fmt.Sprint(got) != fmt.Sprint([][2]int64{{1, 1_000_000}}) {
+		t.Fatalf("tokentx ranges=%v", got)
+	}
+}
+
+func TestManagerBackfillsInternalHistoryWhenLookbackExpands(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	source := &recordingSource{fakeSource: fakeSource{latest: 1_000_000}}
+	repository := newMemoryRepository()
+	repository.addresses[seed] = store.Address{
+		Chain: "ethereum", Address: seed, SyncStatus: "synced",
+		EarliestSyncedBlock: 1, LatestSyncedBlock: 1_000_000,
+		InternalSyncedFrom: 900_001, InternalSyncedTo: 1_000_000,
+		LastSyncedAt: time.Now(),
+	}
+	manager := New(source, repository, Config{QueueSize: 10, InternalLookbackBlocks: 0})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = manager.Run(ctx) }()
+
+	job, err := manager.Enqueue(context.Background(), Request{Chain: "ethereum", Address: seed, StartBlock: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job = waitForJob(t, manager, job.ID.Hex())
+	if job.Status != "succeeded" {
+		t.Fatalf("job=%+v", job)
+	}
+	if got := source.actionRanges["txlistinternal"]; fmt.Sprint(got) != fmt.Sprint([][2]int64{{1, 900_000}}) {
+		t.Fatalf("txlistinternal ranges=%v", got)
+	}
+	if len(source.actionRanges["txlist"]) != 0 || len(source.actionRanges["tokentx"]) != 0 {
+		t.Fatalf("full-range actions should remain cached: %v", source.actionRanges)
 	}
 }
 

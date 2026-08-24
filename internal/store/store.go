@@ -128,13 +128,15 @@ func (s *Store) SetAddressSyncing(ctx context.Context, chain string, chainID int
 	return err
 }
 
-func (s *Store) CompleteAddressSync(ctx context.Context, chain, address string, earliest, latest int64, syncedAt time.Time) error {
+func (s *Store) CompleteAddressSync(ctx context.Context, chain, address string, earliest, latest, internalFrom, internalTo int64, syncedAt time.Time) error {
 	_, err := s.db.Collection(AddressesCollection).UpdateOne(ctx,
 		bson.D{{Key: "chain", Value: chain}, {Key: "address", Value: address}},
 		bson.D{{Key: "$set", Value: bson.D{
 			{Key: "earliestSyncedBlock", Value: earliest},
 			{Key: "historySyncedToBlock", Value: latest},
 			{Key: "latestSyncedBlock", Value: latest},
+			{Key: "internalSyncedFrom", Value: internalFrom},
+			{Key: "internalSyncedTo", Value: internalTo},
 			{Key: "lastSyncedAt", Value: syncedAt},
 			{Key: "syncStatus", Value: "synced"},
 			{Key: "syncError", Value: ""},
@@ -231,17 +233,26 @@ func (s *Store) GetSyncJob(ctx context.Context, id primitive.ObjectID) (SyncJob,
 	return job, err
 }
 
-func (s *Store) FindSyncCheckpoints(ctx context.Context, chain, address string, startBlock int64) (map[string]int64, error) {
+func (s *Store) FindSyncCheckpoints(ctx context.Context, chain, address string, startBlock, internalLookbackBlocks int64) (map[string]int64, error) {
 	var job SyncJob
-	err := s.db.Collection(SyncJobsCollection).FindOne(ctx, bson.D{{Key: "chain", Value: chain}, {Key: "address", Value: address}, {Key: "startBlock", Value: startBlock}, {Key: "status", Value: "failed"}}, options.FindOne().SetSort(bson.D{{Key: "createdAt", Value: -1}})).Decode(&job)
+	err := s.db.Collection(SyncJobsCollection).FindOne(ctx, bson.D{{Key: "chain", Value: chain}, {Key: "address", Value: address}, {Key: "startBlock", Value: startBlock}}, options.FindOne().SetSort(bson.D{{Key: "createdAt", Value: -1}})).Decode(&job)
 	if errors.Is(err, mongo.ErrNoDocuments) {
 		return map[string]int64{}, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	if job.Status != "failed" {
+		return map[string]int64{}, nil
+	}
 	if len(job.Progress.ActionCheckpoints) > 0 {
-		return job.Progress.ActionCheckpoints, nil
+		result := make(map[string]int64, len(job.Progress.ActionCheckpoints))
+		for action, checkpoint := range job.Progress.ActionCheckpoints {
+			if action != "txlistinternal" || job.InternalLookbackBlocks == internalLookbackBlocks {
+				result[action] = checkpoint
+			}
+		}
+		return result, nil
 	}
 	return legacySyncCheckpoints(job), nil
 }
