@@ -14,7 +14,7 @@ describe("BottomPanel sync progress", () => {
       progress: { currentAddress: "0xd152f549545093347a162dce210e7293f1452150", currentAction: "txlist", rangeStart: 6562352, rangeEnd: 25815903, currentPage: 42, pagesFetched: 142, recordsRead: 14200, recordsWritten: 9600, splitCount: 1 },
     };
     render(<BottomPanel facts={[]} onMore={() => undefined} syncJobs={[job]} bridges={[]} chain="ethereum" address={job.address} onLabel={async()=>undefined} onBridge={async()=>undefined}/>);
-    expect(screen.getByText("第 42 页")).toBeVisible();
+    expect(screen.getByText("当前区间第 42 页")).toBeVisible();
     expect(screen.getByText("14,200 条")).toBeVisible();
     expect(screen.getByText("9,600 条")).toBeVisible();
     expect(screen.getByText("区间拆分")).toBeVisible();
@@ -47,6 +47,6 @@ describe("BottomPanel sync progress", () => {
     expect(screen.getByText("1 / 2 已处理")).toBeVisible();
     expect(screen.getAllByText(seed).length).toBeGreaterThan(0);
     expect(screen.getAllByText(neighbor).length).toBeGreaterThan(0);
-    expect(screen.getByText("内部 ETH · 第 7 页")).toBeVisible();
+    expect(screen.getByText("内部 ETH · 累计 6 页 / 6,000 条")).toBeVisible();
   });
 });
