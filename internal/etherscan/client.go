@@ -23,7 +23,35 @@ var (
 	ErrMalformedResponse = errors.New("malformed etherscan response")
 	ErrPageLimit         = errors.New("etherscan page limit exceeded")
 	ErrTransient         = errors.New("transient etherscan error")
+	ErrNotFound          = errors.New("etherscan object not found")
+	ErrPending           = errors.New("etherscan receipt pending")
 )
+
+// RPCTransaction is the subset of an Ethereum transaction used by analysis.
+type RPCTransaction struct {
+	Hash        string `json:"hash"`
+	From        string `json:"from"`
+	To          string `json:"to"`
+	Value       string `json:"value"`
+	Input       string `json:"input"`
+	BlockNumber string `json:"blockNumber"`
+}
+
+// RPCLog is a raw receipt log returned by the Etherscan proxy.
+type RPCLog struct {
+	Address  string   `json:"address"`
+	Topics   []string `json:"topics"`
+	Data     string   `json:"data"`
+	LogIndex string   `json:"logIndex"`
+}
+
+// RPCReceipt is the subset of a transaction receipt used by analysis.
+type RPCReceipt struct {
+	TransactionHash string   `json:"transactionHash"`
+	BlockNumber     string   `json:"blockNumber"`
+	Status          string   `json:"status"`
+	Logs            []RPCLog `json:"logs"`
+}
 
 type PageLimitError struct {
 	Action    string
@@ -82,6 +110,14 @@ type APIClient struct {
 	client  *http.Client
 	limiter *rate.Limiter
 }
+
+type redactedError struct {
+	err     error
+	message string
+}
+
+func (e redactedError) Error() string { return e.message }
+func (e redactedError) Unwrap() error { return e.err }
 
 func NewClient(config Config) *APIClient {
 	if config.Chain == "" {
@@ -226,6 +262,95 @@ func (c *APIClient) LatestBlock(ctx context.Context) (int64, error) {
 	return block, nil
 }
 
+// TransactionByHash fetches a transaction through Etherscan's proxy API.
+func (c *APIClient) TransactionByHash(ctx context.Context, txHash string) (RPCTransaction, error) {
+	var transaction RPCTransaction
+	found, err := c.proxy(ctx, "eth_getTransactionByHash", map[string]string{"txhash": txHash}, &transaction)
+	if err != nil {
+		return RPCTransaction{}, err
+	}
+	if !found {
+		return RPCTransaction{}, ErrNotFound
+	}
+	return transaction, nil
+}
+
+// TransactionReceipt fetches a confirmed receipt through Etherscan's proxy API.
+func (c *APIClient) TransactionReceipt(ctx context.Context, txHash string) (RPCReceipt, error) {
+	var receipt RPCReceipt
+	found, err := c.proxy(ctx, "eth_getTransactionReceipt", map[string]string{"txhash": txHash}, &receipt)
+	if err != nil {
+		return RPCReceipt{}, err
+	}
+	if !found {
+		return RPCReceipt{}, ErrPending
+	}
+	return receipt, nil
+}
+
+// Call executes a read-only eth_call at the latest block.
+func (c *APIClient) Call(ctx context.Context, to, data string) (string, error) {
+	var result string
+	found, err := c.proxy(ctx, "eth_call", map[string]string{"to": to, "data": data, "tag": "latest"}, &result)
+	if err != nil {
+		return "", err
+	}
+	if !found || result == "" {
+		return "", fmt.Errorf("%w: empty eth_call result", ErrMalformedResponse)
+	}
+	return result, nil
+}
+
+func (c *APIClient) proxy(ctx context.Context, action string, values map[string]string, target any) (bool, error) {
+	endpoint, err := url.Parse(c.config.BaseURL)
+	if err != nil {
+		return false, fmt.Errorf("%w: invalid base URL", ErrMalformedResponse)
+	}
+	query := endpoint.Query()
+	query.Set("chainid", strconv.FormatInt(c.config.ChainID, 10))
+	query.Set("module", "proxy")
+	query.Set("action", action)
+	query.Set("apikey", c.config.APIKey)
+	for key, value := range values {
+		query.Set(key, value)
+	}
+	endpoint.RawQuery = query.Encode()
+	body, err := c.get(ctx, endpoint.String())
+	if err != nil {
+		return false, c.redact(err)
+	}
+	var envelope struct {
+		Result json.RawMessage `json:"result"`
+		Error  *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return false, fmt.Errorf("%w: invalid proxy JSON", ErrMalformedResponse)
+	}
+	if envelope.Error != nil {
+		if isRateLimited(envelope.Error.Message, nil) {
+			return false, fmt.Errorf("%w: proxy response", ErrRateLimited)
+		}
+		return false, c.redact(fmt.Errorf("%w: proxy error %d: %s", ErrAPI, envelope.Error.Code, envelope.Error.Message))
+	}
+	if bytes.Equal(bytes.TrimSpace(envelope.Result), []byte("null")) || len(envelope.Result) == 0 {
+		return false, nil
+	}
+	if err := json.Unmarshal(envelope.Result, target); err != nil {
+		return false, fmt.Errorf("%w: invalid proxy result", ErrMalformedResponse)
+	}
+	return true, nil
+}
+
+func (c *APIClient) redact(err error) error {
+	if err == nil || c.config.APIKey == "" || !strings.Contains(err.Error(), c.config.APIKey) {
+		return err
+	}
+	return redactedError{err: err, message: strings.ReplaceAll(err.Error(), c.config.APIKey, "[redacted]")}
+}
+
 func (c *APIClient) fetchPage(ctx context.Context, address string, startBlock, endBlock int64, page int, action string) ([]json.RawMessage, error) {
 	endpoint, err := url.Parse(c.config.BaseURL)
 	if err != nil {
@@ -322,7 +447,7 @@ func (c *APIClient) get(ctx context.Context, endpoint string) ([]byte, error) {
 		}
 		return body, nil
 	}
-	return nil, lastErr
+	return nil, c.redact(lastErr)
 }
 
 func waitContext(ctx context.Context, duration time.Duration) error {

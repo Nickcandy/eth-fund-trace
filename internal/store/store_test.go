@@ -36,6 +36,8 @@ func TestModelBSONFields(t *testing.T) {
 		{name: "sync job", model: SyncJob{}, required: []string{"chain", "chainId", "address", "status", "createdAt", "fetched"}},
 		{name: "address profile", model: AddressProfile{}, required: []string{"chain", "chainId", "address", "ruleVersion", "dataThroughBlock", "features", "score", "classification", "suspectedHotWallet", "computedAt"}},
 		{name: "trace job", model: TraceJob{}, required: []string{"chain", "seedAddress", "direction", "depth", "topN", "status", "ruleVersion"}},
+		{name: "transaction analysis", model: TransactionAnalysis{}, required: []string{"chain", "chainId", "txHash", "value", "transfers", "swaps", "wraps", "quality", "analyzedAt"}},
+		{name: "pool metadata", model: PoolMetadata{}, required: []string{"chain", "pool", "token0", "token1", "fee", "factory", "verified", "observedAt"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -57,7 +59,7 @@ func TestModelBSONFields(t *testing.T) {
 }
 
 func TestCollectionNames(t *testing.T) {
-	if AddressesCollection != "addresses" || TransfersCollection != "transfers" || LabelsCollection != "labels" || SyncJobsCollection != "sync_jobs" || ProfilesCollection != "address_profiles" || TraceJobsCollection != "trace_jobs" {
+	if AddressesCollection != "addresses" || TransfersCollection != "transfers" || LabelsCollection != "labels" || SyncJobsCollection != "sync_jobs" || ProfilesCollection != "address_profiles" || TraceJobsCollection != "trace_jobs" || TransactionAnalysesCollection != "transaction_analyses" || PoolMetadataCollection != "pool_metadata" {
 		t.Fatal("unexpected collection name")
 	}
 }
@@ -78,5 +80,10 @@ func TestIndexModels(t *testing.T) {
 	}
 	if unique := indexes[LabelsCollection][0].Options.Unique; unique == nil || !*unique {
 		t.Fatal("label identity index must be unique")
+	}
+	for _, collection := range []string{TransactionAnalysesCollection, PoolMetadataCollection} {
+		if unique := indexes[collection][0].Options.Unique; unique == nil || !*unique {
+			t.Fatalf("%s identity index must be unique", collection)
+		}
 	}
 }

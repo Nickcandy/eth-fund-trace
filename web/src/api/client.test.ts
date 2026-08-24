@@ -11,4 +11,11 @@ describe("API authentication", () => {
     await api.labels("ethereum", "0x0000000000000000000000000000000000000001");
     expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe("Bearer secret");
   });
+
+  it("encodes the transaction hash route", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({}), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await api.transaction("ethereum", "0xabc");
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/transactions/0xabc?chain=ethereum");
+  });
 });

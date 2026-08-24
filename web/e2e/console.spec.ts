@@ -19,12 +19,24 @@ const result = {
   bridgeEdges: [{ depth: 2, path: [{ chain: "ethereum", address: downstream }, { chain: "base", address: baseAddress }], link: { sourceChain: "ethereum", sourceChainId: 1, sourceTxHash: "0x" + "c".repeat(64), sourceLogIndex: 2, sourceAddress: downstream, targetChain: "base", targetChainId: 8453, targetTxHash: "0x" + "d".repeat(64), targetLogIndex: 3, targetAddress: baseAddress, bridgeAddress: "0x0000000000000000000000000000000000000099", sourceAsset: token, sourceAmount: "2500000", targetAsset: token, targetAmount: "2490000", status: "confirmed", evidence: ["case-42"] } }],
   paths: [[seed, upstream], [seed, downstream]], crossChainPaths: [[{chain:"ethereum",address:seed},{chain:"base",address:baseAddress}]], dataThroughBlock: 19876543, dataThroughBlocks: { ethereum: 19876543, base: 18765432 }, dataStatus: "synced", labels: [{ address: upstream, type: "exchange", source: "propagation", confidence: .8, direction: "upstream", distance: 1, path: [seed, upstream], txHashes: [facts[0].txHash] }], risk: { score: 70, level: "known_high", inferredLabels: [], evidence: [{ address: seed, labelType: "phishing", baseScore: 70, score: 70, confidence: 1, distance: 0, direction: "direct", path: [seed], txHashes: [facts[0].txHash], rule: "risk-v1" }], ruleVersion: "risk-v1", propagationVersion: "propagation-v1" }, ruleVersion: "trace-v2",
 };
+const transactionAnalysis = {
+  chain: "ethereum", chainId: 1, txHash: "0x" + "e".repeat(64), blockNumber: 19876543, from: seed,
+  to: "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45", value: "0", input: "0x1234", succeeded: true,
+  entryContract: "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45", entryContractName: "Uniswap SwapRouter02",
+  transfers: [{ token, from: "0x0000000000000000000000000000000000000020", to: downstream, amount: "2490000", logIndex: 11 }],
+  swaps: [
+    { pool: "0x0000000000000000000000000000000000000020", protocol: "uniswap", version: "v3", verified: true, sender: seed, recipient: downstream, tokenIn: "0x0000000000000000000000000000000000000030", tokenOut: token, amountIn: "1000000000000000000", amountOut: "2500000", fee: 3000, logIndex: 10, outputAddress: downstream, evidence: ["receipt Swap log", "pool factory() matches official Uniswap V3 Factory"] },
+  ],
+  wraps: [{ type: "deposit", account: seed, amount: "1000000000000000000", logIndex: 4, evidence: "WETH contract receipt log" }],
+  finalOutputAddress: downstream, quality: { status: "complete", ambiguousRoute: false, evidence: ["transaction", "receipt", "verified Uniswap V3 pool logs"] }, analyzedAt: "2026-08-24T00:00:00Z",
+};
 
 async function mockAPI(page: Page) {
   jobPolls = 0;
   await page.route("**/api/v1/**", async route => {
     const url = new URL(route.request().url()); const path = url.pathname;
     const json = (body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+    if (path.startsWith("/api/v1/transactions/")) return json(transactionAnalysis);
     if (path === "/api/v1/trace") { const address = url.searchParams.get("address"); return json({ traceJobId: address?.endsWith("9") ? "job-fail" : address?.endsWith("8") ? "job-partial" : traceJobID, status: "queued" }, 202); }
     if (path === "/api/v1/trace-jobs/job-fail") return json({ id: "job-fail", chain: "ethereum", seedAddress: seed, direction: "both", depth: 3, topN: 10, asset: "all", status: "failed", createdAt: "2026-08-22T00:00:00Z", currentDepth: 1, visitedNodes: 2, edgeCount: 1, dataThroughBlock: 0, ruleVersion: "trace-v2", errorCode: "sync_failed", error: "上游同步失败", retryable: true });
     if (path === "/api/v1/trace-jobs/job-partial") return json({ id: "job-partial", chain: "ethereum", seedAddress: seed, direction: "both", depth: 3, topN: 10, asset: "all", status: "partial", createdAt: "2026-08-22T00:00:00Z", currentDepth: 2, visitedNodes: 4, edgeCount: 3, result, dataThroughBlock: 19876543, ruleVersion: "trace-v2", errorCode: "neighbor_sync_failed", error: "一个邻居同步失败", retryable: true });
@@ -47,7 +59,7 @@ test("creates an async trace and renders upstream, downstream, and bridge eviden
   await expect(page.getByText("分析完成")).toBeVisible({ timeout: 10_000 });
   await expect(page.locator(".fund-node")).toHaveCount(4); await expect(page.getByText("ETHEREUM", { exact: true })).toBeVisible(); await expect(page.getByText("BASE", { exact: true })).toBeVisible();
   const box = await page.getByTestId("graph-canvas").boundingBox(); expect(box?.width).toBeGreaterThan(250); expect(box?.height).toBeGreaterThan(250);
-  await page.locator(".edge-label").first().click(); await expect(page.getByRole("heading", { name: "资金边详情" })).toBeVisible(); await expect(page.getByText("交易哈希")).toBeVisible();
+  await page.locator(".edge-label").first().click(); await expect(page.getByRole("heading", { name: "资金边详情" })).toBeVisible(); await expect(page.getByRole("heading", { name: "交易哈希" })).toBeVisible();
   await expect(page.locator(".react-flow__edge").last().locator(".react-flow__edge-path")).toHaveCSS("stroke-dasharray", "8px, 6px");
   await page.getByRole("button", { name: /桥接关系/ }).click(); await expect(page.getByText("Ethereum → Base")).toBeVisible();
   await page.screenshot({ path: test.info().outputPath("analysis-console.png"), fullPage: true });
@@ -82,4 +94,19 @@ test("keeps partial trace results visible with a warning", async ({ page }) => {
   await page.getByRole("button", { name: "开始分析" }).click();
   await expect(page.getByText("部分数据可用")).toBeVisible();
   await expect(page.locator(".fund-node")).toHaveCount(4);
+});
+
+test("analyzes a V3 transaction and continues with the output address", async ({ page }) => {
+  await page.getByRole("button", { name: "交易哈希" }).click();
+  await page.getByLabel("交易哈希").fill(transactionAnalysis.txHash);
+  await page.getByRole("button", { name: "开始分析" }).click();
+  await expect(page.getByRole("heading", { name: "Uniswap SwapRouter02" })).toBeVisible();
+  await expect(page.getByText("Uniswap V3", { exact: true })).toBeVisible();
+  await expect(page.getByText("包装 ETH")).toBeVisible();
+  const view = page.locator(".transaction-view");
+  const box = await view.boundingBox(); const viewport = page.viewportSize()!;
+  expect(box!.x).toBeGreaterThanOrEqual(0); expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width + 1);
+  await page.getByRole("button", { name: /继续追踪/ }).click();
+  await expect(page.getByLabel("分析地址")).toHaveValue(downstream);
+  await expect(page.getByText("分析完成")).toBeVisible({ timeout: 10_000 });
 });

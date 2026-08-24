@@ -159,6 +159,28 @@ export interface TraceQuery {
   chain: Chain; address: string; direction: Direction; depth: number; topN: number; asset: string;
 }
 
+export interface ReceiptTransfer {
+  token: string; from: string; to: string; amount: string; logIndex: number;
+}
+
+export interface SwapEvent {
+  pool: string; protocol?: string; version?: string; verified: boolean; sender: string; recipient: string;
+  tokenIn?: string; tokenOut?: string; amountIn?: string; amountOut?: string; fee?: number; logIndex: number;
+  outputAddress?: string; evidence: string[];
+}
+
+export interface WrapEvent {
+  type: "deposit" | "withdrawal"; account: string; amount: string; logIndex: number; evidence: string;
+}
+
+export interface TransactionAnalysis {
+  chain: "ethereum"; chainId: 1; txHash: string; blockNumber: number; from: string; to: string; value: string;
+  input: string; succeeded: boolean; entryContract?: string; entryContractName?: string; transfers: ReceiptTransfer[];
+  swaps: SwapEvent[]; wraps: WrapEvent[]; finalOutputAddress?: string;
+  quality: { status: "complete" | "partial"; ambiguousRoute: boolean; evidence: string[]; issues?: string[] };
+  analyzedAt: string;
+}
+
 export interface LabelInput {
   chain: Chain; address: string; type: string; riskLevel?: "low" | "medium" | "high"; confidence: number;
   source: "manual" | "public-list"; note?: string; evidence: string[];

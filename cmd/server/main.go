@@ -19,6 +19,7 @@ import (
 	"github.com/Nickcandy/eth-fund-trace/internal/store"
 	"github.com/Nickcandy/eth-fund-trace/internal/syncer"
 	"github.com/Nickcandy/eth-fund-trace/internal/tracer"
+	"github.com/Nickcandy/eth-fund-trace/internal/transactionanalysis"
 	"github.com/labstack/echo/v4"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -60,7 +61,8 @@ func run(parent context.Context) error {
 	ethereumConfig.Chain, ethereumConfig.ChainID = "ethereum", 1
 	baseConfig := clientConfig
 	baseConfig.Chain, baseConfig.ChainID = "base", 8453
-	etherscanClients := map[string]syncer.Source{"ethereum": etherscan.NewClient(ethereumConfig), "base": etherscan.NewClient(baseConfig)}
+	ethereumClient := etherscan.NewClient(ethereumConfig)
+	etherscanClients := map[string]syncer.Source{"ethereum": ethereumClient, "base": etherscan.NewClient(baseConfig)}
 	addressProfiler := profile.New(appStore, time.Now)
 	syncManager := syncer.NewMulti(etherscanClients, appStore, syncer.Config{
 		CacheTTL: time.Duration(cfg.SyncCacheTTLMinutes) * time.Minute, Confirmations: int64(cfg.SyncConfirmations), QueueSize: cfg.SyncQueueSize,
@@ -85,6 +87,7 @@ func run(parent context.Context) error {
 	e.GET("/api/v1/trace", traceHandler.Enqueue)
 	e.GET("/api/v1/trace-jobs/:id", traceHandler.Job)
 	e.GET("/api/v1/risk", httpapi.NewRiskHandler(traceManager).Get)
+	e.GET("/api/v1/transactions/:txHash", httpapi.NewTransactionHandler(transactionanalysis.New(ethereumClient, appStore, time.Now)).Get)
 	labelHandler := httpapi.NewLabelHandler(appStore)
 	e.POST("/api/v1/labels", labelHandler.Create)
 	e.GET("/api/v1/labels", labelHandler.List)

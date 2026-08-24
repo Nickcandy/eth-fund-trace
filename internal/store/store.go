@@ -12,13 +12,15 @@ import (
 )
 
 const (
-	AddressesCollection       = "addresses"
-	TransfersCollection       = "transfers"
-	LabelsCollection          = "labels"
-	SyncJobsCollection        = "sync_jobs"
-	ProfilesCollection        = "address_profiles"
-	TraceJobsCollection       = "trace_jobs"
-	CrossChainLinksCollection = "cross_chain_links"
+	AddressesCollection           = "addresses"
+	TransfersCollection           = "transfers"
+	LabelsCollection              = "labels"
+	SyncJobsCollection            = "sync_jobs"
+	ProfilesCollection            = "address_profiles"
+	TraceJobsCollection           = "trace_jobs"
+	CrossChainLinksCollection     = "cross_chain_links"
+	TransactionAnalysesCollection = "transaction_analyses"
+	PoolMetadataCollection        = "pool_metadata"
 )
 
 type Store struct {
@@ -30,7 +32,7 @@ func New(db *mongo.Database) *Store {
 }
 
 func (s *Store) Initialize(ctx context.Context) error {
-	for _, name := range []string{AddressesCollection, TransfersCollection, LabelsCollection, SyncJobsCollection, ProfilesCollection, TraceJobsCollection, CrossChainLinksCollection} {
+	for _, name := range []string{AddressesCollection, TransfersCollection, LabelsCollection, SyncJobsCollection, ProfilesCollection, TraceJobsCollection, CrossChainLinksCollection, TransactionAnalysesCollection, PoolMetadataCollection} {
 		if err := s.ensureCollection(ctx, name); err != nil {
 			return err
 		}
@@ -79,6 +81,12 @@ func indexModels() map[string][]mongo.IndexModel {
 			{Keys: bson.D{{Key: "sourceChain", Value: 1}, {Key: "sourceTxHash", Value: 1}, {Key: "sourceLogIndex", Value: 1}, {Key: "targetChain", Value: 1}, {Key: "targetTxHash", Value: 1}, {Key: "targetLogIndex", Value: 1}}, Options: options.Index().SetUnique(true).SetName("uq_cross_chain_link_evidence")},
 			{Keys: bson.D{{Key: "sourceChain", Value: 1}, {Key: "sourceAddress", Value: 1}, {Key: "observedAt", Value: -1}}, Options: options.Index().SetName("idx_cross_chain_source_address")},
 			{Keys: bson.D{{Key: "targetChain", Value: 1}, {Key: "targetAddress", Value: 1}, {Key: "observedAt", Value: -1}}, Options: options.Index().SetName("idx_cross_chain_target_address")},
+		},
+		TransactionAnalysesCollection: {
+			{Keys: bson.D{{Key: "chain", Value: 1}, {Key: "txHash", Value: 1}}, Options: options.Index().SetUnique(true).SetName("uq_transaction_analyses_chain_hash")},
+		},
+		PoolMetadataCollection: {
+			{Keys: bson.D{{Key: "chain", Value: 1}, {Key: "pool", Value: 1}}, Options: options.Index().SetUnique(true).SetName("uq_pool_metadata_chain_pool")},
 		},
 	}
 }
@@ -531,4 +539,38 @@ func (s *Store) HasTransferEvidence(ctx context.Context, chain, txHash string, l
 	filter := bson.D{{Key: "chain", Value: chain}, {Key: "txHash", Value: txHash}, {Key: "logIndex", Value: logIndex}, {Key: "asset", Value: asset}, {Key: amountField, Value: amount}, {Key: "$or", Value: bson.A{bson.D{{Key: "from", Value: address}}, bson.D{{Key: "to", Value: address}}}}}
 	count, err := s.db.Collection(TransfersCollection).CountDocuments(ctx, filter, options.Count().SetLimit(1))
 	return count > 0, err
+}
+
+// FindTransactionAnalysis returns a cached confirmed transaction analysis.
+func (s *Store) FindTransactionAnalysis(ctx context.Context, chain, txHash string) (TransactionAnalysis, bool, error) {
+	var result TransactionAnalysis
+	err := s.db.Collection(TransactionAnalysesCollection).FindOne(ctx, bson.D{{Key: "chain", Value: chain}, {Key: "txHash", Value: txHash}}).Decode(&result)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return TransactionAnalysis{}, false, nil
+	}
+	return result, err == nil, err
+}
+
+// SaveTransactionAnalysis stores an analysis idempotently.
+func (s *Store) SaveTransactionAnalysis(ctx context.Context, analysis TransactionAnalysis) error {
+	filter := bson.D{{Key: "chain", Value: analysis.Chain}, {Key: "txHash", Value: analysis.TxHash}}
+	_, err := s.db.Collection(TransactionAnalysesCollection).ReplaceOne(ctx, filter, analysis, options.Replace().SetUpsert(true))
+	return err
+}
+
+// FindPoolMetadata returns cached metadata for a verified or rejected pool.
+func (s *Store) FindPoolMetadata(ctx context.Context, chain, pool string) (PoolMetadata, bool, error) {
+	var result PoolMetadata
+	err := s.db.Collection(PoolMetadataCollection).FindOne(ctx, bson.D{{Key: "chain", Value: chain}, {Key: "pool", Value: pool}}).Decode(&result)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return PoolMetadata{}, false, nil
+	}
+	return result, err == nil, err
+}
+
+// SavePoolMetadata stores pool metadata idempotently.
+func (s *Store) SavePoolMetadata(ctx context.Context, metadata PoolMetadata) error {
+	filter := bson.D{{Key: "chain", Value: metadata.Chain}, {Key: "pool", Value: metadata.Pool}}
+	_, err := s.db.Collection(PoolMetadataCollection).ReplaceOne(ctx, filter, metadata, options.Replace().SetUpsert(true))
+	return err
 }

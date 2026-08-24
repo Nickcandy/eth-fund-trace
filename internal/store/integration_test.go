@@ -53,6 +53,48 @@ func TestTransferUpsertIsIdempotent(t *testing.T) {
 	assertDuplicateKey(t, ctx, db.Collection(LabelsCollection), Label{Chain: "ethereum", Address: "0x1", Type: "exchange", Source: "manual"})
 }
 
+func TestTransactionAnalysisCachesAreIdempotent(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(os.Getenv("MONGO_URI")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Disconnect(context.Background())
+	db := client.Database("eth_fund_trace_m11_test")
+	if err := db.Drop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s := New(db)
+	if err := s.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	analysis := TransactionAnalysis{Chain: "ethereum", TxHash: "0xabc", Value: "1", Swaps: []SwapEvent{}, Transfers: []ReceiptTransfer{}, Wraps: []WrapEvent{}}
+	if err := s.SaveTransactionAnalysis(ctx, analysis); err != nil {
+		t.Fatal(err)
+	}
+	analysis.Value = "2"
+	if err := s.SaveTransactionAnalysis(ctx, analysis); err != nil {
+		t.Fatal(err)
+	}
+	metadata := PoolMetadata{Chain: "ethereum", Pool: "0xpool", Verified: true}
+	if err := s.SavePoolMetadata(ctx, metadata); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SavePoolMetadata(ctx, metadata); err != nil {
+		t.Fatal(err)
+	}
+	for collection, want := range map[string]int64{TransactionAnalysesCollection: 1, PoolMetadataCollection: 1} {
+		count, err := db.Collection(collection).CountDocuments(ctx, bson.D{})
+		if err != nil || count != want {
+			t.Fatalf("%s count=%d err=%v", collection, count, err)
+		}
+	}
+	if cached, found, err := s.FindTransactionAnalysis(ctx, "ethereum", "0xabc"); err != nil || !found || cached.Value != "2" {
+		t.Fatalf("cached=%+v found=%v err=%v", cached, found, err)
+	}
+}
+
 func TestM3BulkNeighborsAndInterruptedJobs(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

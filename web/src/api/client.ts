@@ -1,6 +1,6 @@
 import type {
   AddressProfile, AddressResponse, BridgeInput, BridgePage, CrossChainLink, EdgePage, Label, LabelInput,
-  SyncJob, TraceAccepted, TraceJob, TraceQuery,
+  SyncJob, TraceAccepted, TraceJob, TraceQuery, TransactionAnalysis,
 } from "./types";
 
 export class ApiError extends Error {
@@ -38,4 +38,5 @@ export const api = {
   bridges: (chain: string, address: string, signal?: AbortSignal) => request<BridgePage>(`/api/v1/bridge-links?${queryString({ chain, address })}`, { signal }),
   createLabel: (input: LabelInput) => request<Label>("/api/v1/labels", { method: "POST", body: JSON.stringify(input) }),
   createBridge: (input: BridgeInput) => request<CrossChainLink>("/api/v1/bridge-links", { method: "POST", body: JSON.stringify(input) }),
+  transaction: (chain: string, txHash: string, signal?: AbortSignal) => request<TransactionAnalysis>(`/api/v1/transactions/${encodeURIComponent(txHash)}?${queryString({ chain })}`, { signal }),
 };

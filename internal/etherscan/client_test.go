@@ -278,6 +278,53 @@ func TestClientContinuesPagingWhenPageIsFullyFiltered(t *testing.T) {
 	}
 }
 
+func TestProxyMethodsUseV2ParametersAndMapNull(t *testing.T) {
+	var actions []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		actions = append(actions, query.Get("action"))
+		if query.Get("module") != "proxy" || query.Get("chainid") != "1" || query.Get("apikey") != "secret" {
+			t.Fatalf("query=%v", query)
+		}
+		switch query.Get("action") {
+		case "eth_getTransactionByHash":
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","result":{"hash":"0x1","from":"0x2","to":"0x3","value":"0x0","input":"0x","blockNumber":"0x1"}}`))
+		case "eth_getTransactionReceipt":
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","result":null}`))
+		case "eth_call":
+			if query.Get("to") != "0xpool" || query.Get("data") != "0xselector" || query.Get("tag") != "latest" {
+				t.Fatalf("call query=%v", query)
+			}
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","result":"0x01"}`))
+		}
+	}))
+	defer server.Close()
+	client := NewClient(Config{APIKey: "secret", BaseURL: server.URL, HTTPClient: server.Client()})
+	if tx, err := client.TransactionByHash(context.Background(), "0x1"); err != nil || tx.Hash != "0x1" {
+		t.Fatalf("tx=%+v err=%v", tx, err)
+	}
+	if _, err := client.TransactionReceipt(context.Background(), "0x1"); !errors.Is(err, ErrPending) {
+		t.Fatalf("error=%v", err)
+	}
+	if result, err := client.Call(context.Background(), "0xpool", "0xselector"); err != nil || result != "0x01" {
+		t.Fatalf("result=%s err=%v", result, err)
+	}
+	if len(actions) != 3 {
+		t.Fatalf("actions=%v", actions)
+	}
+}
+
+func TestProxyErrorDoesNotLeakAPIKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","error":{"code":-32000,"message":"key secret is unavailable"}}`))
+	}))
+	defer server.Close()
+	_, err := NewClient(Config{APIKey: "secret", BaseURL: server.URL, HTTPClient: server.Client()}).TransactionByHash(context.Background(), "0x1")
+	if !errors.Is(err, ErrAPI) || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
 func TestClientPageLimitAndContextCancellation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"status":"1","message":"OK","result":[{"blockNumber":"1","timeStamp":"1","hash":"0xhash","from":"0xfrom","to":"0xto","value":"1"}]}`))

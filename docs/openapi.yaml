@@ -251,6 +251,71 @@ components:
         classification: {type: string}
         suspectedHotWallet: {type: boolean}
         signals: {type: array, items: {type: string}}
+    TransactionAnalysis:
+      type: object
+      required: [chain, chainId, txHash, blockNumber, from, to, value, input, succeeded, transfers, swaps, wraps, quality, analyzedAt]
+      properties:
+        chain: {type: string, enum: [ethereum]}
+        chainId: {type: integer, enum: [1]}
+        txHash: {type: string, pattern: '^0x[0-9a-fA-F]{64}$'}
+        blockNumber: {type: integer, minimum: 0}
+        from: {type: string}
+        to: {type: string}
+        value: {type: string, description: Raw wei as a decimal string.}
+        input: {type: string}
+        succeeded: {type: boolean}
+        entryContract: {type: string}
+        entryContractName: {type: string}
+        transfers: {type: array, items: {$ref: '#/components/schemas/ReceiptTransfer'}}
+        swaps: {type: array, items: {$ref: '#/components/schemas/SwapEvent'}}
+        wraps: {type: array, items: {$ref: '#/components/schemas/WrapEvent'}}
+        finalOutputAddress: {type: string}
+        quality: {$ref: '#/components/schemas/AnalysisQuality'}
+        analyzedAt: {type: string, format: date-time}
+    ReceiptTransfer:
+      type: object
+      required: [token, from, to, amount, logIndex]
+      properties:
+        token: {type: string}
+        from: {type: string}
+        to: {type: string}
+        amount: {type: string}
+        logIndex: {type: integer, minimum: 0}
+    SwapEvent:
+      type: object
+      required: [pool, verified, sender, recipient, logIndex, evidence]
+      properties:
+        pool: {type: string}
+        protocol: {type: string, enum: [uniswap]}
+        version: {type: string, enum: [v3]}
+        verified: {type: boolean}
+        sender: {type: string}
+        recipient: {type: string}
+        tokenIn: {type: string}
+        tokenOut: {type: string}
+        amountIn: {type: string}
+        amountOut: {type: string}
+        fee: {type: integer}
+        logIndex: {type: integer, minimum: 0}
+        outputAddress: {type: string}
+        evidence: {type: array, items: {type: string}}
+    WrapEvent:
+      type: object
+      required: [type, account, amount, logIndex, evidence]
+      properties:
+        type: {type: string, enum: [deposit, withdrawal]}
+        account: {type: string}
+        amount: {type: string}
+        logIndex: {type: integer, minimum: 0}
+        evidence: {type: string}
+    AnalysisQuality:
+      type: object
+      required: [status, ambiguousRoute, evidence]
+      properties:
+        status: {type: string, enum: [complete, partial]}
+        ambiguousRoute: {type: boolean}
+        evidence: {type: array, items: {type: string}}
+        issues: {type: array, items: {type: string}}
   responses:
     BadRequest:
       description: Invalid request
@@ -284,6 +349,18 @@ paths:
       responses:
         '202': {description: Sync job accepted, content: {application/json: {schema: {$ref: '#/components/schemas/AsyncJob'}}}}
         '400': {$ref: '#/components/responses/BadRequest'}
+  /api/v1/transactions/{txHash}:
+    get:
+      parameters:
+        - {name: txHash, in: path, required: true, schema: {type: string, pattern: '^0x[0-9a-fA-F]{64}$'}}
+        - {name: chain, in: query, schema: {type: string, enum: [ethereum], default: ethereum}}
+      responses:
+        '200': {description: Confirmed transaction analysis, content: {application/json: {schema: {$ref: '#/components/schemas/TransactionAnalysis'}}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {description: Transaction not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '409': {description: Receipt not confirmed, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '429': {description: Upstream rate limited, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '503': {description: Upstream unavailable, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
   /api/v1/sync-jobs/{id}:
     get:
       parameters: [{$ref: '#/components/parameters/ObjectID'}]

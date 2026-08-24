@@ -187,6 +187,83 @@ type TransferQuery struct {
 	After     *TransferCursor
 }
 
+// TransactionAnalysis is a cached interpretation of a confirmed receipt.
+type TransactionAnalysis struct {
+	Chain              string            `bson:"chain" json:"chain"`
+	ChainID            int64             `bson:"chainId" json:"chainId"`
+	TxHash             string            `bson:"txHash" json:"txHash"`
+	BlockNumber        int64             `bson:"blockNumber" json:"blockNumber"`
+	From               string            `bson:"from" json:"from"`
+	To                 string            `bson:"to" json:"to"`
+	Value              string            `bson:"value" json:"value"`
+	Input              string            `bson:"input" json:"input"`
+	Succeeded          bool              `bson:"succeeded" json:"succeeded"`
+	EntryContract      string            `bson:"entryContract,omitempty" json:"entryContract,omitempty"`
+	EntryContractName  string            `bson:"entryContractName,omitempty" json:"entryContractName,omitempty"`
+	Transfers          []ReceiptTransfer `bson:"transfers" json:"transfers"`
+	Swaps              []SwapEvent       `bson:"swaps" json:"swaps"`
+	Wraps              []WrapEvent       `bson:"wraps" json:"wraps"`
+	FinalOutputAddress string            `bson:"finalOutputAddress,omitempty" json:"finalOutputAddress,omitempty"`
+	Quality            AnalysisQuality   `bson:"quality" json:"quality"`
+	AnalyzedAt         time.Time         `bson:"analyzedAt" json:"analyzedAt"`
+}
+
+// ReceiptTransfer is an embedded ERC-20 Transfer fact and is not a graph edge.
+type ReceiptTransfer struct {
+	Token    string `bson:"token" json:"token"`
+	From     string `bson:"from" json:"from"`
+	To       string `bson:"to" json:"to"`
+	Amount   string `bson:"amount" json:"amount"`
+	LogIndex int64  `bson:"logIndex" json:"logIndex"`
+}
+
+// SwapEvent describes one verified or candidate V3-shaped receipt log.
+type SwapEvent struct {
+	Pool          string   `bson:"pool" json:"pool"`
+	Protocol      string   `bson:"protocol,omitempty" json:"protocol,omitempty"`
+	Version       string   `bson:"version,omitempty" json:"version,omitempty"`
+	Verified      bool     `bson:"verified" json:"verified"`
+	Sender        string   `bson:"sender" json:"sender"`
+	Recipient     string   `bson:"recipient" json:"recipient"`
+	TokenIn       string   `bson:"tokenIn,omitempty" json:"tokenIn,omitempty"`
+	TokenOut      string   `bson:"tokenOut,omitempty" json:"tokenOut,omitempty"`
+	AmountIn      string   `bson:"amountIn,omitempty" json:"amountIn,omitempty"`
+	AmountOut     string   `bson:"amountOut,omitempty" json:"amountOut,omitempty"`
+	Fee           int32    `bson:"fee,omitempty" json:"fee,omitempty"`
+	LogIndex      int64    `bson:"logIndex" json:"logIndex"`
+	OutputAddress string   `bson:"outputAddress,omitempty" json:"outputAddress,omitempty"`
+	Evidence      []string `bson:"evidence" json:"evidence"`
+}
+
+// WrapEvent describes WETH deposit or withdrawal evidence.
+type WrapEvent struct {
+	Type     string `bson:"type" json:"type"`
+	Account  string `bson:"account" json:"account"`
+	Amount   string `bson:"amount" json:"amount"`
+	LogIndex int64  `bson:"logIndex" json:"logIndex"`
+	Evidence string `bson:"evidence" json:"evidence"`
+}
+
+// AnalysisQuality explains whether an overall route can be stated safely.
+type AnalysisQuality struct {
+	Status         string   `bson:"status" json:"status"`
+	AmbiguousRoute bool     `bson:"ambiguousRoute" json:"ambiguousRoute"`
+	Evidence       []string `bson:"evidence" json:"evidence"`
+	Issues         []string `bson:"issues,omitempty" json:"issues,omitempty"`
+}
+
+// PoolMetadata stores immutable V3 pool identity checks.
+type PoolMetadata struct {
+	Chain      string    `bson:"chain" json:"chain"`
+	Pool       string    `bson:"pool" json:"pool"`
+	Token0     string    `bson:"token0" json:"token0"`
+	Token1     string    `bson:"token1" json:"token1"`
+	Fee        int32     `bson:"fee" json:"fee"`
+	Factory    string    `bson:"factory" json:"factory"`
+	Verified   bool      `bson:"verified" json:"verified"`
+	ObservedAt time.Time `bson:"observedAt" json:"observedAt"`
+}
+
 type CrossChainLink struct {
 	ID             primitive.ObjectID `bson:"_id,omitempty" json:"id"`
 	SourceChain    string             `bson:"sourceChain" json:"sourceChain"`

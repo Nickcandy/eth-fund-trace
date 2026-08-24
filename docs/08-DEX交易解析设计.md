@@ -40,6 +40,19 @@ eth_call(pool) -> token0/token1/fee/factory
 
 ## 4. Uniswap V3 与 WETH
 
+Ethereum Mainnet 只读注册表：
+
+| 类型 | 地址 |
+|---|---|
+| V3 Factory | `0x1F98431c8aD98523631AE4a59f267346ea31F984` |
+| V3 SwapRouter | `0xE592427A0AEce92De3Edee1F18E0157C05861564` |
+| SwapRouter02 | `0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45` |
+| Universal Router | `0xEf1c6E67703c7BD7107eed8303Fbe6EC2554BF6B` |
+| Universal Router | `0x66a9893cC07D91D95644AEDD05D03f95e1dBA8Af` |
+| WETH9 | `0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2` |
+
+V3 合约地址来自 [Uniswap Ethereum deployments](https://docs.uniswap.org/contracts/v3/reference/deployments/ethereum-deployments)，Universal Router 地址来自 [Universal Router deployments](https://docs.uniswap.org/contracts/universal-router/deploy-addresses)。注册表匹配不替代 Pool 验证。
+
 - V3 `Swap` 的 `amount0/amount1` 是 Pool 余额变化：正值表示 Pool 收到，负值表示 Pool 发出。
 - 解析器使用二进制补码读取 `int256`，所有数量以十进制字符串返回。
 - Pool 需要读取 `token0()`、`token1()`、`fee()`、`factory()`；只有 Factory 等于官方 Ethereum Uniswap V3 Factory 才设置 `protocol=uniswap`、`version=v3`。
