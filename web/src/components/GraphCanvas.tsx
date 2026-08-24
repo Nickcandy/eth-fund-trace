@@ -5,7 +5,7 @@ import {
 import { Download, Eye, EyeOff, FileJson, GitBranch, Layers, Maximize2, RotateCcw } from "lucide-react";
 import { toPng } from "html-to-image";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { formatChainAmount, shortAddress } from "../lib/format";
+import { formatAssetAmount, GRAPH_AMOUNT_FRACTION_DIGITS, shortAddress } from "../lib/format";
 import { layoutGraph } from "../graph/layout";
 import type { GraphEdgeModel, GraphModel } from "../graph/model";
 import { FundNode, type FundFlowNode } from "./FundNode";
@@ -55,9 +55,11 @@ function Canvas({ model, aggregate, onAggregateChange, onSelectNode, onSelectEdg
     const token = edge.sourceType === "tokentx";
     const bridge = edge.kind === "bridge";
     const stroke = bridge ? "#ef8b2c" : token ? "#9b72e8" : internal ? "#20bfc5" : "#438bea";
+    const amount = formatAssetAmount(edge.totalAmount, edge.decimals, shortAddress(edge.assetSymbol, 5), GRAPH_AMOUNT_FRACTION_DIGITS);
+    const prefix = bridge ? `${edge.chain} · Bridge · ` : `${edge.kind === "mint" ? "铸造 · " : edge.kind === "burn" ? "销毁 · " : ""}${edge.count} 笔 · `;
     return {
       id: edge.id, source: edge.source, target: edge.target, type: "interactive", animated: bridge,
-      data: { label: bridge ? `${edge.chain} · Bridge` : `${edge.kind === "mint" ? "铸造 · " : edge.kind === "burn" ? "销毁 · " : ""}${edge.count} 笔 · ${shortAddress(edge.assetSymbol, 5)} · ${formatChainAmount(edge.totalAmount, edge.decimals)}`, onSelect: () => onSelectEdge(edge) },
+      data: { label: `${prefix}${amount}`, onSelect: () => onSelectEdge(edge) },
       style: { stroke, strokeWidth: bridge ? 3 : 2, strokeDasharray: bridge || internal ? "8 6" : undefined },
       markerEnd: { type: MarkerType.ArrowClosed, color: stroke, width: 16, height: 16 },
     };

@@ -1,7 +1,7 @@
 import { ChevronRight, ExternalLink, ShieldAlert, Tag, X } from "lucide-react";
 import type { AddressProfile, AddressResponse, Label, RiskResult } from "../api/types";
 import type { GraphEdgeModel, GraphNodeModel } from "../graph/model";
-import { chainLabel, formatChainAmount, shortAddress } from "../lib/format";
+import { chainLabel, DETAIL_AMOUNT_FRACTION_DIGITS, formatAssetAmount, shortAddress } from "../lib/format";
 
 interface Props { node?: GraphNodeModel; edge?: GraphEdgeModel; address?: AddressResponse; profile?: AddressProfile; labels: Label[]; risk?: RiskResult; onClose: () => void; onFocus: (chain: string, address: string) => void }
 
@@ -17,7 +17,7 @@ export function DetailsPanel({ node, edge, address, profile, labels, risk, onClo
       <section><h3><ShieldAlert size={15}/> 风险证据</h3>{risk?.evidence?.length ? risk.evidence.map((item, i) => <div className="evidence-card" key={`${item.address}-${i}`}><div><strong>{item.labelType}</strong><span>{item.score} 分</span></div><p>{item.direction} · {item.distance} 跳 · 置信度 {Math.round(item.confidence * 100)}%</p>{item.txHashes.map((hash) => <code key={hash}>{shortAddress(hash, 10)}</code>)}</div>) : <p className="empty-copy">当前规则未发现风险证据</p>}</section>
       {address?.address && <section><h3>同步状态</h3><p>{address.address.syncStatus} · 区块 {address.address.latestSyncedBlock.toLocaleString()}</p></section>}
     </>}
-    {edge && <><section className="edge-summary"><span>{edge.sourceType}</span><strong>{edge.count} 笔 {edge.assetSymbol}</strong><p>{formatChainAmount(edge.totalAmount, edge.decimals)}{edge.decimals === undefined && " · 精度未知"}</p></section><section><h3>交易哈希</h3>{edge.facts.map((fact) => <div className="tx-row" key={`${fact.txHash}-${fact.logIndex}`}><code>{shortAddress(fact.txHash, 10)}</code><span>#{fact.blockNumber}</span><ExternalLink size={13}/></div>)}{edge.bridge && <div className="evidence-card"><strong>确认式桥接</strong><p>{edge.bridge.link.sourceChain} → {edge.bridge.link.targetChain}</p>{edge.bridge.link.evidence.map((item) => <code key={item}>{item}</code>)}</div>}</section></>}
+    {edge && <><section className="edge-summary"><span>{edge.sourceType}</span><strong>{edge.count} 笔 {edge.assetSymbol}</strong><p>{formatAssetAmount(edge.totalAmount, edge.decimals, edge.assetSymbol, DETAIL_AMOUNT_FRACTION_DIGITS)}{edge.decimals === undefined && " · 精度未知"}</p></section><section><h3>交易哈希</h3>{edge.facts.map((fact) => <div className="tx-row" key={`${fact.txHash}-${fact.logIndex}`}><code>{shortAddress(fact.txHash, 10)}</code><span>#{fact.blockNumber}</span><ExternalLink size={13}/></div>)}{edge.bridge && <div className="evidence-card"><strong>确认式桥接</strong><p>{edge.bridge.link.sourceChain} → {edge.bridge.link.targetChain}</p>{edge.bridge.link.evidence.map((item) => <code key={item}>{item}</code>)}</div>}</section></>}
   </aside>;
 }
 function Metric({ label, value }: { label: string; value: string | number }) { return <div><span>{label}</span><strong>{value}</strong></div>; }
