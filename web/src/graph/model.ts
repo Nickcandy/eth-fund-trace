@@ -82,7 +82,12 @@ export function buildGraphModel(result: TraceResult, seed: NodeRef, aggregate: b
       : `${fact.txHash}|${fact.source}|${fact.traceId}|${fact.logIndex}|${index}`;
     const existing = grouped.get(key);
     if (existing) {
-      existing.count += 1; existing.totalAmount = addIntegerStrings(existing.totalAmount, fact.amount ?? fact.tokenValue ?? "0"); existing.facts.push(fact);
+      existing.count += 1;
+      existing.totalAmount = addIntegerStrings(existing.totalAmount, fact.amount ?? fact.tokenValue ?? "0");
+      existing.facts.push(fact);
+      const decimals = displayDecimals(fact.assetType, fact.asset, fact.decimals, fact.tokenMetadataComplete);
+      if (existing.decimals === undefined && decimals !== undefined) existing.decimals = decimals;
+      if (existing.assetSymbol === existing.asset && fact.symbol) existing.assetSymbol = fact.symbol;
     } else {
       grouped.set(key, {
         id: key, source: nodeID(fact.chain, fact.from), target: nodeID(fact.chain, fact.to), chain: fact.chain,

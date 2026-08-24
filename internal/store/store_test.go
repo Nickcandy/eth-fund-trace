@@ -1,11 +1,23 @@
 package store
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 )
+
+func TestTransferJSONPreservesKnownZeroTokenDecimals(t *testing.T) {
+	encoded, err := json.Marshal(Transfer{AssetType: "erc20", Decimals: 0, TokenMetadataComplete: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"decimals":0`) {
+		t.Fatalf("known zero-decimal token lost precision in JSON: %s", encoded)
+	}
+}
 
 func TestNormalizeBSON(t *testing.T) {
 	value := normalizeBSON(bson.D{{Key: "datathroughblock", Value: int64(12)}, {Key: "risk", Value: bson.D{{Key: "ruleversion", Value: "risk-v1"}, {Key: "inferredlabels", Value: bson.A{}}}}, {Key: "nodes", Value: bson.A{bson.D{{Key: "address", Value: "0x1"}}}}})

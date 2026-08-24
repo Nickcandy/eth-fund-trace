@@ -50,7 +50,7 @@ type Edge struct {
 	AssetType   string    `json:"assetType"`
 	Asset       string    `json:"asset"`
 	Symbol      string    `json:"symbol,omitempty"`
-	Decimals    int32     `json:"decimals,omitempty"`
+	Decimals    int32     `json:"decimals"`
 	Amount      string    `json:"amount,omitempty"`
 	TokenValue  string    `json:"tokenValue,omitempty"`
 	Source      string    `json:"source"`

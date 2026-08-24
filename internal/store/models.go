@@ -33,7 +33,7 @@ type Transfer struct {
 	AssetType             string    `bson:"assetType" json:"assetType"`
 	Asset                 string    `bson:"asset" json:"asset"`
 	Symbol                string    `bson:"symbol,omitempty" json:"symbol,omitempty"`
-	Decimals              int32     `bson:"decimals,omitempty" json:"decimals,omitempty"`
+	Decimals              int32     `bson:"decimals,omitempty" json:"decimals"`
 	Amount                string    `bson:"amount,omitempty" json:"amount,omitempty"`
 	TokenValue            string    `bson:"tokenValue,omitempty" json:"tokenValue,omitempty"`
 	TokenName             string    `bson:"tokenName,omitempty" json:"tokenName,omitempty"`

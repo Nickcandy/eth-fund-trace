@@ -37,6 +37,20 @@ describe("buildGraphModel", () => {
     expect(edge?.facts).toHaveLength(2);
   });
 
+  it("enriches an aggregated edge when a later fact has token precision", () => {
+    const value = result();
+    const first = value.edges[1].transfer;
+    delete first.decimals;
+    first.tokenMetadataComplete = false;
+    first.symbol = undefined;
+    value.edges[2].transfer.tokenMetadataComplete = true;
+
+    const model = buildGraphModel(value, { chain: "ethereum", address: seed }, true);
+    const edge = model.edges.find((candidate) => candidate.asset === first.asset);
+
+    expect(edge).toMatchObject({ decimals: 6, assetSymbol: "USDC" });
+  });
+
   it("keeps the same address on another chain distinct from the seed", () => {
     const value = result();
     value.nodes.push({ chain: "base", address: seed, depth: 2, terminal: false });
