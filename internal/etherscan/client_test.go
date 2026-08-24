@@ -401,6 +401,19 @@ func TestNormalizeRejectsInvalidFields(t *testing.T) {
 	}
 }
 
+func TestNormalizeSkipsIncompleteTransactionRows(t *testing.T) {
+	transfers, err := normalize([]json.RawMessage{
+		json.RawMessage(`{"blockNumber":"7","timeStamp":"1","hash":"","from":"0xfrom","to":"0xto","value":"1"}`),
+		json.RawMessage(`{"blockNumber":"8","timeStamp":"1","hash":"0xvalid","from":"0xfrom","to":"0xto","value":"2"}`),
+	}, "txlist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(transfers) != 1 || transfers[0].TxHash != "0xvalid" {
+		t.Fatalf("transfers=%+v, want only valid row", transfers)
+	}
+}
+
 func TestClientReturnsLatestBlock(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("module") != "proxy" || r.URL.Query().Get("action") != "eth_blockNumber" {

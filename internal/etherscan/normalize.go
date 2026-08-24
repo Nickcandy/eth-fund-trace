@@ -2,6 +2,7 @@ package etherscan
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"math/big"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/Nickcandy/eth-fund-trace/internal/store"
 )
+
+var errMissingRequiredTransactionField = errors.New("missing required transaction field")
 
 type rawTransfer struct {
 	BlockNumber     string `json:"blockNumber"`
@@ -35,6 +38,7 @@ func normalize(items []json.RawMessage, action string) ([]store.Transfer, error)
 
 func normalizeWithState(items []json.RawMessage, action string, tokenOccurrences map[string]int64) ([]store.Transfer, error) {
 	transfers := make([]store.Transfer, 0, len(items))
+	missingRequired := 0
 	for _, item := range items {
 		var raw rawTransfer
 		if err := json.Unmarshal(item, &raw); err != nil {
@@ -54,9 +58,18 @@ func normalizeWithState(items []json.RawMessage, action string, tokenOccurrences
 		}
 		transfer, err := normalizeOne(raw, action, missingLogIndex)
 		if err != nil {
+			if errors.Is(err, errMissingRequiredTransactionField) {
+				// Etherscan occasionally emits incomplete contract-creation/internal rows.
+				// Keep the valid rows from this page and let the next scan retry the range.
+				missingRequired++
+				continue
+			}
 			return nil, err
 		}
 		transfers = append(transfers, transfer)
+	}
+	if missingRequired > 0 && len(transfers) == 0 {
+		return nil, fmt.Errorf("%w: %w", ErrMalformedResponse, errMissingRequiredTransactionField)
 	}
 	return transfers, nil
 }
@@ -75,7 +88,7 @@ func normalizeOne(raw rawTransfer, action string, missingLogIndex int64) (store.
 		to = raw.ContractAddress
 	}
 	if raw.Hash == "" || raw.From == "" || to == "" || raw.Value == "" {
-		return store.Transfer{}, fmt.Errorf("%w: missing required transaction field", ErrMalformedResponse)
+		return store.Transfer{}, fmt.Errorf("%w: %w", ErrMalformedResponse, errMissingRequiredTransactionField)
 	}
 	if value, ok := new(big.Int).SetString(raw.Value, 10); !ok || value.Sign() < 0 {
 		return store.Transfer{}, fmt.Errorf("%w: invalid value", ErrMalformedResponse)
