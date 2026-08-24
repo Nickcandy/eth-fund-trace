@@ -411,6 +411,31 @@ func TestManagerLimitsOnlyInternalTransactionLookback(t *testing.T) {
 	}
 }
 
+func TestManagerAppliesHistoryLookbackToAllEtherscanActions(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	source := &recordingSource{fakeSource: fakeSource{latest: 1_000_000}}
+	repository := newMemoryRepository()
+	manager := New(source, repository, Config{QueueSize: 10, HistoryLookbackBlocks: 100_000, InternalLookbackBlocks: 100_000})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = manager.Run(ctx) }()
+
+	job, err := manager.Enqueue(context.Background(), Request{Chain: "ethereum", Address: seed, StartBlock: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job = waitForJob(t, manager, job.ID.Hex())
+	if job.Status != "succeeded" {
+		t.Fatalf("job=%+v", job)
+	}
+	want := [][2]int64{{900_001, 1_000_000}}
+	for _, action := range []string{"txlist", "txlistinternal", "tokentx"} {
+		if got := source.actionRanges[action]; fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Fatalf("%s ranges=%v, want %v", action, got, want)
+		}
+	}
+}
+
 func TestManagerBackfillsInternalHistoryWhenLookbackExpands(t *testing.T) {
 	seed := "0x0000000000000000000000000000000000000001"
 	source := &recordingSource{fakeSource: fakeSource{latest: 1_000_000}}

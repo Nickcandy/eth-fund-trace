@@ -53,6 +53,7 @@ type Config struct {
 	Confirmations          int64
 	QueueSize              int
 	InternalLookbackBlocks int64
+	HistoryLookbackBlocks  int64
 	StartBlocks            map[string]int64
 	Clock                  func() time.Time
 	AfterAddressSynced     func(context.Context, string, string) error
@@ -89,6 +90,9 @@ func NewMulti(sources map[string]Source, repository Repository, config Config) *
 	}
 	if config.Clock == nil {
 		config.Clock = time.Now
+	}
+	if config.HistoryLookbackBlocks < 0 {
+		config.HistoryLookbackBlocks = 0
 	}
 	return &Manager{sources: sources, repository: repository, config: config, queue: make(chan queuedJob, config.QueueSize), active: make(map[string]primitive.ObjectID)}
 }
@@ -272,6 +276,10 @@ func (m *Manager) syncAddress(ctx context.Context, source Source, chainID int64,
 		return addressResult{}, err
 	}
 	cacheInternalFrom := request.StartBlock
+	cacheHistoryFrom := request.StartBlock
+	if m.config.HistoryLookbackBlocks > 0 {
+		cacheHistoryFrom = max(cacheHistoryFrom, address.LatestSyncedBlock-m.config.HistoryLookbackBlocks+1)
+	}
 	if exists && m.config.InternalLookbackBlocks > 0 {
 		cacheInternalFrom = max(cacheInternalFrom, address.LatestSyncedBlock-m.config.InternalLookbackBlocks+1)
 	}
@@ -280,7 +288,7 @@ func (m *Manager) syncAddress(ctx context.Context, source Source, chainID int64,
 		haveInternalFrom, haveInternalTo = address.EarliestSyncedBlock, address.LatestSyncedBlock
 	}
 	internalCached := exists && haveInternalFrom <= cacheInternalFrom && haveInternalTo >= address.LatestSyncedBlock
-	if exists && address.SyncStatus == "synced" && request.StartBlock >= address.EarliestSyncedBlock && internalCached && now.Sub(address.LastSyncedAt) < m.config.CacheTTL {
+	if exists && address.SyncStatus == "synced" && cacheHistoryFrom >= address.EarliestSyncedBlock && internalCached && now.Sub(address.LastSyncedAt) < m.config.CacheTTL {
 		if m.config.AfterAddressSynced != nil {
 			if err := m.config.AfterAddressSynced(ctx, request.Chain, request.Address); err != nil {
 				return addressResult{}, err
@@ -295,7 +303,11 @@ func (m *Manager) syncAddress(ctx context.Context, source Source, chainID int64,
 	if request.StartBlock > safeHead {
 		return addressResult{}, fmt.Errorf("%w: start block exceeds safe head", ErrInvalidRequest)
 	}
-	internalFrom := request.StartBlock
+	historyFrom := request.StartBlock
+	if m.config.HistoryLookbackBlocks > 0 {
+		historyFrom = max(historyFrom, safeHead-m.config.HistoryLookbackBlocks+1)
+	}
+	internalFrom := historyFrom
 	if m.config.InternalLookbackBlocks > 0 {
 		internalFrom = max(internalFrom, safeHead-m.config.InternalLookbackBlocks+1)
 	}
@@ -304,20 +316,20 @@ func (m *Manager) syncAddress(ctx context.Context, source Source, chainID int64,
 	}
 
 	intervals := make([][2]int64, 0, 2)
-	earliest := request.StartBlock
+	earliest := historyFrom
 	latest := safeHead
 	if exists && address.SyncStatus == "synced" {
 		earliest, latest = address.EarliestSyncedBlock, address.LatestSyncedBlock
-		if request.StartBlock < earliest {
-			intervals = append(intervals, [2]int64{request.StartBlock, earliest - 1})
-			earliest = request.StartBlock
+		if historyFrom < earliest {
+			intervals = append(intervals, [2]int64{historyFrom, earliest - 1})
+			earliest = historyFrom
 		}
 		if safeHead > latest {
 			intervals = append(intervals, [2]int64{latest + 1, safeHead})
 			latest = safeHead
 		}
 	} else {
-		intervals = append(intervals, [2]int64{request.StartBlock, safeHead})
+		intervals = append(intervals, [2]int64{historyFrom, safeHead})
 	}
 	internalIntervals := coverageIntervals(internalFrom, safeHead, haveInternalFrom, haveInternalTo)
 

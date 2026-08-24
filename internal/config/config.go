@@ -25,6 +25,7 @@ type Config struct {
 	EtherscanMaxRetries             int
 	EtherscanRetryBaseMS            int
 	EtherscanHTTPTimeoutSeconds     int
+	EtherscanLookbackBlocks         int64
 	EtherscanInternalLookbackBlocks int64
 	SyncCacheTTLMinutes             int
 	SyncConfirmations               int
@@ -62,6 +63,7 @@ func Load() Config {
 		EtherscanMaxRetries:             nonNegativeIntValue("ETHERSCAN_MAX_RETRIES", 5),
 		EtherscanRetryBaseMS:            intValue("ETHERSCAN_RETRY_BASE_MS", 1000),
 		EtherscanHTTPTimeoutSeconds:     intValue("ETHERSCAN_HTTP_TIMEOUT_SECONDS", 120),
+		EtherscanLookbackBlocks:         nonNegativeInt64Value("ETHERSCAN_LOOKBACK_BLOCKS", 0),
 		EtherscanInternalLookbackBlocks: nonNegativeInt64Value("ETHERSCAN_INTERNAL_LOOKBACK_BLOCKS", 100_000),
 		SyncCacheTTLMinutes:             intValue("SYNC_CACHE_TTL_MINUTES", 15),
 		SyncConfirmations:               nonNegativeIntValue("SYNC_CONFIRMATIONS", 12),
