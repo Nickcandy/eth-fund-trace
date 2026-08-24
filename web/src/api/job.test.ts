@@ -18,4 +18,11 @@ describe("mergeSyncJobs", () => {
     expect(mergeSyncJobs([linked], recovered)).toEqual([recovered]);
     expect(mergeSyncJobs([], recovered)).toEqual([recovered]);
   });
+
+  it("updates a recovered job without changing its position", () => {
+    const first = { jobId: "first", status: "running" } as import("./types").SyncJob;
+    const second = { jobId: "second", status: "queued" } as import("./types").SyncJob;
+    const updated = { ...first, status: "succeeded" } as import("./types").SyncJob;
+    expect(mergeSyncJobs([first, second], updated).map((job) => job.jobId)).toEqual(["first", "second"]);
+  });
 });

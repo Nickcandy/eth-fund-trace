@@ -19,5 +19,7 @@ export function describeTraceJob(job: JobProgress): JobDescription {
 
 export function mergeSyncJobs(linked: SyncJob[], recovered?: SyncJob): SyncJob[] {
   if (!recovered) return linked;
-  return [...linked.filter((job) => job.jobId !== recovered.jobId), recovered];
+  const index = linked.findIndex((job) => job.jobId === recovered.jobId);
+  if (index < 0) return [...linked, recovered];
+  return linked.map((job, jobIndex) => jobIndex === index ? recovered : job);
 }
