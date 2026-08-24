@@ -15,6 +15,7 @@ import (
 type TraceProvider interface {
 	Enqueue(context.Context, tracer.Request) (store.TraceJob, error)
 	Job(context.Context, string) (store.TraceJob, error)
+	LatestJob(context.Context, tracer.Query) (store.TraceJob, error)
 }
 type TraceHandler struct{ manager TraceProvider }
 
@@ -47,6 +48,36 @@ func (h *TraceHandler) Job(c echo.Context) error {
 		return writeError(c, 400, "invalid_request", "invalid trace job id", false)
 	}
 	return c.JSON(200, job)
+}
+func (h *TraceHandler) LatestJob(c echo.Context) error {
+	query, err := traceQuery(c)
+	if err != nil {
+		return writeError(c, http.StatusBadRequest, "invalid_request", err.Error(), false)
+	}
+	job, err := h.manager.LatestJob(c.Request().Context(), query)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return writeError(c, http.StatusNotFound, "trace_job_not_found", "trace job not found", false)
+	}
+	if err != nil {
+		return writeError(c, http.StatusBadRequest, "invalid_request", err.Error(), false)
+	}
+	return c.JSON(http.StatusOK, job)
+}
+
+func traceQuery(c echo.Context) (tracer.Query, error) {
+	depth, err := queryInt(c, "depth")
+	if err != nil {
+		return tracer.Query{}, errors.New("invalid depth")
+	}
+	topN, err := queryInt(c, "topN")
+	if err != nil {
+		return tracer.Query{}, errors.New("invalid topN")
+	}
+	query := tracer.Query{Chain: c.QueryParam("chain"), Address: c.QueryParam("address"), Direction: c.QueryParam("direction"), Depth: depth, TopN: topN, Asset: c.QueryParam("asset")}
+	if err := tracer.ValidateQuery(query); err != nil {
+		return tracer.Query{}, err
+	}
+	return query, nil
 }
 func queryInt(c echo.Context, name string) (int, error) {
 	value := c.QueryParam(name)

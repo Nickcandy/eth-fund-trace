@@ -357,6 +357,20 @@ func (s *Store) GetTraceJob(ctx context.Context, id primitive.ObjectID) (TraceJo
 	return job, err
 }
 
+func (s *Store) FindLatestTraceJob(ctx context.Context, chain, seedAddress, direction string, depth, topN int, asset string) (TraceJob, error) {
+	var job TraceJob
+	filter := bson.D{
+		{Key: "chain", Value: chain},
+		{Key: "seedAddress", Value: seedAddress},
+		{Key: "direction", Value: direction},
+		{Key: "depth", Value: depth},
+		{Key: "topN", Value: topN},
+		{Key: "asset", Value: asset},
+	}
+	err := s.db.Collection(TraceJobsCollection).FindOne(ctx, filter, options.FindOne().SetSort(bson.D{{Key: "createdAt", Value: -1}})).Decode(&job)
+	return job, err
+}
+
 func (s *Store) SaveTraceJob(ctx context.Context, job TraceJob) error {
 	_, err := s.db.Collection(TraceJobsCollection).ReplaceOne(ctx, bson.D{{Key: "_id", Value: job.ID}}, job)
 	return err

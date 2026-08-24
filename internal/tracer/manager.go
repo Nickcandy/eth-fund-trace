@@ -17,6 +17,7 @@ import (
 type JobRepository interface {
 	CreateTraceJob(context.Context, *store.TraceJob) error
 	GetTraceJob(context.Context, primitive.ObjectID) (store.TraceJob, error)
+	FindLatestTraceJob(context.Context, string, string, string, int, int, string) (store.TraceJob, error)
 	SaveTraceJob(context.Context, store.TraceJob) error
 	FailInterruptedTraceJobs(context.Context, time.Time) error
 }
@@ -79,6 +80,17 @@ func (m *Manager) Job(ctx context.Context, id string) (store.TraceJob, error) {
 		return store.TraceJob{}, err
 	}
 	return m.jobs.GetTraceJob(ctx, parsed)
+}
+func (m *Manager) LatestJob(ctx context.Context, query Query) (store.TraceJob, error) {
+	normalized, err := normalize(query)
+	if err != nil {
+		return store.TraceJob{}, err
+	}
+	address, err := ethaddr.Normalize(normalized.Address)
+	if err != nil {
+		return store.TraceJob{}, ErrInvalidQuery
+	}
+	return m.jobs.FindLatestTraceJob(ctx, normalized.Chain, address, normalized.Direction, normalized.Depth, normalized.TopN, normalized.Asset)
 }
 func (m *Manager) Run(ctx context.Context) error {
 	if err := m.jobs.FailInterruptedTraceJobs(ctx, m.clock().UTC()); err != nil {

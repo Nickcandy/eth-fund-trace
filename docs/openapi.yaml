@@ -327,6 +327,19 @@ components:
 security:
   - bearerAuth: []
 paths:
+  /api/v1/trace-jobs/latest:
+    get:
+      summary: Get the latest trace job for an exact trace query
+      parameters:
+        - { name: chain, in: query, required: true, schema: { type: string, enum: [ethereum, base] } }
+        - { name: address, in: query, required: true, schema: { type: string } }
+        - { name: direction, in: query, required: true, schema: { type: string, enum: [in, out, both] } }
+        - { name: depth, in: query, required: true, schema: { type: integer } }
+        - { name: topN, in: query, required: true, schema: { type: integer } }
+        - { name: asset, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Latest matching trace job }
+        '404': { description: No matching trace job }
   /healthz:
     get:
       security: []

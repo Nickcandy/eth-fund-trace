@@ -54,6 +54,9 @@ func (s traceStub) Enqueue(context.Context, tracer.Request) (store.TraceJob, err
 	return s.job, nil
 }
 func (s traceStub) Job(context.Context, string) (store.TraceJob, error) { return s.job, nil }
+func (s traceStub) LatestJob(context.Context, tracer.Query) (store.TraceJob, error) {
+	return s.job, nil
+}
 
 func TestTraceHandlerReturnsAccepted(t *testing.T) {
 	id := primitive.NewObjectID()
@@ -63,6 +66,20 @@ func TestTraceHandlerReturnsAccepted(t *testing.T) {
 	res := httptest.NewRecorder()
 	_ = h.Enqueue(e.NewContext(req, res))
 	if res.Code != 202 || !strings.Contains(res.Body.String(), id.Hex()) {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestTraceHandlerReturnsLatestMatchingJob(t *testing.T) {
+	id := primitive.NewObjectID()
+	h := NewTraceHandler(traceStub{job: store.TraceJob{ID: id, SeedAddress: "0x0000000000000000000000000000000000000001", Status: "running"}})
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/trace-jobs/latest?chain=ethereum&address=0x0000000000000000000000000000000000000001&direction=both&depth=3&topN=10&asset=all", nil)
+	res := httptest.NewRecorder()
+	if err := h.LatestJob(e.NewContext(req, res)); err != nil {
+		t.Fatal(err)
+	}
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), id.Hex()) {
 		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
 	}
 }

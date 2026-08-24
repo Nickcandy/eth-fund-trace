@@ -35,4 +35,18 @@ describe("BottomPanel sync progress", () => {
     expect(screen.queryByText("6a8c8c66e845799c12235450")).not.toBeInTheDocument();
     expect(screen.queryByText("同步步骤 1")).not.toBeInTheDocument();
   });
+
+  it("shows the live seed and neighbor queue without hiding completed addresses", () => {
+    const seed = "0x87aab7bac1308faf2a0d59da26b8379e18b26355";
+    const neighbor = "0xd2674da94285660c9b2353131bef2d8211369a4b";
+    const trace = { id: "trace", seedAddress: seed, chain: "ethereum", direction: "both", depth: 3, topN: 10, asset: "all", status: "waiting_sync", createdAt: "2026-08-24T18:24:38Z", currentDepth: 0, visitedNodes: 0, edgeCount: 0, dataThroughBlock: 0, ruleVersion: "trace-v1", retryable: false } as TraceJob;
+    const done = { jobId: "seed", address: seed, status: "succeeded", completedAddresses: 1, processedAddresses: 1, fetched: 12 } as SyncJob;
+    const active = { jobId: "neighbor", address: neighbor, status: "running", completedAddresses: 0, processedAddresses: 0, progress: { currentAddress: neighbor, currentAction: "txlistinternal", currentPage: 7, pagesFetched: 6, recordsRead: 6000, recordsWritten: 4100, splitCount: 1 } } as SyncJob;
+    render(<BottomPanel facts={[]} onMore={() => undefined} traceJob={trace} syncJobs={[done, active]} bridges={[]} chain="ethereum" address={seed} onLabel={async()=>undefined} onBridge={async()=>undefined}/>);
+    expect(screen.getByText("1 个邻居")).toBeVisible();
+    expect(screen.getByText("1 / 2 已处理")).toBeVisible();
+    expect(screen.getAllByText(seed).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(neighbor).length).toBeGreaterThan(0);
+    expect(screen.getByText("内部 ETH · 第 7 页")).toBeVisible();
+  });
 });
