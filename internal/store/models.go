@@ -110,16 +110,17 @@ type SyncJob struct {
 }
 
 type SyncProgress struct {
-	CurrentAddress string    `bson:"currentAddress,omitempty" json:"currentAddress,omitempty"`
-	CurrentAction  string    `bson:"currentAction,omitempty" json:"currentAction,omitempty"`
-	RangeStart     int64     `bson:"rangeStart,omitempty" json:"rangeStart,omitempty"`
-	RangeEnd       int64     `bson:"rangeEnd,omitempty" json:"rangeEnd,omitempty"`
-	CurrentPage    int       `bson:"currentPage,omitempty" json:"currentPage,omitempty"`
-	PagesFetched   int64     `bson:"pagesFetched" json:"pagesFetched"`
-	RecordsRead    int64     `bson:"recordsRead" json:"recordsRead"`
-	RecordsWritten int64     `bson:"recordsWritten" json:"recordsWritten"`
-	SplitCount     int64     `bson:"splitCount" json:"splitCount"`
-	UpdatedAt      time.Time `bson:"updatedAt,omitempty" json:"updatedAt,omitempty"`
+	CurrentAddress    string           `bson:"currentAddress,omitempty" json:"currentAddress,omitempty"`
+	CurrentAction     string           `bson:"currentAction,omitempty" json:"currentAction,omitempty"`
+	RangeStart        int64            `bson:"rangeStart,omitempty" json:"rangeStart,omitempty"`
+	RangeEnd          int64            `bson:"rangeEnd,omitempty" json:"rangeEnd,omitempty"`
+	CurrentPage       int              `bson:"currentPage,omitempty" json:"currentPage,omitempty"`
+	PagesFetched      int64            `bson:"pagesFetched" json:"pagesFetched"`
+	RecordsRead       int64            `bson:"recordsRead" json:"recordsRead"`
+	RecordsWritten    int64            `bson:"recordsWritten" json:"recordsWritten"`
+	SplitCount        int64            `bson:"splitCount" json:"splitCount"`
+	UpdatedAt         time.Time        `bson:"updatedAt,omitempty" json:"updatedAt,omitempty"`
+	ActionCheckpoints map[string]int64 `bson:"actionCheckpoints,omitempty" json:"actionCheckpoints,omitempty"`
 }
 
 type SyncFailure struct {

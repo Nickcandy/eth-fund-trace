@@ -231,6 +231,48 @@ func (s *Store) GetSyncJob(ctx context.Context, id primitive.ObjectID) (SyncJob,
 	return job, err
 }
 
+func (s *Store) FindSyncCheckpoints(ctx context.Context, chain, address string, startBlock int64) (map[string]int64, error) {
+	var job SyncJob
+	err := s.db.Collection(SyncJobsCollection).FindOne(ctx, bson.D{{Key: "chain", Value: chain}, {Key: "address", Value: address}, {Key: "startBlock", Value: startBlock}, {Key: "status", Value: "failed"}}, options.FindOne().SetSort(bson.D{{Key: "createdAt", Value: -1}})).Decode(&job)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return map[string]int64{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(job.Progress.ActionCheckpoints) > 0 {
+		return job.Progress.ActionCheckpoints, nil
+	}
+	return legacySyncCheckpoints(job), nil
+}
+
+func legacySyncCheckpoints(job SyncJob) map[string]int64 {
+	result := map[string]int64{}
+	actions := []string{"txlist", "txlistinternal", "tokentx"}
+	currentIndex := -1
+	for index, action := range actions {
+		if action == job.Progress.CurrentAction {
+			currentIndex = index
+			break
+		}
+	}
+	if currentIndex < 0 {
+		return result
+	}
+	for _, action := range actions {
+		if action == job.Progress.CurrentAction {
+			if job.Progress.RangeStart > job.StartBlock {
+				result[action] = job.Progress.RangeStart - 1
+			}
+			break
+		}
+		if job.Progress.RangeEnd >= job.StartBlock {
+			result[action] = job.Progress.RangeEnd
+		}
+	}
+	return result
+}
+
 func (s *Store) SaveSyncJob(ctx context.Context, job SyncJob) error {
 	_, err := s.db.Collection(SyncJobsCollection).ReplaceOne(ctx, bson.D{{Key: "_id", Value: job.ID}}, job)
 	return err

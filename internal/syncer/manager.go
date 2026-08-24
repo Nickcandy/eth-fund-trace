@@ -37,6 +37,7 @@ type Repository interface {
 	GetSyncJob(context.Context, primitive.ObjectID) (store.SyncJob, error)
 	SaveSyncJob(context.Context, store.SyncJob) error
 	FailInterruptedJobs(context.Context, time.Time) error
+	FindSyncCheckpoints(context.Context, string, string, int64) (map[string]int64, error)
 }
 
 type Request struct {
@@ -112,6 +113,12 @@ func (m *Manager) Enqueue(ctx context.Context, request Request) (store.SyncJob, 
 		StartBlock: request.StartBlock, NeighborLimit: request.NeighborLimit, Status: "queued",
 		CreatedAt: m.config.Clock().UTC(), TotalAddresses: 1, ActionCounts: make(map[string]int64),
 	}
+	checkpoints, err := m.repository.FindSyncCheckpoints(ctx, request.Chain, request.Address, request.StartBlock)
+	if err != nil {
+		m.mu.Unlock()
+		return store.SyncJob{}, err
+	}
+	job.Progress.ActionCheckpoints = checkpoints
 	if err := m.repository.CreateSyncJob(ctx, &job); err != nil {
 		m.mu.Unlock()
 		return store.SyncJob{}, err
@@ -198,7 +205,7 @@ func (m *Manager) process(ctx context.Context, queued queuedJob) {
 		return value, nil
 	}
 
-	seedResult, err := m.syncAddress(ctx, source, chain.ID, queued.request, getSafeHead, report)
+	seedResult, err := m.syncAddress(ctx, source, chain.ID, queued.request, job.Progress.ActionCheckpoints, getSafeHead, report)
 	if err != nil {
 		m.finishFailed(ctx, &job, err)
 		return
@@ -220,7 +227,12 @@ func (m *Manager) process(ctx context.Context, queued queuedJob) {
 	for _, neighbor := range neighbors {
 		request := queued.request
 		request.Address, request.NeighborLimit = neighbor, 0
-		result, syncErr := m.syncAddress(ctx, source, chain.ID, request, getSafeHead, report)
+		checkpoints, checkpointErr := m.repository.FindSyncCheckpoints(ctx, request.Chain, request.Address, request.StartBlock)
+		if checkpointErr != nil {
+			m.finishFailed(ctx, &job, checkpointErr)
+			return
+		}
+		result, syncErr := m.syncAddress(ctx, source, chain.ID, request, checkpoints, getSafeHead, report)
 		if syncErr != nil {
 			code, retryable := classify(syncErr)
 			job.FailedNeighbors = append(job.FailedNeighbors, store.SyncFailure{Address: neighbor, Code: code, Message: syncErr.Error(), Retryable: retryable})
@@ -241,7 +253,7 @@ func (m *Manager) process(ctx context.Context, queued queuedJob) {
 	m.finish(ctx, &job)
 }
 
-func (m *Manager) syncAddress(ctx context.Context, source Source, chainID int64, request Request, getSafeHead func() (int64, error), report progressReporter) (addressResult, error) {
+func (m *Manager) syncAddress(ctx context.Context, source Source, chainID int64, request Request, checkpoints map[string]int64, getSafeHead func() (int64, error), report progressReporter) (addressResult, error) {
 	now := m.config.Clock().UTC()
 	address, exists, err := m.repository.FindAddress(ctx, request.Chain, request.Address)
 	if err != nil {
@@ -296,7 +308,14 @@ func (m *Manager) syncAddress(ctx context.Context, source Source, chainID int64,
 				progress.RecordsRead += int64(page.Items)
 			})
 		}) {
-			count, fetchErr := m.fetchRange(ctx, action.call, action.name, request.Chain, chainID, request.Address, interval[0], interval[1], discovered, report)
+			start := interval[0]
+			if checkpoint, found := checkpoints[action.name]; found && checkpoint >= start {
+				start = checkpoint + 1
+			}
+			if start > interval[1] {
+				continue
+			}
+			count, fetchErr := m.fetchRange(ctx, action.call, action.name, request.Chain, chainID, request.Address, start, interval[1], discovered, report)
 			if fetchErr != nil {
 				if err := m.repository.FailAddressSync(ctx, request.Chain, request.Address, fetchErr.Error()); err != nil {
 					slog.Error("failed to persist address sync failure", "address", request.Address, "error", err)
@@ -384,6 +403,14 @@ func (m *Manager) fetchRange(ctx context.Context, call func(context.Context, str
 		if writeErr != nil {
 			return 0, writeErr
 		}
+		if resumeBlock > start {
+			report(func(progress *store.SyncProgress) {
+				if progress.ActionCheckpoints == nil {
+					progress.ActionCheckpoints = map[string]int64{}
+				}
+				progress.ActionCheckpoints[actionName] = resumeBlock - 1
+			})
+		}
 		report(func(progress *store.SyncProgress) { progress.SplitCount++ })
 		if resumeBlock <= start {
 			blockCount, blockErr := m.fetchRange(ctx, call, actionName, chain, chainID, address, start, start, discovered, report)
@@ -399,7 +426,16 @@ func (m *Manager) fetchRange(ctx context.Context, call func(context.Context, str
 	if err != nil {
 		return 0, err
 	}
-	return m.persistTransfers(ctx, transfers, chain, chainID, discovered, report)
+	written, err := m.persistTransfers(ctx, transfers, chain, chainID, discovered, report)
+	if err == nil {
+		report(func(progress *store.SyncProgress) {
+			if progress.ActionCheckpoints == nil {
+				progress.ActionCheckpoints = map[string]int64{}
+			}
+			progress.ActionCheckpoints[actionName] = end
+		})
+	}
+	return written, err
 }
 
 func (m *Manager) persistTransfers(ctx context.Context, transfers []store.Transfer, chain string, chainID int64, discovered map[string]struct{}, report progressReporter) (int64, error) {

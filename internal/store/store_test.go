@@ -87,3 +87,30 @@ func TestIndexModels(t *testing.T) {
 		}
 	}
 }
+
+func TestLegacySyncCheckpointsRequireKnownCurrentAction(t *testing.T) {
+	job := SyncJob{StartBlock: 100, SafeHead: 200}
+	if got := legacySyncCheckpoints(job); len(got) != 0 {
+		t.Fatalf("expected no inferred checkpoints before an action starts, got %v", got)
+	}
+
+	job.Progress.CurrentAction = "unknown"
+	if got := legacySyncCheckpoints(job); len(got) != 0 {
+		t.Fatalf("expected no inferred checkpoints for an unknown action, got %v", got)
+	}
+}
+
+func TestLegacySyncCheckpointsResumeWithinObservedRange(t *testing.T) {
+	job := SyncJob{StartBlock: 100, SafeHead: 200, Progress: SyncProgress{
+		CurrentAction: "txlistinternal",
+		RangeStart:    151,
+		RangeEnd:      180,
+	}}
+	got := legacySyncCheckpoints(job)
+	if got["txlist"] != 180 || got["txlistinternal"] != 150 {
+		t.Fatalf("unexpected inferred checkpoints: %v", got)
+	}
+	if _, found := got["tokentx"]; found {
+		t.Fatalf("future action must not have a checkpoint: %v", got)
+	}
+}

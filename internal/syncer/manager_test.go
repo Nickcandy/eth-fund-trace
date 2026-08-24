@@ -28,6 +28,20 @@ type boundarySource struct {
 	transactionRanges [][2]int64
 }
 
+type recordingSource struct {
+	fakeSource
+	ranges [][2]int64
+}
+
+func (s *recordingSource) ListTransactions(_ context.Context, address string, start, end int64) ([]store.Transfer, error) {
+	s.ranges = append(s.ranges, [2]int64{start, end})
+	return s.transfers(address, "txlist", start, end)
+}
+func (s *recordingSource) ListTransactionsWithProgress(ctx context.Context, address string, start, end int64, progress etherscan.ProgressFunc) ([]store.Transfer, error) {
+	s.ranges = append(s.ranges, [2]int64{start, end})
+	return s.transfersWithProgress(ctx, address, "txlist", start, end, progress)
+}
+
 func (s *boundarySource) LatestBlock(context.Context) (int64, error) { return 20, nil }
 
 func (s *boundarySource) ListTransactions(_ context.Context, address string, start, end int64) ([]store.Transfer, error) {
@@ -116,6 +130,20 @@ type memoryRepository struct {
 	transfers             []store.Transfer
 	neighbors             []string
 	omitEmptyActionCounts bool
+}
+
+func (r *memoryRepository) FindSyncCheckpoints(_ context.Context, chain, address string, startBlock int64) (map[string]int64, error) {
+	var latest store.SyncJob
+	for _, job := range r.jobs {
+		if job.Chain == chain && job.Address == address && job.StartBlock == startBlock && job.Status == "failed" && job.CreatedAt.After(latest.CreatedAt) {
+			latest = job
+		}
+	}
+	result := map[string]int64{}
+	for k, v := range latest.Progress.ActionCheckpoints {
+		result[k] = v
+	}
+	return result, nil
 }
 
 func newMemoryRepository() *memoryRepository {
@@ -352,6 +380,25 @@ func TestManagerPersistsCompleteBlocksAndResumesAtRawPageBoundary(t *testing.T) 
 	}
 	if len(repository.transfers) != 2 || repository.transfers[0].BlockNumber != 1 || repository.transfers[1].BlockNumber != 20 {
 		t.Fatalf("transfers = %+v, want early and late records", repository.transfers)
+	}
+}
+
+func TestManagerResumesFailedActionFromPersistedCheckpoint(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	source := &recordingSource{fakeSource: fakeSource{latest: 20}}
+	repository := newMemoryRepository()
+	repository.jobs[primitive.NewObjectID()] = store.SyncJob{Chain: "ethereum", Address: seed, StartBlock: 1, Status: "failed", CreatedAt: time.Now(), Progress: store.SyncProgress{ActionCheckpoints: map[string]int64{"txlist": 10}}}
+	manager := New(source, repository, Config{QueueSize: 10})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = manager.Run(ctx) }()
+	job, err := manager.Enqueue(context.Background(), Request{Chain: "ethereum", Address: seed, StartBlock: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job = waitForJob(t, manager, job.ID.Hex())
+	if job.Status != "succeeded" || len(source.ranges) == 0 || source.ranges[0] != [2]int64{11, 20} {
+		t.Fatalf("job=%+v ranges=%v", job, source.ranges)
 	}
 }
 

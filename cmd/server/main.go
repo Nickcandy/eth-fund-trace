@@ -57,7 +57,7 @@ func run(parent context.Context) error {
 	clientConfig := etherscan.Config{
 		APIKey: cfg.EtherscanAPIKey, BaseURL: cfg.EtherscanBaseURL, PageSize: cfg.EtherscanPageSize,
 		MaxPages: cfg.EtherscanMaxPages, RequestsPerSecond: float64(cfg.EtherscanRequestsPerSecond),
-		Burst: cfg.EtherscanBurst, MaxRetries: cfg.EtherscanMaxRetries, RetryBase: time.Duration(cfg.EtherscanRetryBaseMS) * time.Millisecond, Limiter: sharedEtherscanLimiter,
+		Burst: cfg.EtherscanBurst, MaxRetries: cfg.EtherscanMaxRetries, RetryBase: time.Duration(cfg.EtherscanRetryBaseMS) * time.Millisecond, HTTPClient: &http.Client{Timeout: time.Duration(cfg.EtherscanHTTPTimeoutSeconds) * time.Second}, Limiter: sharedEtherscanLimiter,
 	}
 	ethereumConfig := clientConfig
 	ethereumConfig.Chain, ethereumConfig.ChainID = "ethereum", 1

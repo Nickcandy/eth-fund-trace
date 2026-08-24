@@ -24,6 +24,7 @@ type Config struct {
 	EtherscanBurst              int
 	EtherscanMaxRetries         int
 	EtherscanRetryBaseMS        int
+	EtherscanHTTPTimeoutSeconds int
 	SyncCacheTTLMinutes         int
 	SyncConfirmations           int
 	SyncQueueSize               int
@@ -55,10 +56,11 @@ func Load() Config {
 		EtherscanBaseURL:            value("ETHERSCAN_BASE_URL", "https://api.etherscan.io/v2/api"),
 		EtherscanPageSize:           intValue("ETHERSCAN_PAGE_SIZE", 100),
 		EtherscanMaxPages:           intValue("ETHERSCAN_MAX_PAGES", 100),
-		EtherscanRequestsPerSecond:  intValue("ETHERSCAN_REQUESTS_PER_SECOND", 5),
+		EtherscanRequestsPerSecond:  intValue("ETHERSCAN_REQUESTS_PER_SECOND", 3),
 		EtherscanBurst:              intValue("ETHERSCAN_BURST", 1),
-		EtherscanMaxRetries:         nonNegativeIntValue("ETHERSCAN_MAX_RETRIES", 3),
-		EtherscanRetryBaseMS:        intValue("ETHERSCAN_RETRY_BASE_MS", 500),
+		EtherscanMaxRetries:         nonNegativeIntValue("ETHERSCAN_MAX_RETRIES", 5),
+		EtherscanRetryBaseMS:        intValue("ETHERSCAN_RETRY_BASE_MS", 1000),
+		EtherscanHTTPTimeoutSeconds: intValue("ETHERSCAN_HTTP_TIMEOUT_SECONDS", 30),
 		SyncCacheTTLMinutes:         intValue("SYNC_CACHE_TTL_MINUTES", 15),
 		SyncConfirmations:           nonNegativeIntValue("SYNC_CONFIRMATIONS", 12),
 		SyncQueueSize:               intValue("SYNC_QUEUE_SIZE", 100),
