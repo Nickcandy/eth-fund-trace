@@ -50,6 +50,7 @@ type Config struct {
 	CacheTTL           time.Duration
 	Confirmations      int64
 	QueueSize          int
+	StartBlocks        map[string]int64
 	Clock              func() time.Time
 	AfterAddressSynced func(context.Context, string, string) error
 }
@@ -91,6 +92,9 @@ func NewMulti(sources map[string]Source, repository Repository, config Config) *
 func (m *Manager) Enqueue(ctx context.Context, request Request) (store.SyncJob, error) {
 	chain, chainErr := chains.Resolve(request.Chain)
 	request.Chain = chain.Name
+	if request.StartBlock == 0 {
+		request.StartBlock = m.config.StartBlocks[request.Chain]
+	}
 	normalizedAddress, err := ethaddr.Normalize(request.Address)
 	request.Address = normalizedAddress
 	if chainErr != nil || m.sources[request.Chain] == nil || err != nil || request.StartBlock < 0 || request.NeighborLimit < 0 || request.NeighborLimit > 10 {

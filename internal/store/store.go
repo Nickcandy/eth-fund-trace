@@ -81,6 +81,9 @@ func indexModels() map[string][]mongo.IndexModel {
 			{Keys: bson.D{{Key: "sourceChain", Value: 1}, {Key: "sourceTxHash", Value: 1}, {Key: "sourceLogIndex", Value: 1}, {Key: "targetChain", Value: 1}, {Key: "targetTxHash", Value: 1}, {Key: "targetLogIndex", Value: 1}}, Options: options.Index().SetUnique(true).SetName("uq_cross_chain_link_evidence")},
 			{Keys: bson.D{{Key: "sourceChain", Value: 1}, {Key: "sourceAddress", Value: 1}, {Key: "observedAt", Value: -1}}, Options: options.Index().SetName("idx_cross_chain_source_address")},
 			{Keys: bson.D{{Key: "targetChain", Value: 1}, {Key: "targetAddress", Value: 1}, {Key: "observedAt", Value: -1}}, Options: options.Index().SetName("idx_cross_chain_target_address")},
+			{Keys: bson.D{{Key: "identityKey", Value: 1}}, Options: options.Index().SetUnique(true).SetSparse(true).SetName("uq_cross_chain_auto_identity")},
+			{Keys: bson.D{{Key: "status", Value: 1}, {Key: "nextCheckAt", Value: 1}}, Options: options.Index().SetName("idx_cross_chain_status_check")},
+			{Keys: bson.D{{Key: "sourceChain", Value: 1}, {Key: "targetChain", Value: 1}, {Key: "protocol", Value: 1}, {Key: "status", Value: 1}}, Options: options.Index().SetName("idx_cross_chain_protocol_status")},
 		},
 		TransactionAnalysesCollection: {
 			{Keys: bson.D{{Key: "chain", Value: 1}, {Key: "txHash", Value: 1}}, Options: options.Index().SetUnique(true).SetName("uq_transaction_analyses_chain_hash")},
@@ -508,6 +511,9 @@ func (s *Store) UpsertTransfer(ctx context.Context, transfer Transfer) error {
 
 func (s *Store) UpsertCrossChainLink(ctx context.Context, link CrossChainLink) (CrossChainLink, error) {
 	filter := bson.D{{Key: "sourceChain", Value: link.SourceChain}, {Key: "sourceTxHash", Value: link.SourceTxHash}, {Key: "sourceLogIndex", Value: link.SourceLogIndex}, {Key: "targetChain", Value: link.TargetChain}, {Key: "targetTxHash", Value: link.TargetTxHash}, {Key: "targetLogIndex", Value: link.TargetLogIndex}}
+	if link.IdentityKey != "" {
+		filter = bson.D{{Key: "identityKey", Value: link.IdentityKey}}
+	}
 	link.ID = primitive.NilObjectID
 	_, err := s.db.Collection(CrossChainLinksCollection).UpdateOne(ctx, filter, bson.D{{Key: "$set", Value: link}}, options.Update().SetUpsert(true))
 	if err != nil {
@@ -517,8 +523,32 @@ func (s *Store) UpsertCrossChainLink(ctx context.Context, link CrossChainLink) (
 	return link, err
 }
 
+// QueryCrossChainLinks returns filtered links without implying graph traversability.
+func (s *Store) QueryCrossChainLinks(ctx context.Context, query BridgeLinkQuery) ([]CrossChainLink, error) {
+	filter := bson.D{}
+	if query.Chain != "" && query.Address != "" {
+		filter = append(filter, bson.E{Key: "$or", Value: bson.A{
+			bson.D{{Key: "sourceChain", Value: query.Chain}, {Key: "sourceAddress", Value: query.Address}},
+			bson.D{{Key: "targetChain", Value: query.Chain}, {Key: "targetAddress", Value: query.Address}},
+		}})
+	}
+	if query.Status != "" { filter = append(filter, bson.E{Key: "status", Value: query.Status}) }
+	if query.Protocol != "" { filter = append(filter, bson.E{Key: "protocol", Value: query.Protocol}) }
+	if query.Direction != "" { filter = append(filter, bson.E{Key: "direction", Value: query.Direction}) }
+	if !query.DueBefore.IsZero() {
+		filter = append(filter, bson.E{Key: "status", Value: bson.D{{Key: "$in", Value: bson.A{"initiated", "proven", "finalized"}}}}, bson.E{Key: "nextCheckAt", Value: bson.D{{Key: "$lte", Value: query.DueBefore}}})
+	}
+	limit := query.Limit
+	if limit <= 0 { limit = 100 }
+	cursor, err := s.db.Collection(CrossChainLinksCollection).Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "observedAt", Value: -1}}).SetLimit(limit))
+	if err != nil { return nil, err }
+	defer cursor.Close(ctx)
+	var result []CrossChainLink
+	return result, cursor.All(ctx, &result)
+}
+
 func (s *Store) ListCrossChainLinks(ctx context.Context, chain, address string, limit int64) ([]CrossChainLink, error) {
-	filter := bson.D{{Key: "$or", Value: bson.A{
+	filter := bson.D{{Key: "status", Value: bson.D{{Key: "$in", Value: bson.A{"completed", "confirmed"}}}}, {Key: "$or", Value: bson.A{
 		bson.D{{Key: "sourceChain", Value: chain}, {Key: "sourceAddress", Value: address}},
 		bson.D{{Key: "targetChain", Value: chain}, {Key: "targetAddress", Value: address}},
 	}}}

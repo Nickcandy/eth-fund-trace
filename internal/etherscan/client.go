@@ -39,10 +39,12 @@ type RPCTransaction struct {
 
 // RPCLog is a raw receipt log returned by the Etherscan proxy.
 type RPCLog struct {
-	Address  string   `json:"address"`
-	Topics   []string `json:"topics"`
-	Data     string   `json:"data"`
-	LogIndex string   `json:"logIndex"`
+	Address         string   `json:"address"`
+	Topics          []string `json:"topics"`
+	Data            string   `json:"data"`
+	LogIndex        string   `json:"logIndex"`
+	TransactionHash string   `json:"transactionHash"`
+	BlockNumber     string   `json:"blockNumber"`
 }
 
 // RPCReceipt is the subset of a transaction receipt used by analysis.

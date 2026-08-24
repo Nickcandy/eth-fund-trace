@@ -27,6 +27,8 @@ type Config struct {
 	SyncCacheTTLMinutes        int
 	SyncConfirmations          int
 	SyncQueueSize              int
+	EthereumSyncStartBlock     int64
+	BaseSyncStartBlock         int64
 }
 
 func Load() Config {
@@ -52,6 +54,8 @@ func Load() Config {
 		SyncCacheTTLMinutes:        intValue("SYNC_CACHE_TTL_MINUTES", 15),
 		SyncConfirmations:          nonNegativeIntValue("SYNC_CONFIRMATIONS", 12),
 		SyncQueueSize:              intValue("SYNC_QUEUE_SIZE", 100),
+		EthereumSyncStartBlock:     int64Value("ETHEREUM_SYNC_START_BLOCK", 21525891),
+		BaseSyncStartBlock:         int64Value("BASE_SYNC_START_BLOCK", 24450127),
 	}
 }
 
@@ -80,6 +84,14 @@ func value(key, fallback string) string {
 
 func intValue(key string, fallback int) int {
 	parsed, err := strconv.Atoi(os.Getenv(key))
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
+}
+
+func int64Value(key string, fallback int64) int64 {
+	parsed, err := strconv.ParseInt(os.Getenv(key), 10, 64)
 	if err != nil || parsed <= 0 {
 		return fallback
 	}

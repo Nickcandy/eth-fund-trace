@@ -203,6 +203,7 @@ type TransactionAnalysis struct {
 	Transfers          []ReceiptTransfer `bson:"transfers" json:"transfers"`
 	Swaps              []SwapEvent       `bson:"swaps" json:"swaps"`
 	Wraps              []WrapEvent       `bson:"wraps" json:"wraps"`
+	BridgeLinks        []CrossChainLink  `bson:"bridgeLinks,omitempty" json:"bridgeLinks,omitempty"`
 	FinalOutputAddress string            `bson:"finalOutputAddress,omitempty" json:"finalOutputAddress,omitempty"`
 	Quality            AnalysisQuality   `bson:"quality" json:"quality"`
 	AnalyzedAt         time.Time         `bson:"analyzedAt" json:"analyzedAt"`
@@ -282,6 +283,28 @@ type CrossChainLink struct {
 	TargetAsset    string             `bson:"targetAsset" json:"targetAsset"`
 	TargetAmount   string             `bson:"targetAmount" json:"targetAmount"`
 	Status         string             `bson:"status" json:"status"`
+	IdentityKey    string             `bson:"identityKey,omitempty" json:"identityKey,omitempty"`
+	Protocol       string             `bson:"protocol,omitempty" json:"protocol,omitempty"`
+	Direction      string             `bson:"direction,omitempty" json:"direction,omitempty"`
+	MessageHash    string             `bson:"messageHash,omitempty" json:"messageHash,omitempty"`
+	Nonce          string             `bson:"nonce,omitempty" json:"nonce,omitempty"`
+	SourceBlock    int64              `bson:"sourceBlock,omitempty" json:"sourceBlock,omitempty"`
+	TargetBlock    int64              `bson:"targetBlock,omitempty" json:"targetBlock,omitempty"`
+	EvidenceLevel  string             `bson:"evidenceLevel,omitempty" json:"evidenceLevel,omitempty"`
+	LastCheckedAt  time.Time          `bson:"lastCheckedAt,omitempty" json:"lastCheckedAt,omitempty"`
+	NextCheckAt    time.Time          `bson:"nextCheckAt,omitempty" json:"nextCheckAt,omitempty"`
+	AdapterVersion string             `bson:"adapterVersion,omitempty" json:"adapterVersion,omitempty"`
 	Evidence       []string           `bson:"evidence" json:"evidence"`
 	ObservedAt     time.Time          `bson:"observedAt" json:"observedAt"`
+}
+
+// BridgeLinkQuery filters cross-chain links for API and worker use.
+type BridgeLinkQuery struct {
+	Chain     string
+	Address   string
+	Status    string
+	Protocol  string
+	Direction string
+	Limit     int64
+	DueBefore time.Time
 }

@@ -66,6 +66,7 @@ func run(parent context.Context) error {
 	addressProfiler := profile.New(appStore, time.Now)
 	syncManager := syncer.NewMulti(etherscanClients, appStore, syncer.Config{
 		CacheTTL: time.Duration(cfg.SyncCacheTTLMinutes) * time.Minute, Confirmations: int64(cfg.SyncConfirmations), QueueSize: cfg.SyncQueueSize,
+		StartBlocks: map[string]int64{"ethereum": cfg.EthereumSyncStartBlock, "base": cfg.BaseSyncStartBlock},
 		AfterAddressSynced: func(ctx context.Context, chain, address string) error {
 			_, err := addressProfiler.Get(ctx, chain, address)
 			return err

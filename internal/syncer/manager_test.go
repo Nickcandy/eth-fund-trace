@@ -284,6 +284,34 @@ func TestManagerHandlesOmittedEmptyActionCountsAfterPersistence(t *testing.T) {
 	}
 }
 
+func TestManagerUsesChainDefaultStartBlock(t *testing.T) {
+	repository := newMemoryRepository()
+	manager := NewMulti(map[string]Source{
+		"ethereum": &fakeSource{},
+		"base":     &fakeSource{},
+	}, repository, Config{StartBlocks: map[string]int64{"ethereum": 21525891, "base": 24450127}})
+
+	tests := []struct {
+		chain      string
+		address    string
+		startBlock int64
+		want       int64
+	}{
+		{chain: "ethereum", address: "0x0000000000000000000000000000000000000001", want: 21525891},
+		{chain: "base", address: "0x0000000000000000000000000000000000000001", want: 24450127},
+		{chain: "ethereum", address: "0x0000000000000000000000000000000000000002", startBlock: 22000000, want: 22000000},
+	}
+	for _, test := range tests {
+		job, err := manager.Enqueue(context.Background(), Request{Chain: test.chain, Address: test.address, StartBlock: test.startBlock})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if job.StartBlock != test.want {
+			t.Fatalf("chain %s start block = %d, want %d", test.chain, job.StartBlock, test.want)
+		}
+	}
+}
+
 func TestManagerSplitsRangesAtPageLimit(t *testing.T) {
 	source := &fakeSource{latest: 20, maxRange: 5}
 	repository := newMemoryRepository()
