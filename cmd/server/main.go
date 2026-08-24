@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/Nickcandy/eth-fund-trace/internal/bridge"
+	"github.com/Nickcandy/eth-fund-trace/internal/chainrpc"
 	"github.com/Nickcandy/eth-fund-trace/internal/config"
 	"github.com/Nickcandy/eth-fund-trace/internal/etherscan"
 	"github.com/Nickcandy/eth-fund-trace/internal/fundgraph"
@@ -64,12 +66,52 @@ func run(parent context.Context) error {
 	ethereumClient := etherscan.NewClient(ethereumConfig)
 	etherscanClients := map[string]syncer.Source{"ethereum": ethereumClient, "base": etherscan.NewClient(baseConfig)}
 	addressProfiler := profile.New(appStore, time.Now)
+	var bridgeAnalyzer *bridge.Analyzer
+	var bridgeWorker *bridge.Worker
+	if cfg.EthereumRPCURL != "" || cfg.BaseRPCURL != "" {
+		if cfg.EthereumRPCURL == "" || cfg.BaseRPCURL == "" {
+			return errors.New("both ETHEREUM_RPC_URL and BASE_RPC_URL are required")
+		}
+		ethereumRPC := chainrpc.New(chainrpc.Config{URL: cfg.EthereumRPCURL, ChainID: 1})
+		baseRPC := chainrpc.New(chainrpc.Config{URL: cfg.BaseRPCURL, ChainID: 8453})
+		if err := ethereumRPC.ValidateChain(connectCtx); err != nil {
+			return err
+		}
+		if err := baseRPC.ValidateChain(connectCtx); err != nil {
+			return err
+		}
+		bridgeAnalyzer = bridge.NewAnalyzer(map[string]bridge.BridgeSource{"ethereum": ethereumRPC, "base": baseRPC}, appStore, time.Now).WithConfirmations(map[string]int64{"ethereum": int64(cfg.EthereumBridgeConfirmations), "base": int64(cfg.BaseBridgeConfirmations)})
+		bridgeWorker = bridge.NewWorker(bridgeAnalyzer, appStore, bridge.WorkerConfig{Interval: time.Duration(cfg.BridgeSyncIntervalSeconds) * time.Second, BatchSize: int64(cfg.BridgeSyncBatchSize), MaxRetries: cfg.BridgeSyncMaxRetries, MaxConcurrency: cfg.BridgeSyncMaxConcurrency})
+	}
 	syncManager := syncer.NewMulti(etherscanClients, appStore, syncer.Config{
 		CacheTTL: time.Duration(cfg.SyncCacheTTLMinutes) * time.Minute, Confirmations: int64(cfg.SyncConfirmations), QueueSize: cfg.SyncQueueSize,
 		StartBlocks: map[string]int64{"ethereum": cfg.EthereumSyncStartBlock, "base": cfg.BaseSyncStartBlock},
 		AfterAddressSynced: func(ctx context.Context, chain, address string) error {
 			_, err := addressProfiler.Get(ctx, chain, address)
 			return err
+		},
+		OnTransfersPersisted: func(ctx context.Context, chain string, transfers []store.Transfer) {
+			if bridgeAnalyzer == nil {
+				return
+			}
+			seen := make(map[string]struct{})
+			for _, transfer := range transfers {
+				bridgeAddress := bridge.EthereumL1StandardBridge
+				if chain == "base" {
+					bridgeAddress = bridge.BaseL2StandardBridge
+				}
+				if !strings.EqualFold(transfer.From, bridgeAddress) && !strings.EqualFold(transfer.To, bridgeAddress) {
+					continue
+				}
+				hash := strings.ToLower(transfer.TxHash)
+				if _, ok := seen[hash]; ok {
+					continue
+				}
+				seen[hash] = struct{}{}
+				if _, err := bridgeAnalyzer.Analyze(ctx, chain, hash); err != nil && !errors.Is(err, chainrpc.ErrPending) {
+					slog.Warn("bridge analysis failed", "chain", chain, "tx_hash", hash, "error", err)
+				}
+			}
 		},
 	})
 
@@ -92,9 +134,11 @@ func run(parent context.Context) error {
 	labelHandler := httpapi.NewLabelHandler(appStore)
 	e.POST("/api/v1/labels", labelHandler.Create)
 	e.GET("/api/v1/labels", labelHandler.List)
-	bridgeHandler := httpapi.NewBridgeHandler(bridge.New(appStore))
+	bridgeHandler := httpapi.NewBridgeHandler(bridge.New(appStore)).WithAutomation(bridgeAnalyzer, bridgeWorker)
 	e.POST("/api/v1/bridge-links", bridgeHandler.Create)
 	e.GET("/api/v1/bridge-links", bridgeHandler.List)
+	e.POST("/api/v1/bridge-analysis", bridgeHandler.Analyze)
+	e.POST("/api/v1/bridge-sync", bridgeHandler.Sync)
 	if err := httpapi.RegisterWeb(e, cfg.WebDistDir); err != nil {
 		slog.Warn("web console not available", "directory", cfg.WebDistDir, "error", err)
 	}
@@ -106,6 +150,13 @@ func run(parent context.Context) error {
 			slog.Error("sync manager stopped", "error", err)
 		}
 	}()
+	if bridgeWorker != nil {
+		go func() {
+			if err := bridgeWorker.Run(serverCtx); err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error("bridge worker stopped", "error", err)
+			}
+		}()
+	}
 	go func() {
 		if err := traceManager.Run(serverCtx); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("trace manager stopped", "error", err)

@@ -294,6 +294,8 @@ type CrossChainLink struct {
 	LastCheckedAt  time.Time          `bson:"lastCheckedAt,omitempty" json:"lastCheckedAt,omitempty"`
 	NextCheckAt    time.Time          `bson:"nextCheckAt,omitempty" json:"nextCheckAt,omitempty"`
 	AdapterVersion string             `bson:"adapterVersion,omitempty" json:"adapterVersion,omitempty"`
+	RetryCount     int                `bson:"retryCount,omitempty" json:"retryCount,omitempty"`
+	LastErrorCode  string             `bson:"lastErrorCode,omitempty" json:"lastErrorCode,omitempty"`
 	Evidence       []string           `bson:"evidence" json:"evidence"`
 	ObservedAt     time.Time          `bson:"observedAt" json:"observedAt"`
 }

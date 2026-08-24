@@ -47,12 +47,13 @@ type Request struct {
 }
 
 type Config struct {
-	CacheTTL           time.Duration
-	Confirmations      int64
-	QueueSize          int
-	StartBlocks        map[string]int64
-	Clock              func() time.Time
-	AfterAddressSynced func(context.Context, string, string) error
+	CacheTTL             time.Duration
+	Confirmations        int64
+	QueueSize            int
+	StartBlocks          map[string]int64
+	Clock                func() time.Time
+	AfterAddressSynced   func(context.Context, string, string) error
+	OnTransfersPersisted func(context.Context, string, []store.Transfer)
 }
 
 type queuedJob struct {
@@ -421,6 +422,9 @@ func (m *Manager) persistTransfers(ctx context.Context, transfers []store.Transf
 		endIndex := min(startIndex+1000, len(transfers))
 		if _, err := m.repository.BulkUpsertTransfers(ctx, transfers[startIndex:endIndex]); err != nil {
 			return 0, err
+		}
+		if m.config.OnTransfersPersisted != nil {
+			m.config.OnTransfersPersisted(ctx, chain, transfers[startIndex:endIndex])
 		}
 		count := int64(endIndex - startIndex)
 		report(func(progress *store.SyncProgress) { progress.RecordsWritten += count })

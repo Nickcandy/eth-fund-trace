@@ -432,4 +432,31 @@ paths:
         - {$ref: '#/components/parameters/Chain'}
         - {name: address, in: query, required: true, schema: {type: string}}
         - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 500, default: 100}}
-      responses: {'200': {description: Confirmed links touching the chain/address node}}
+        - {name: status, in: query, schema: {type: string, enum: [initiated, proven, finalized, completed, confirmed, failed, ambiguous]}}
+        - {name: protocol, in: query, schema: {type: string, enum: [official_opstack_bridge]}}
+        - {name: direction, in: query, schema: {type: string, enum: [deposit, withdrawal]}}
+      responses: {'200': {description: Bridge links touching the chain/address node}}
+  /api/v1/bridge-analysis:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chain, txHash]
+              properties:
+                chain: {type: string, enum: [ethereum, base]}
+                txHash: {type: string, pattern: '^0x[0-9a-fA-F]{64}$'}
+      responses: {'200': {description: Recognized official bridge links}, '400': {$ref: '#/components/responses/BadRequest'}}
+  /api/v1/bridge-sync:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [linkId]
+              properties: {linkId: {type: string}}
+      responses: {'202': {description: Bridge status refresh queued}, '400': {$ref: '#/components/responses/BadRequest'}}

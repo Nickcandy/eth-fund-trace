@@ -514,12 +514,71 @@ func (s *Store) UpsertCrossChainLink(ctx context.Context, link CrossChainLink) (
 	if link.IdentityKey != "" {
 		filter = bson.D{{Key: "identityKey", Value: link.IdentityKey}}
 	}
+	var existing CrossChainLink
+	if err := s.db.Collection(CrossChainLinksCollection).FindOne(ctx, filter).Decode(&existing); err == nil {
+		link = mergeCrossChainLink(existing, link)
+	} else if !errors.Is(err, mongo.ErrNoDocuments) {
+		return CrossChainLink{}, err
+	}
 	link.ID = primitive.NilObjectID
 	_, err := s.db.Collection(CrossChainLinksCollection).UpdateOne(ctx, filter, bson.D{{Key: "$set", Value: link}}, options.Update().SetUpsert(true))
 	if err != nil {
 		return CrossChainLink{}, err
 	}
 	err = s.db.Collection(CrossChainLinksCollection).FindOne(ctx, filter).Decode(&link)
+	return link, err
+}
+
+func mergeCrossChainLink(existing, incoming CrossChainLink) CrossChainLink {
+	result := incoming
+	result.ID = existing.ID
+	if statusRank(existing.Status) > statusRank(incoming.Status) {
+		result.Status = existing.Status
+	}
+	if result.TargetTxHash == "" {
+		result.TargetTxHash = existing.TargetTxHash
+	}
+	if result.TargetLogIndex == 0 && existing.TargetTxHash != "" {
+		result.TargetLogIndex = existing.TargetLogIndex
+	}
+	if result.TargetBlock == 0 {
+		result.TargetBlock = existing.TargetBlock
+	}
+	if result.MessageHash == "" {
+		result.MessageHash = existing.MessageHash
+	}
+	if result.Nonce == "" {
+		result.Nonce = existing.Nonce
+	}
+	if result.ObservedAt.IsZero() {
+		result.ObservedAt = existing.ObservedAt
+	}
+	if result.SourceAddress == "" {
+		result.SourceAddress = existing.SourceAddress
+	}
+	if result.TargetAddress == "" {
+		result.TargetAddress = existing.TargetAddress
+	}
+	seen := make(map[string]struct{}, len(existing.Evidence)+len(incoming.Evidence))
+	result.Evidence = make([]string, 0, len(existing.Evidence)+len(incoming.Evidence))
+	for _, values := range [][]string{existing.Evidence, incoming.Evidence} {
+		for _, value := range values {
+			if _, ok := seen[value]; !ok && value != "" {
+				seen[value] = struct{}{}
+				result.Evidence = append(result.Evidence, value)
+			}
+		}
+	}
+	return result
+}
+
+func statusRank(status string) int {
+	return map[string]int{"initiated": 1, "proven": 2, "finalized": 3, "confirmed": 4, "completed": 4, "failed": 5, "ambiguous": 5}[status]
+}
+
+func (s *Store) FindCrossChainLink(ctx context.Context, id primitive.ObjectID) (CrossChainLink, error) {
+	var link CrossChainLink
+	err := s.db.Collection(CrossChainLinksCollection).FindOne(ctx, bson.D{{Key: "_id", Value: id}}).Decode(&link)
 	return link, err
 }
 
@@ -532,16 +591,26 @@ func (s *Store) QueryCrossChainLinks(ctx context.Context, query BridgeLinkQuery)
 			bson.D{{Key: "targetChain", Value: query.Chain}, {Key: "targetAddress", Value: query.Address}},
 		}})
 	}
-	if query.Status != "" { filter = append(filter, bson.E{Key: "status", Value: query.Status}) }
-	if query.Protocol != "" { filter = append(filter, bson.E{Key: "protocol", Value: query.Protocol}) }
-	if query.Direction != "" { filter = append(filter, bson.E{Key: "direction", Value: query.Direction}) }
+	if query.Status != "" {
+		filter = append(filter, bson.E{Key: "status", Value: query.Status})
+	}
+	if query.Protocol != "" {
+		filter = append(filter, bson.E{Key: "protocol", Value: query.Protocol})
+	}
+	if query.Direction != "" {
+		filter = append(filter, bson.E{Key: "direction", Value: query.Direction})
+	}
 	if !query.DueBefore.IsZero() {
 		filter = append(filter, bson.E{Key: "status", Value: bson.D{{Key: "$in", Value: bson.A{"initiated", "proven", "finalized"}}}}, bson.E{Key: "nextCheckAt", Value: bson.D{{Key: "$lte", Value: query.DueBefore}}})
 	}
 	limit := query.Limit
-	if limit <= 0 { limit = 100 }
+	if limit <= 0 {
+		limit = 100
+	}
 	cursor, err := s.db.Collection(CrossChainLinksCollection).Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "observedAt", Value: -1}}).SetLimit(limit))
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer cursor.Close(ctx)
 	var result []CrossChainLink
 	return result, cursor.All(ctx, &result)

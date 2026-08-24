@@ -25,9 +25,17 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("HTTP_BODY_LIMIT", "")
 	t.Setenv("HTTP_REQUESTS_PER_SECOND", "")
 	t.Setenv("HTTP_BURST", "")
+	t.Setenv("ETHEREUM_RPC_URL", "")
+	t.Setenv("BASE_RPC_URL", "")
+	t.Setenv("ETHEREUM_BRIDGE_CONFIRMATIONS", "")
+	t.Setenv("BASE_BRIDGE_CONFIRMATIONS", "")
+	t.Setenv("BRIDGE_SYNC_INTERVAL_SECONDS", "")
+	t.Setenv("BRIDGE_SYNC_BATCH_SIZE", "")
+	t.Setenv("BRIDGE_SYNC_MAX_RETRIES", "")
+	t.Setenv("BRIDGE_SYNC_MAX_CONCURRENCY", "")
 
 	got := Load()
-	if got.HTTPAddr != ":8080" || got.HTTPTimeoutSeconds != 30 || got.HTTPBodyLimit != "1M" || got.HTTPRequestsPerSecond != 20 || got.HTTPBurst != 10 || got.MongoURI != "mongodb://localhost:27017" || got.MongoDatabase != "eth_fund_trace" || got.EtherscanBaseURL != "https://api.etherscan.io/v2/api" || got.EtherscanPageSize != 100 || got.EtherscanMaxPages != 100 || got.EtherscanRequestsPerSecond != 5 || got.EtherscanBurst != 1 || got.EtherscanMaxRetries != 3 || got.SyncCacheTTLMinutes != 15 || got.SyncConfirmations != 12 || got.SyncQueueSize != 100 || got.EthereumSyncStartBlock != 21525891 || got.BaseSyncStartBlock != 24450127 {
+	if got.HTTPAddr != ":8080" || got.HTTPTimeoutSeconds != 30 || got.HTTPBodyLimit != "1M" || got.HTTPRequestsPerSecond != 20 || got.HTTPBurst != 10 || got.MongoURI != "mongodb://localhost:27017" || got.MongoDatabase != "eth_fund_trace" || got.EtherscanBaseURL != "https://api.etherscan.io/v2/api" || got.EtherscanPageSize != 100 || got.EtherscanMaxPages != 100 || got.EtherscanRequestsPerSecond != 5 || got.EtherscanBurst != 1 || got.EtherscanMaxRetries != 3 || got.SyncCacheTTLMinutes != 15 || got.SyncConfirmations != 12 || got.SyncQueueSize != 100 || got.EthereumSyncStartBlock != 21525891 || got.BaseSyncStartBlock != 24450127 || got.EthereumBridgeConfirmations != 12 || got.BaseBridgeConfirmations != 20 || got.BridgeSyncBatchSize != 50 {
 		t.Fatalf("unexpected defaults: %+v", got)
 	}
 }
@@ -55,9 +63,17 @@ func TestLoadEnvironment(t *testing.T) {
 	t.Setenv("HTTP_BODY_LIMIT", "2M")
 	t.Setenv("HTTP_REQUESTS_PER_SECOND", "8")
 	t.Setenv("HTTP_BURST", "3")
+	t.Setenv("ETHEREUM_RPC_URL", "https://ethereum.example/rpc")
+	t.Setenv("BASE_RPC_URL", "https://base.example/rpc")
+	t.Setenv("ETHEREUM_BRIDGE_CONFIRMATIONS", "15")
+	t.Setenv("BASE_BRIDGE_CONFIRMATIONS", "25")
+	t.Setenv("BRIDGE_SYNC_INTERVAL_SECONDS", "30")
+	t.Setenv("BRIDGE_SYNC_BATCH_SIZE", "20")
+	t.Setenv("BRIDGE_SYNC_MAX_RETRIES", "6")
+	t.Setenv("BRIDGE_SYNC_MAX_CONCURRENCY", "4")
 
 	got := Load()
-	if got.HTTPAddr != ":9090" || got.HTTPAPIKey != "api-secret" || !got.HTTPAuthDisabled || got.HTTPTimeoutSeconds != 12 || got.HTTPBodyLimit != "2M" || got.HTTPRequestsPerSecond != 8 || got.HTTPBurst != 3 || got.MongoURI != "mongodb://mongo:27017" || got.MongoDatabase != "test_db" || got.EtherscanAPIKey != "secret" || got.EtherscanBaseURL != "http://localhost:9999/api" || got.EtherscanPageSize != 25 || got.EtherscanMaxPages != 4 || got.EtherscanRequestsPerSecond != 7 || got.EtherscanBurst != 2 || got.EtherscanMaxRetries != 4 || got.EtherscanRetryBaseMS != 25 || got.SyncCacheTTLMinutes != 30 || got.SyncConfirmations != 20 || got.SyncQueueSize != 50 || got.EthereumSyncStartBlock != 22000000 || got.BaseSyncStartBlock != 25000000 {
+	if got.HTTPAddr != ":9090" || got.HTTPAPIKey != "api-secret" || !got.HTTPAuthDisabled || got.HTTPTimeoutSeconds != 12 || got.HTTPBodyLimit != "2M" || got.HTTPRequestsPerSecond != 8 || got.HTTPBurst != 3 || got.MongoURI != "mongodb://mongo:27017" || got.MongoDatabase != "test_db" || got.EtherscanAPIKey != "secret" || got.EtherscanBaseURL != "http://localhost:9999/api" || got.EtherscanPageSize != 25 || got.EtherscanMaxPages != 4 || got.EtherscanRequestsPerSecond != 7 || got.EtherscanBurst != 2 || got.EtherscanMaxRetries != 4 || got.EtherscanRetryBaseMS != 25 || got.SyncCacheTTLMinutes != 30 || got.SyncConfirmations != 20 || got.SyncQueueSize != 50 || got.EthereumSyncStartBlock != 22000000 || got.BaseSyncStartBlock != 25000000 || got.EthereumRPCURL != "https://ethereum.example/rpc" || got.BaseRPCURL != "https://base.example/rpc" || got.BridgeSyncMaxConcurrency != 4 {
 		t.Fatalf("unexpected environment config: %+v", got)
 	}
 }

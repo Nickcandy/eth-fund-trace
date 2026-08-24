@@ -20,6 +20,7 @@ type Repository interface {
 	UpsertCrossChainLink(context.Context, store.CrossChainLink) (store.CrossChainLink, error)
 	ListCrossChainLinks(context.Context, string, string, int64) ([]store.CrossChainLink, error)
 	HasTransferEvidence(context.Context, string, string, int64, string, string, string) (bool, error)
+	QueryCrossChainLinks(context.Context, store.BridgeLinkQuery) ([]store.CrossChainLink, error)
 }
 
 type CreateRequest struct {
@@ -87,16 +88,33 @@ func normalizeFact(asset, amount string) (string, string, bool) {
 }
 
 func (s *Service) List(ctx context.Context, chainName, address string, limit int64) ([]store.CrossChainLink, error) {
-	chain, err := chains.Resolve(chainName)
+	return s.Query(ctx, store.BridgeLinkQuery{Chain: chainName, Address: address, Limit: limit})
+}
+
+func (s *Service) Query(ctx context.Context, query store.BridgeLinkQuery) ([]store.CrossChainLink, error) {
+	chain, err := chains.Resolve(query.Chain)
 	if err != nil {
 		return nil, ErrInvalidRequest
 	}
-	normalized, err := ethaddr.Normalize(address)
-	if err != nil || limit < 0 || limit > 500 {
+	normalized, err := ethaddr.Normalize(query.Address)
+	if err != nil || query.Limit < 0 || query.Limit > 500 || !validFilter(query.Status, "initiated", "proven", "finalized", "completed", "confirmed", "failed", "ambiguous") || !validFilter(query.Direction, "deposit", "withdrawal") || (query.Protocol != "" && query.Protocol != ProtocolOfficialOPStack) {
 		return nil, ErrInvalidRequest
 	}
-	if limit == 0 {
-		limit = 100
+	if query.Limit == 0 {
+		query.Limit = 100
 	}
-	return s.repository.ListCrossChainLinks(ctx, chain.Name, normalized, limit)
+	query.Chain, query.Address = chain.Name, normalized
+	return s.repository.QueryCrossChainLinks(ctx, query)
+}
+
+func validFilter(value string, allowed ...string) bool {
+	if value == "" {
+		return true
+	}
+	for _, item := range allowed {
+		if value == item {
+			return true
+		}
+	}
+	return false
 }

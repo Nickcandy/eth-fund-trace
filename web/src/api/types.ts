@@ -42,7 +42,7 @@ export interface CrossChainLink {
   sourceAddress: string;
   targetChain: Chain;
   targetChainId?: number;
-  targetTxHash: string;
+  targetTxHash?: string;
   targetLogIndex: number;
   targetAddress: string;
   bridgeAddress: string;
@@ -51,6 +51,19 @@ export interface CrossChainLink {
   targetAsset: string;
   targetAmount: string;
   status?: string;
+  identityKey?: string;
+  protocol?: string;
+  direction?: "deposit" | "withdrawal";
+  messageHash?: string;
+  nonce?: string;
+  sourceBlock?: number;
+  targetBlock?: number;
+  evidenceLevel?: "confirmed" | "strong" | "partial";
+  lastCheckedAt?: string;
+  nextCheckAt?: string;
+  adapterVersion?: string;
+  retryCount?: number;
+  lastErrorCode?: string;
   evidence: string[];
   observedAt?: string;
 }
@@ -186,4 +199,6 @@ export interface LabelInput {
   source: "manual" | "public-list"; note?: string; evidence: string[];
 }
 
-export type BridgeInput = Omit<CrossChainLink, "id" | "sourceChainId" | "targetChainId" | "status" | "observedAt">;
+export type BridgeInput = Pick<CrossChainLink, "sourceChain"|"sourceTxHash"|"sourceLogIndex"|"sourceAddress"|"targetChain"|"targetTxHash"|"targetLogIndex"|"targetAddress"|"bridgeAddress"|"sourceAsset"|"sourceAmount"|"targetAsset"|"targetAmount"|"evidence">;
+export interface BridgeAnalysisInput { chain: Chain; txHash: string }
+export interface BridgeSyncAccepted { status: "queued"; linkId: string }
