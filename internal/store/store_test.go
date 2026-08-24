@@ -7,6 +7,17 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 )
 
+func TestNormalizeBSON(t *testing.T) {
+	value := normalizeBSON(bson.D{{Key: "nodes", Value: bson.A{bson.D{{Key: "address", Value: "0x1"}}}}})
+	object, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("type=%T, want map", value)
+	}
+	if _, ok := object["nodes"].([]any); !ok {
+		t.Fatalf("nodes type=%T, want slice", object["nodes"])
+	}
+}
+
 func TestTransferUsesStringAmountsAndBSONFields(t *testing.T) {
 	doc, err := bson.Marshal(Transfer{Chain: "ethereum", Amount: "1000000000000000000", TokenValue: "42", ObservedAt: time.Unix(1, 0)})
 	if err != nil {

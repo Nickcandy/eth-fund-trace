@@ -354,6 +354,7 @@ func (s *Store) CreateTraceJob(ctx context.Context, job *TraceJob) error {
 func (s *Store) GetTraceJob(ctx context.Context, id primitive.ObjectID) (TraceJob, error) {
 	var job TraceJob
 	err := s.db.Collection(TraceJobsCollection).FindOne(ctx, bson.D{{Key: "_id", Value: id}}).Decode(&job)
+	job.Result = normalizeBSON(job.Result)
 	return job, err
 }
 
@@ -368,7 +369,39 @@ func (s *Store) FindLatestTraceJob(ctx context.Context, chain, seedAddress, dire
 		{Key: "asset", Value: asset},
 	}
 	err := s.db.Collection(TraceJobsCollection).FindOne(ctx, filter, options.FindOne().SetSort(bson.D{{Key: "createdAt", Value: -1}})).Decode(&job)
+	job.Result = normalizeBSON(job.Result)
 	return job, err
+}
+
+func normalizeBSON(value any) any {
+	switch value := value.(type) {
+	case primitive.D:
+		result := make(map[string]any, len(value))
+		for _, entry := range value {
+			result[entry.Key] = normalizeBSON(entry.Value)
+		}
+		return result
+	case primitive.A:
+		result := make([]any, len(value))
+		for index, entry := range value {
+			result[index] = normalizeBSON(entry)
+		}
+		return result
+	case []any:
+		result := make([]any, len(value))
+		for index, entry := range value {
+			result[index] = normalizeBSON(entry)
+		}
+		return result
+	case map[string]any:
+		result := make(map[string]any, len(value))
+		for key, entry := range value {
+			result[key] = normalizeBSON(entry)
+		}
+		return result
+	default:
+		return value
+	}
 }
 
 func (s *Store) SaveTraceJob(ctx context.Context, job TraceJob) error {
