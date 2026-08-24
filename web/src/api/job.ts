@@ -1,4 +1,4 @@
-import type { JobStatus } from "./types";
+import type { JobStatus, SyncJob } from "./types";
 
 export interface JobProgress { status: JobStatus; currentDepth: number; visitedNodes: number; edgeCount: number }
 export interface JobDescription { tone: "pending" | "running" | "success" | "warning" | "error"; label: string; detail: string }
@@ -15,4 +15,9 @@ export function describeTraceJob(job: JobProgress): JobDescription {
     case "partial": return { tone: "warning", label: "部分数据可用", detail };
     case "failed": return { tone: "error", label: "分析失败", detail };
   }
+}
+
+export function mergeSyncJobs(linked: SyncJob[], recovered?: SyncJob): SyncJob[] {
+  if (!recovered) return linked;
+  return [...linked.filter((job) => job.jobId !== recovered.jobId), recovered];
 }

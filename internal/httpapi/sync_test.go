@@ -12,10 +12,13 @@ import (
 	"github.com/Nickcandy/eth-fund-trace/internal/syncer"
 	"github.com/labstack/echo/v4"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
 type stubSyncManager struct {
 	request syncer.Request
+	chain   string
+	address string
 	job     store.SyncJob
 	err     error
 }
@@ -26,6 +29,12 @@ func (s *stubSyncManager) Enqueue(_ context.Context, request syncer.Request) (st
 }
 
 func (s *stubSyncManager) Job(context.Context, string) (store.SyncJob, error) { return s.job, s.err }
+
+func (s *stubSyncManager) LatestJob(_ context.Context, chain, address string) (store.SyncJob, error) {
+	s.chain = chain
+	s.address = address
+	return s.job, s.err
+}
 
 func TestSyncHandlerAcceptsJob(t *testing.T) {
 	id := primitive.NewObjectID()
@@ -57,6 +66,39 @@ func TestSyncHandlerRejectsInvalidRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "invalid_request") {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestSyncHandlerReturnsLatestJobForAddress(t *testing.T) {
+	id := primitive.NewObjectID()
+	address := "0x0000000000000000000000000000000000000001"
+	manager := &stubSyncManager{job: store.SyncJob{ID: id, Chain: "ethereum", Address: address, Status: "running", CreatedAt: time.Now()}}
+	handler := NewSyncHandler(manager)
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sync-jobs/latest?chain=ethereum&address="+address, nil)
+	res := httptest.NewRecorder()
+	ctx := e.NewContext(req, res)
+
+	if err := handler.LatestJob(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if res.Code != http.StatusOK || manager.chain != "ethereum" || manager.address != address || !strings.Contains(res.Body.String(), id.Hex()) {
+		t.Fatalf("status=%d chain=%s address=%s body=%s", res.Code, manager.chain, manager.address, res.Body.String())
+	}
+}
+
+func TestSyncHandlerLatestJobReturnsNotFound(t *testing.T) {
+	handler := NewSyncHandler(&stubSyncManager{err: mongo.ErrNoDocuments})
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sync-jobs/latest?chain=ethereum&address=0x0000000000000000000000000000000000000001", nil)
+	res := httptest.NewRecorder()
+	ctx := e.NewContext(req, res)
+
+	if err := handler.LatestJob(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if res.Code != http.StatusNotFound || !strings.Contains(res.Body.String(), "job_not_found") {
 		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
 	}
 }

@@ -233,6 +233,16 @@ func (s *Store) GetSyncJob(ctx context.Context, id primitive.ObjectID) (SyncJob,
 	return job, err
 }
 
+func (s *Store) FindLatestSyncJob(ctx context.Context, chain, address string) (SyncJob, error) {
+	var job SyncJob
+	err := s.db.Collection(SyncJobsCollection).FindOne(
+		ctx,
+		bson.D{{Key: "chain", Value: chain}, {Key: "address", Value: address}},
+		options.FindOne().SetSort(bson.D{{Key: "createdAt", Value: -1}}),
+	).Decode(&job)
+	return job, err
+}
+
 func (s *Store) FindSyncCheckpoints(ctx context.Context, chain, address string, startBlock, internalLookbackBlocks int64) (map[string]int64, error) {
 	var job SyncJob
 	err := s.db.Collection(SyncJobsCollection).FindOne(ctx, bson.D{{Key: "chain", Value: chain}, {Key: "address", Value: address}, {Key: "startBlock", Value: startBlock}}, options.FindOne().SetSort(bson.D{{Key: "createdAt", Value: -1}})).Decode(&job)

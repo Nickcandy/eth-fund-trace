@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeTraceJob } from "./job";
+import { describeTraceJob, mergeSyncJobs } from "./job";
 
 describe("describeTraceJob", () => {
   it("maps waiting sync progress to a user-visible state", () => {
@@ -8,5 +8,14 @@ describe("describeTraceJob", () => {
 
   it("keeps partial results distinct from success", () => {
     expect(describeTraceJob({ status: "partial", currentDepth: 3, visitedNodes: 12, edgeCount: 20 }).tone).toBe("warning");
+  });
+});
+
+describe("mergeSyncJobs", () => {
+  it("keeps a recovered address job and de-duplicates a linked copy", () => {
+    const linked = { jobId: "same", status: "running" } as import("./types").SyncJob;
+    const recovered = { ...linked, progress: { pagesFetched: 12 } } as import("./types").SyncJob;
+    expect(mergeSyncJobs([linked], recovered)).toEqual([recovered]);
+    expect(mergeSyncJobs([], recovered)).toEqual([recovered]);
   });
 });

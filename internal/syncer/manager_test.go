@@ -10,6 +10,7 @@ import (
 	"github.com/Nickcandy/eth-fund-trace/internal/etherscan"
 	"github.com/Nickcandy/eth-fund-trace/internal/store"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
 type fakeSource struct {
@@ -236,6 +237,23 @@ func (r *memoryRepository) GetSyncJob(_ context.Context, id primitive.ObjectID) 
 		job.ActionCounts = nil
 	}
 	return job, nil
+}
+
+func (r *memoryRepository) FindLatestSyncJob(_ context.Context, chain, address string) (store.SyncJob, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var latest store.SyncJob
+	found := false
+	for _, job := range r.jobs {
+		if job.Chain == chain && job.Address == address && (!found || job.CreatedAt.After(latest.CreatedAt)) {
+			latest = job
+			found = true
+		}
+	}
+	if !found {
+		return store.SyncJob{}, mongo.ErrNoDocuments
+	}
+	return latest, nil
 }
 
 func (r *memoryRepository) SaveSyncJob(_ context.Context, job store.SyncJob) error {

@@ -365,6 +365,15 @@ paths:
     get:
       parameters: [{$ref: '#/components/parameters/ObjectID'}]
       responses: {'200': {description: Sync job, content: {application/json: {schema: {$ref: '#/components/schemas/SyncJob'}}}}, '404': {description: Job not found}}
+  /api/v1/sync-jobs/latest:
+    get:
+      parameters:
+        - {$ref: '#/components/parameters/Chain'}
+        - {name: address, in: query, required: true, schema: {type: string}}
+      responses:
+        '200': {description: Latest sync job for the address, content: {application/json: {schema: {$ref: '#/components/schemas/SyncJob'}}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {description: No sync job exists for the address}
   /api/v1/addresses/{address}:
     get:
       parameters: [{$ref: '#/components/parameters/AddressPath'}, {$ref: '#/components/parameters/Chain'}]

@@ -30,7 +30,9 @@ function queryString(values: object): string {
 export const api = {
   createTrace: (query: TraceQuery, signal?: AbortSignal) => request<TraceAccepted>(`/api/v1/trace?${queryString(query)}`, { signal }),
   traceJob: (id: string, signal?: AbortSignal) => request<TraceJob>(`/api/v1/trace-jobs/${encodeURIComponent(id)}`, { signal }),
+  createSync: (chain: string, address: string) => request<SyncJob>("/api/v1/sync", { method: "POST", body: JSON.stringify({ chain, address, neighborLimit: 0 }) }),
   syncJob: (id: string, signal?: AbortSignal) => request<SyncJob>(`/api/v1/sync-jobs/${encodeURIComponent(id)}`, { signal }),
+  latestSyncJob: (chain: string, address: string, signal?: AbortSignal) => request<SyncJob>(`/api/v1/sync-jobs/latest?${queryString({ chain, address })}`, { signal }),
   address: (chain: string, address: string, signal?: AbortSignal) => request<AddressResponse>(`/api/v1/addresses/${address}?${queryString({ chain })}`, { signal }),
   profile: (chain: string, address: string, signal?: AbortSignal) => request<AddressProfile>(`/api/v1/addresses/${address}/profile?${queryString({ chain })}`, { signal }),
   labels: (chain: string, address: string, signal?: AbortSignal) => request<Label[]>(`/api/v1/labels?${queryString({ chain, address })}`, { signal }),

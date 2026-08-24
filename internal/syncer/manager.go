@@ -35,6 +35,7 @@ type Repository interface {
 	TopNeighbors(context.Context, string, string, int) ([]string, error)
 	CreateSyncJob(context.Context, *store.SyncJob) error
 	GetSyncJob(context.Context, primitive.ObjectID) (store.SyncJob, error)
+	FindLatestSyncJob(context.Context, string, string) (store.SyncJob, error)
 	SaveSyncJob(context.Context, store.SyncJob) error
 	FailInterruptedJobs(context.Context, time.Time) error
 	FindSyncCheckpoints(context.Context, string, string, int64, int64) (map[string]int64, error)
@@ -146,6 +147,15 @@ func (m *Manager) Job(ctx context.Context, id string) (store.SyncJob, error) {
 		return store.SyncJob{}, ErrInvalidRequest
 	}
 	return m.repository.GetSyncJob(ctx, objectID)
+}
+
+func (m *Manager) LatestJob(ctx context.Context, chainName, address string) (store.SyncJob, error) {
+	chain, chainErr := chains.Resolve(chainName)
+	normalizedAddress, addressErr := ethaddr.Normalize(address)
+	if chainErr != nil || m.sources[chain.Name] == nil || addressErr != nil {
+		return store.SyncJob{}, ErrInvalidRequest
+	}
+	return m.repository.FindLatestSyncJob(ctx, chain.Name, normalizedAddress)
 }
 
 func (m *Manager) Run(ctx context.Context) error {

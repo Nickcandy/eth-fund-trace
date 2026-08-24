@@ -14,6 +14,7 @@ import (
 type SyncManager interface {
 	Enqueue(context.Context, syncer.Request) (store.SyncJob, error)
 	Job(context.Context, string) (store.SyncJob, error)
+	LatestJob(context.Context, string, string) (store.SyncJob, error)
 }
 
 type SyncHandler struct {
@@ -52,6 +53,17 @@ func (h *SyncHandler) Enqueue(c echo.Context) error {
 
 func (h *SyncHandler) Job(c echo.Context) error {
 	job, err := h.manager.Job(c.Request().Context(), c.Param("id"))
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return writeError(c, http.StatusNotFound, "job_not_found", "sync job not found", false)
+		}
+		return h.writeManagerError(c, err)
+	}
+	return c.JSON(http.StatusOK, jobResponse(job))
+}
+
+func (h *SyncHandler) LatestJob(c echo.Context) error {
+	job, err := h.manager.LatestJob(c.Request().Context(), c.QueryParam("chain"), c.QueryParam("address"))
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			return writeError(c, http.StatusNotFound, "job_not_found", "sync job not found", false)
