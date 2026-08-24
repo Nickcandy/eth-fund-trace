@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Web3 / ETH 面试知识地图</title>
+  <link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+<main>
+  <header><h1>Web3 / ETH 面试知识地图</h1><p class="lead">围绕 eth-fund-trace 的学习顺序与最低掌握标准。</p></header>
+  <table>
+    <thead><tr><th>层次</th><th>必须掌握</th><th>项目落点</th><th>最低面试标准</th></tr></thead>
+    <tbody>
+      <tr><td>1. 账本与共识</td><td>账户状态、区块、PoS、链头、safe/finalized、reorg</td><td>safe head、同步区间、跨链确认</td><td>解释“已上链”和“最终确定”的区别</td></tr>
+      <tr><td>2. 交易与 EVM</td><td>EOA/contract、nonce、gas、calldata、ABI、revert、receipt</td><td>transactionanalysis、chainrpc</td><td>从签名交易讲到 logs 和状态变化</td></tr>
+      <tr><td>3. Token 标准</td><td>ERC-20、allowance、Transfer/Approval、decimals、WETH</td><td>tokentx、ReceiptTransfer、WrapEvent</td><td>解释 ETH 与 ERC-20 数据来源为何不同</td></tr>
+      <tr><td>4. 链上数据工程</td><td>RPC vs indexer、分页、限流、幂等、重试、检查点、reorg</td><td>etherscan、syncer、store</td><td>解释为什么同步是异步且可恢复的</td></tr>
+      <tr><td>5. 图追踪</td><td>BFS、方向、深度、Top-N、终点、游标、数据完整度</td><td>tracer、fundgraph</td><td>给出复杂度并说明高频节点风险</td></tr>
+      <tr><td>6. DeFi</td><td>AMM、x*y=k、V3 集中流动性、Router/Pool、slippage、MEV</td><td>Uniswap V3 分析</td><td>从 receipt 证据解释实际成交而非 calldata 意图</td></tr>
+      <tr><td>7. L2 与桥</td><td>rollup、sequencer、L1 data、deposit、withdrawal、challenge period</td><td>Ethereum/Base bridge</td><td>解释跨链状态机和两侧证据</td></tr>
+      <tr><td>8. 风险与安全</td><td>私钥、签名、approval、重放、RPC 信任、标签证据、误报</td><td>risk、profile、labels</td><td>区分事实、规则判断和身份结论</td></tr>
+      <tr><td>9. 系统设计</td><td>缓存、批处理、索引、背压、并发、可观测性、成本</td><td>Go worker、MongoDB、React Query</td><td>能提出有界追踪和生产化路线</td></tr>
+    </tbody>
+  </table>
+
+  <h2>推荐课程顺序</h2>
+  <ol>
+    <li><a href="../lessons/0001-from-chain-to-fund-graph.html">从链上交易到资金图：证据模型与端到端链路</a></li>
+    <li><a href="../lessons/0002-evm-call-evidence.html">EVM 执行现场：gas、ABI、calldata、logs、revert</a></li>
+    <li><a href="../lessons/0003-real-transactions-and-addresses.html">第二课补充：三笔真实交易、函数字典与地址角色</a></li>
+    <li>链上数据工程：RPC、Indexer、reorg、幂等和检查点</li>
+    <li>资金图算法：BFS、Top-N、复杂度和高频节点治理</li>
+    <li>Uniswap V3：从 Router 意图到 Pool 成交证据</li>
+    <li>Base / OP Stack：rollup、最终性和官方桥状态机</li>
+    <li>风险画像：规则版本、证据等级、误报与不可归因性</li>
+    <li>项目答辩：5 分钟陈述、系统设计追问和故障场景</li>
+  </ol>
+
+  <div class="callout"><strong>贯穿原则：</strong>永远区分链上事实、协议解释、启发式推断和确定性身份标签。面试中能够主动声明证据等级，通常比多背十个术语更有价值。</div>
+  <footer><a href="../lessons/0001-from-chain-to-fund-graph.html">开始第一课：从链上交易到资金图</a></footer>
+</main>
+</body>
+</html>

@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>第一课：从链上交易到资金图</title>
+  <link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+<main>
+  <header>
+    <span class="tag">第一课</span><span class="tag">约 20 分钟</span>
+    <h1>从链上交易到资金图</h1>
+    <p class="lead">本课只解决一个问题：你的系统展示的一条“资金边”究竟从哪里来，它能证明什么，又不能证明什么。</p>
+  </header>
+
+  <h2>先记住结论</h2>
+  <p>Ethereum 本质上是一个复制状态机。用户提交签名交易，EVM 执行它，区块记录交易顺序，receipt 记录执行结果和 logs。你的项目没有直接“读取一张资金流表”，而是从不同证据源恢复并规范化资金事实，再用图算法查询它们。</p>
+
+  <div class="flow" aria-label="项目数据链路">
+    <div><strong>协议事实</strong>block、transaction、receipt、log、call trace</div>
+    <div><strong>数据入口</strong>Etherscan account API 与 Ethereum JSON-RPC</div>
+    <div><strong>规范化</strong>ETH、internal ETH、ERC-20 Transfer</div>
+    <div><strong>事实存储</strong>MongoDB Transfer 与唯一证据键</div>
+    <div><strong>解释层</strong>BFS 图、画像、风险、DEX、跨链桥</div>
+  </div>
+
+  <h2>五个必须分清的对象</h2>
+  <table>
+    <thead><tr><th>对象</th><th>是什么</th><th>本项目用途</th><th>常见误区</th></tr></thead>
+    <tbody>
+      <tr><td>Transaction</td><td>EOA 签名的状态变更指令</td><td>读取 from/to/value/input 与入口合约</td><td><code>to</code> 是 Router 时，不等于最终收款方</td></tr>
+      <tr><td>Receipt</td><td>交易执行后的结果</td><td>确认 status、blockNumber、logs</td><td>有 txHash 不代表已经成功上链</td></tr>
+      <tr><td>Log/Event</td><td>合约执行时写入 receipt 的结构化证据</td><td>恢复 ERC-20 Transfer、V3 Swap、WETH 和桥事件</td><td>事件是合约声明的事实，仍要验证 emitter 身份</td></tr>
+      <tr><td>Call trace</td><td>EVM 内部调用树</td><td>恢复合约间调用和内部 ETH value 流动</td><td>它不是共识层普通交易列表，节点可能不开放 trace API</td></tr>
+      <tr><td>State</td><td>某区块高度的账户、余额、code 和 storage</td><td><code>eth_call</code> 验证 V3 Pool 元数据</td><td><code>latest</code> 会随链头变化，不是历史可重复快照</td></tr>
+    </tbody>
+  </table>
+
+  <h2>三类资金边为什么不能混为一谈</h2>
+  <h3>1. 普通 ETH 转账</h3>
+  <p>交易本身有 <code>from</code>、<code>to</code> 和 <code>value</code>。这是顶层 message call 的 value，不包含合约执行过程中再次发送的 ETH。</p>
+  <h3>2. Internal ETH</h3>
+  <p>合约 A 调用合约 B 时可以携带 value。它通常需要执行 trace 或索引器加工才能恢复。所谓“internal transaction”是区块浏览器常用的数据产品术语，不是一个由私钥签名、进入 mempool 的独立 Ethereum transaction。</p>
+  <h3>3. ERC-20 Transfer</h3>
+  <p>Token 是合约中的状态。用户调用 Token 或 Router 后，Token 合约更新自己的账本，并按 ERC-20 规范发出 <code>Transfer(address,address,uint256)</code> 事件。ETH 的 <code>value</code> 与 ERC-20 的事件日志属于不同证据通道。</p>
+
+  <div class="callout"><strong>面试中的关键纠正：</strong>一笔 transaction 可以对应零到多条资金事实边。反过来，一条业务语义如 Swap 也可能由多条 Transfer、一个或多个 Pool Swap event 和 WETH 包装事件共同证明。</div>
+
+  <h2>对应到你的代码</h2>
+  <table>
+    <thead><tr><th>代码模块</th><th>责任</th><th>面试表达</th></tr></thead>
+    <tbody>
+      <tr><td><code>internal/etherscan</code></td><td>分页拉取 txlist、txlistinternal、tokentx；限流、重试、归一化</td><td>这是索引数据适配器，不是自建节点或共识客户端</td></tr>
+      <tr><td><code>internal/chainrpc</code></td><td>JSON-RPC transaction、receipt、logs</td><td>用于按哈希或日志范围读取更接近协议的事实</td></tr>
+      <tr><td><code>internal/syncer</code></td><td>异步同步、检查点、批量持久化</td><td>把不稳定、限流的外部 I/O 与查询路径解耦</td></tr>
+      <tr><td><code>internal/store</code></td><td>事实模型、唯一索引、稳定游标</td><td>幂等键必须包含 chain 与证据位置，txHash 单独不够</td></tr>
+      <tr><td><code>internal/tracer</code></td><td>BFS、depth、Top-N、终点剪枝</td><td>图是对已采集事实的查询视图，不代表全链完整归因</td></tr>
+      <tr><td><code>internal/transactionanalysis</code></td><td>receipt logs 到 Transfer/Swap/WETH 语义</td><td>先保存事实，再做可降级、带质量状态的协议解释</td></tr>
+      <tr><td><code>internal/bridge</code></td><td>官方 OP Stack 桥识别与生命周期</td><td>跨链边需要协议消息和双链证据，不能按金额时间猜测</td></tr>
+    </tbody>
+  </table>
+
+  <h2>为什么唯一键不能只是 txHash</h2>
+  <p>同一个交易中可能有多个 ERC-20 <code>Transfer</code> log、多个 internal call，甚至同一资产多次转移。项目使用近似如下的事实身份：</p>
+  <pre><code>(chain, txHash, source, traceId, logIndex, asset)</code></pre>
+  <p><code>chain</code> 防止多链哈希空间混用；<code>source</code> 区分普通、内部和 Token 事实；<code>traceId</code>/<code>logIndex</code> 定位交易内证据；<code>asset</code> 防止跨资产合并。代价是上游合成的 logIndex 或 trace 标识必须稳定，否则重跑可能产生重复或错误覆盖。</p>
+
+  <h2>一次地址追踪请求发生了什么</h2>
+  <ol>
+    <li>HTTP 层校验 chain、地址、depth、direction 和资产过滤。</li>
+    <li>Trace Manager 检查地址数据是否已同步；缺失时排入 Sync Job。</li>
+    <li>Syncer 获取安全链头，分三类 action 拉取历史，按页保存检查点并批量 upsert。</li>
+    <li>Tracer 从种子地址开始 BFS，查询入边/出边，按规则选择 Top-N 邻居并推进层级。</li>
+    <li>标签、画像和风险层基于已有样本输出解释；前端展示图和数据质量。</li>
+  </ol>
+  <p>时间复杂度不能只写传统的 <code>O(V+E)</code>。纯 BFS 是 <code>O(V+E)</code>，但实际系统主要成本是外部同步。若深度为 D、每层最多展开 F 个地址、每地址三类接口各读取 P 页，则 API 请求上界约为 <code>O(3PFD)</code>；没有预算时，高频地址的全历史会支配延迟与成本。</p>
+
+  <h2>面试追问与可靠回答</h2>
+  <h3>“为什么不用节点 RPC 直接查一个地址的全部历史？”</h3>
+  <p>标准 JSON-RPC 擅长按块、哈希、状态和日志读取，但没有通用的“列出地址全部普通交易/内部调用历史”接口。要么扫描区块并自建索引，要么依赖 Etherscan 这类索引服务。当前 Demo 选择后者换取开发速度，代价是配额、分页上限、第三方正确性和可用性依赖。</p>
+  <h3>“为什么 transaction 成功还不够？”</h3>
+  <p>transaction 表达意图和入口；receipt 的 status 说明顶层执行是否成功，logs 才承载 Token/协议事件；内部 call 仍可能需要 trace。协议分析必须组合证据，而不是根据 calldata 或 <code>to</code> 地址猜结果。</p>
+  <h3>“你的图能证明赃款最终去了哪里吗？”</h3>
+  <p>不能做强因果或逐币归因。它证明的是已采集窗口内存在链上资金事实和协议关联。账户余额具有可互换性，交易所、Mixer、Router、跨链桥和批处理会打断简单归因；Top-N、窗口截断和上游数据缺失也会导致 partial。</p>
+
+  <h2>检索练习</h2>
+  <section class="question" data-quiz data-correct="b" data-yes="正确。txHash 只定位交易，receipt 才给出执行状态和日志。" data-no="再想一下：pending 或执行失败的交易也有可能已经有 txHash。">
+    <strong>1. 已拿到 txHash，能否断言 ERC-20 已到账？</strong><br>
+    <button data-answer="a">可以直接断言</button><button data-answer="b">必须检查 receipt</button><button data-answer="c">只检查 calldata</button>
+    <div class="feedback" aria-live="polite"></div>
+  </section>
+  <section class="question" data-quiz data-correct="c" data-yes="正确。source 与交易内位置共同区分多种资金事实。" data-no="txHash 内可以有多条 Transfer 和多次内部调用，因此还缺少交易内证据位置。">
+    <strong>2. 哪个键更适合资金事实的幂等写入？</strong><br>
+    <button data-answer="a">只用 txHash 值</button><button data-answer="b">只用地址资产</button><button data-answer="c">链加证据位置</button>
+    <div class="feedback" aria-live="polite"></div>
+  </section>
+  <section class="question" data-quiz data-correct="a" data-yes="正确。先声明数据范围和证据强度，避免把图路径说成逐币证明。" data-no="面试官真正关心的是你是否理解证据边界，而不是图画得多复杂。">
+    <strong>3. 面试官问“这就是确定的资金归因吗？”，最佳回答是：</strong><br>
+    <button data-answer="a">说明证据与边界</button><button data-answer="b">强调图算法复杂</button><button data-answer="c">声称链上全透明</button>
+    <div class="feedback" aria-live="polite"></div>
+  </section>
+
+  <h2>本课口述任务</h2>
+  <p>不要看本文，用 90 秒回答：“输入一个 Ethereum 地址后，你的项目如何得到一张资金图？transaction、receipt、log 和 trace 分别有什么作用？”下一轮把你的答案发给我，我会按技术正确性、结构和抗追问能力逐句校正。</p>
+
+  <h2>一手资料</h2>
+  <p>优先阅读 <a href="https://ethereum.org/en/developers/docs/transactions/">Ethereum Transactions</a>；随后对照 <a href="https://ethereum.org/en/developers/docs/apis/json-rpc/">JSON-RPC API</a> 中的 <code>eth_getTransactionByHash</code>、<code>eth_getTransactionReceipt</code> 与 <code>eth_call</code>。</p>
+
+  <footer>下一课建议：EVM 执行、gas、ABI、calldata、event topic 与 revert。遇到任何不清楚的概念，直接结合仓库中的具体代码追问。</footer>
+</main>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
