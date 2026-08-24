@@ -64,6 +64,18 @@ type Result struct {
 	Labels            []risk.InferredLabel `bson:"labels,omitempty" json:"labels,omitempty"`
 	Risk              risk.Result          `bson:"risk" json:"risk"`
 	RuleVersion       string               `bson:"ruleVersion" json:"ruleVersion"`
+	branchStates      []branchState
+}
+
+type branchState struct {
+	Address   string
+	Direction string
+	Path      []string
+}
+type bridgeBranchState struct {
+	Node      Node
+	Direction string
+	Path      []NodeRef
 }
 
 type Graph struct{ repository Repository }
@@ -106,25 +118,36 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 	if err != nil {
 		return Result{}, err
 	}
-	frontier := []string{seed}
-	visited := map[string]bool{seed: true}
-	paths := map[string][]string{seed: {seed}}
+	seedState := branchState{Address: seed, Direction: q.Direction, Path: []string{seed}}
+	frontier := []branchState{seedState}
+	visitedStates := map[string]bool{branchStateKey(seed, q.Direction): true}
+	visitedNodes := map[string]bool{seed: true}
 	seedTerminal := metadata.IsTerminal || hasTerminalLabel(seedLabels)
 	result.Nodes = append(result.Nodes, Node{Chain: q.Chain, Address: seed, Depth: 0, Terminal: seedTerminal})
+	result.branchStates = append(result.branchStates, seedState)
 	allTransfers := make([]store.Transfer, 0)
 	resultFacts := make(map[string]bool)
 	seenFacts := make(map[string]bool)
-	for depth := 0; depth < q.Depth && len(frontier) > 0 && len(visited) < 5000; depth++ {
-		sort.Strings(frontier)
-		next := make([]string, 0)
-		for offset := 0; offset < len(frontier); offset += 500 {
-			end := offset + 500
-			if end > len(frontier) {
-				end = len(frontier)
-			}
-			queries := []string{q.Direction}
-			for _, direction := range queries {
-				transfers, queryErr := g.repository.QueryTransfers(ctx, store.TransferQuery{Chain: q.Chain, Addresses: frontier[offset:end], Direction: direction, AssetMode: assetMode(q.Asset), Asset: assetValue(q.Asset), Limit: 10000})
+	for depth := 0; depth < q.Depth && len(frontier) > 0 && len(visitedNodes) < 5000; depth++ {
+		sort.Slice(frontier, func(i, j int) bool {
+			return branchStateKey(frontier[i].Address, frontier[i].Direction) < branchStateKey(frontier[j].Address, frontier[j].Direction)
+		})
+		next := make([]branchState, 0)
+		groups := map[string][]branchState{}
+		for _, state := range frontier {
+			groups[state.Direction] = append(groups[state.Direction], state)
+		}
+		for _, direction := range []string{"both", "in", "out"} {
+			states := groups[direction]
+			for offset := 0; offset < len(states); offset += 500 {
+				end := min(offset+500, len(states))
+				batchStates := states[offset:end]
+				batch := make([]string, len(batchStates))
+				stateByAddress := make(map[string]branchState, len(batchStates))
+				for index, state := range batchStates {
+					batch[index], stateByAddress[state.Address] = state.Address, state
+				}
+				transfers, queryErr := g.repository.QueryTransfers(ctx, store.TransferQuery{Chain: q.Chain, Addresses: batch, Direction: direction, AssetMode: assetMode(q.Asset), Asset: assetValue(q.Asset), Limit: 10000})
 				if queryErr != nil {
 					return Result{}, queryErr
 				}
@@ -134,7 +157,7 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 						allTransfers = append(allTransfers, transfer)
 						seenFacts[edgeKey(transfer)] = true
 					}
-					for _, address := range frontier[offset:end] {
+					for _, address := range batch {
 						if direction == "both" {
 							if strings.EqualFold(transfer.To, address) {
 								byAddress[strings.ToLower(address)+"|in"] = append(byAddress[strings.ToLower(address)+"|in"], transfer)
@@ -147,12 +170,13 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 						}
 					}
 				}
-				for _, address := range frontier[offset:end] {
+				for _, address := range batch {
+					state := stateByAddress[address]
 					if nodeTerminal(result.Nodes, address) {
 						continue
 					}
-					directions := []string{q.Direction}
-					if q.Direction == "both" {
+					directions := []string{direction}
+					if direction == "both" {
 						directions = []string{"in", "out"}
 					}
 					for _, selectedDirection := range directions {
@@ -172,20 +196,21 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 							if other == "" {
 								continue
 							}
-							path := append(append([]string(nil), paths[address]...), other)
+							path := append(append([]string(nil), state.Path...), other)
 							if !resultFacts[edgeKey(transfer)] {
 								result.Edges = append(result.Edges, Edge{Transfer: transfer, Depth: depth + 1, Path: path})
 								resultFacts[edgeKey(transfer)] = true
 							}
 							count++
 							if other == zeroAddress {
-								if !visited[other] && len(visited) < 5000 {
-									visited[other] = true
+								if !visitedNodes[other] && len(visitedNodes) < 5000 {
+									visitedNodes[other] = true
 									result.Nodes = append(result.Nodes, Node{Chain: q.Chain, Address: other, Depth: depth + 1, Terminal: true})
 								}
 								continue
 							}
-							if visited[other] || count >= q.TopN || len(visited) >= 5000 {
+							stateKey := branchStateKey(other, selectedDirection)
+							if visitedStates[stateKey] || len(visitedNodes) >= 5000 {
 								continue
 							}
 							otherMetadata, otherFound, metadataErr := g.repository.FindAddress(ctx, q.Chain, other)
@@ -200,12 +225,16 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 								return Result{}, labelsErr
 							}
 							terminal := otherFound && otherMetadata.IsTerminal || hasTerminalLabel(otherLabels)
-							visited[other] = true
+							visitedStates[stateKey] = true
+							result.branchStates = append(result.branchStates, branchState{Address: other, Direction: selectedDirection, Path: path})
+							isNewNode := !visitedNodes[other]
+							visitedNodes[other] = true
 							if !terminal {
-								next = append(next, other)
+								next = append(next, branchState{Address: other, Direction: selectedDirection, Path: path})
 							}
-							paths[other] = path
-							result.Nodes = append(result.Nodes, Node{Chain: q.Chain, Address: other, Depth: depth + 1, Terminal: terminal})
+							if isNewNode {
+								result.Nodes = append(result.Nodes, Node{Chain: q.Chain, Address: other, Depth: depth + 1, Terminal: terminal})
+							}
 							result.Paths = append(result.Paths, path)
 						}
 					}
@@ -227,6 +256,8 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 	return result, nil
 }
 
+func branchStateKey(address, direction string) string { return address + "|" + direction }
+
 func (g *Graph) traceWithBridges(ctx context.Context, query Query) (Result, error) {
 	q, err := normalize(query)
 	if err != nil {
@@ -239,29 +270,41 @@ func (g *Graph) traceWithBridges(ctx context.Context, query Query) (Result, erro
 	result.RuleVersion = "trace-v2"
 	result.DataThroughBlocks = map[string]int64{q.Chain: result.DataThroughBlock}
 	visited := make(map[string]bool)
-	paths := make(map[string][]NodeRef)
 	seedRef := NodeRef{Chain: q.Chain, Address: strings.ToLower(q.Address)}
-	paths[nodeRefKey(seedRef)] = []NodeRef{seedRef}
+	nodeByAddress := make(map[string]Node, len(result.Nodes))
 	for _, node := range result.Nodes {
 		visited[nodeKey(node.Chain, node.Address)] = true
+		nodeByAddress[nodeKey(node.Chain, node.Address)] = node
 	}
-	for _, path := range result.Paths {
-		refs := make([]NodeRef, len(path))
-		for i, address := range path {
+	queue := make([]bridgeBranchState, 0, len(result.branchStates))
+	for _, branch := range result.branchStates {
+		refs := make([]NodeRef, len(branch.Path))
+		for i, address := range branch.Path {
 			refs[i] = NodeRef{Chain: q.Chain, Address: address}
 		}
 		if len(refs) > 0 {
-			paths[nodeRefKey(refs[len(refs)-1])] = refs
+			endpoint := nodeByAddress[nodeRefKey(refs[len(refs)-1])]
+			queue = append(queue, bridgeBranchState{Node: endpoint, Direction: branch.Direction, Path: refs})
 		}
 	}
-	queue := append([]Node(nil), result.Nodes...)
+	if len(queue) == 0 {
+		queue = append(queue, bridgeBranchState{Node: result.Nodes[0], Direction: q.Direction, Path: []NodeRef{seedRef}})
+	}
+	seenQueueStates := make(map[string]bool)
+	seenTargetStates := make(map[string]bool)
 	bridgeSeen := make(map[string]bool)
 	factSeen := make(map[string]bool)
 	for _, edge := range result.Edges {
 		factSeen[edgeKey(edge.Transfer)] = true
 	}
 	for index := 0; index < len(queue) && len(visited) < 5000; index++ {
-		node := queue[index]
+		state := queue[index]
+		node := state.Node
+		queueKey := nodeKey(node.Chain, node.Address) + "|" + state.Direction
+		if seenQueueStates[queueKey] {
+			continue
+		}
+		seenQueueStates[queueKey] = true
 		if node.Terminal || node.Depth >= q.Depth {
 			continue
 		}
@@ -270,7 +313,7 @@ func (g *Graph) traceWithBridges(ctx context.Context, query Query) (Result, erro
 			return Result{}, linkErr
 		}
 		for _, link := range links {
-			other, ok := bridgeTarget(link, node)
+			other, ok := bridgeTarget(link, node, state.Direction)
 			if !ok {
 				continue
 			}
@@ -279,7 +322,7 @@ func (g *Graph) traceWithBridges(ctx context.Context, query Query) (Result, erro
 				continue
 			}
 			bridgeSeen[bridgeID] = true
-			basePath := paths[nodeKey(node.Chain, node.Address)]
+			basePath := state.Path
 			if len(basePath) == 0 {
 				basePath = []NodeRef{{Chain: node.Chain, Address: node.Address}}
 			}
@@ -288,9 +331,11 @@ func (g *Graph) traceWithBridges(ctx context.Context, query Query) (Result, erro
 			result.BridgeEdges = append(result.BridgeEdges, BridgeEdge{Link: link, Depth: bridgeDepth, Path: bridgePath})
 			result.CrossChainPaths = append(result.CrossChainPaths, bridgePath)
 			otherKey := nodeRefKey(other)
-			if visited[otherKey] || len(visited) >= 5000 {
+			targetStateKey := otherKey + "|" + state.Direction
+			if seenTargetStates[targetStateKey] || len(visited) >= 5000 {
 				continue
 			}
+			seenTargetStates[targetStateKey] = true
 			remaining := q.Depth - bridgeDepth
 			if remaining == 0 {
 				metadata, found, metadataErr := g.repository.FindAddress(ctx, other.Chain, other.Address)
@@ -305,21 +350,23 @@ func (g *Graph) traceWithBridges(ctx context.Context, query Query) (Result, erro
 					return Result{}, labelsErr
 				}
 				targetNode := Node{Chain: other.Chain, Address: other.Address, Depth: bridgeDepth, Terminal: metadata.IsTerminal || hasTerminalLabel(labels)}
-				visited[otherKey] = true
-				paths[otherKey] = bridgePath
-				result.Nodes = append(result.Nodes, targetNode)
-				queue = append(queue, targetNode)
+				if !visited[otherKey] {
+					visited[otherKey] = true
+					result.Nodes = append(result.Nodes, targetNode)
+				}
+				queue = append(queue, bridgeBranchState{Node: targetNode, Direction: state.Direction, Path: bridgePath})
 				result.DataThroughBlocks[other.Chain] = max(result.DataThroughBlocks[other.Chain], metadata.LatestSyncedBlock)
 				continue
 			}
 			subQuery := q
 			subQuery.Chain, subQuery.Address, subQuery.Depth = other.Chain, other.Address, max(1, remaining)
+			subQuery.Direction = state.Direction
 			sub, subErr := g.traceSameChain(ctx, subQuery)
 			if subErr != nil {
 				return Result{}, subErr
 			}
 			result.DataThroughBlocks[other.Chain] = max(result.DataThroughBlocks[other.Chain], sub.DataThroughBlock)
-			paths[otherKey] = bridgePath
+			subPaths := map[string][]NodeRef{otherKey: bridgePath}
 			for _, subPath := range sub.Paths {
 				if len(subPath) == 0 {
 					continue
@@ -328,17 +375,16 @@ func (g *Graph) traceWithBridges(ctx context.Context, query Query) (Result, erro
 				for _, address := range subPath[1:] {
 					refs = append(refs, NodeRef{Chain: other.Chain, Address: address})
 				}
-				paths[nodeKey(other.Chain, subPath[len(subPath)-1])] = refs
+				subPaths[nodeKey(other.Chain, subPath[len(subPath)-1])] = refs
 			}
 			for _, subNode := range sub.Nodes {
 				key := nodeKey(subNode.Chain, subNode.Address)
-				if visited[key] || len(visited) >= 5000 {
-					continue
-				}
 				subNode.Depth += bridgeDepth
-				visited[key] = true
-				result.Nodes = append(result.Nodes, subNode)
-				queue = append(queue, subNode)
+				if !visited[key] && len(visited) < 5000 {
+					visited[key] = true
+					result.Nodes = append(result.Nodes, subNode)
+				}
+				queue = append(queue, bridgeBranchState{Node: subNode, Direction: state.Direction, Path: subPaths[key]})
 			}
 			for _, edge := range sub.Edges {
 				if edge.Depth+bridgeDepth > q.Depth || factSeen[edgeKey(edge.Transfer)] {
@@ -354,11 +400,11 @@ func (g *Graph) traceWithBridges(ctx context.Context, query Query) (Result, erro
 	return result, nil
 }
 
-func bridgeTarget(link store.CrossChainLink, node Node) (NodeRef, bool) {
-	if link.SourceChain == node.Chain && strings.EqualFold(link.SourceAddress, node.Address) {
+func bridgeTarget(link store.CrossChainLink, node Node, direction string) (NodeRef, bool) {
+	if direction != "in" && link.SourceChain == node.Chain && strings.EqualFold(link.SourceAddress, node.Address) {
 		return NodeRef{Chain: link.TargetChain, Address: link.TargetAddress}, true
 	}
-	if link.TargetChain == node.Chain && strings.EqualFold(link.TargetAddress, node.Address) {
+	if direction != "out" && link.TargetChain == node.Chain && strings.EqualFold(link.TargetAddress, node.Address) {
 		return NodeRef{Chain: link.SourceChain, Address: link.SourceAddress}, true
 	}
 	return NodeRef{}, false

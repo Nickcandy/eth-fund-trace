@@ -1,4 +1,5 @@
 import type { BridgeEdge, NodeRef, TraceResult, Transfer } from "../api/types";
+import { displayDecimals } from "../lib/format";
 
 export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
@@ -86,7 +87,7 @@ export function buildGraphModel(result: TraceResult, seed: NodeRef, aggregate: b
       grouped.set(key, {
         id: key, source: nodeID(fact.chain, fact.from), target: nodeID(fact.chain, fact.to), chain: fact.chain,
         asset: fact.asset, assetSymbol: fact.symbol || fact.asset, sourceType: fact.source, kind: fact.transferKind ?? "transfer",
-        count: 1, totalAmount: fact.amount ?? fact.tokenValue ?? "0", decimals: fact.tokenMetadataComplete === false ? undefined : fact.decimals,
+        count: 1, totalAmount: fact.amount ?? fact.tokenValue ?? "0", decimals: displayDecimals(fact.assetType, fact.asset, fact.decimals, fact.tokenMetadataComplete),
         facts: [fact],
       });
     }
@@ -97,7 +98,7 @@ export function buildGraphModel(result: TraceResult, seed: NodeRef, aggregate: b
     grouped.set(key, {
       id: key, source: nodeID(link.sourceChain, link.sourceAddress), target: nodeID(link.targetChain, link.targetAddress), chain: `${link.sourceChain}->${link.targetChain}`,
       asset: link.sourceAsset, assetSymbol: link.sourceAsset, sourceType: "bridge", kind: "bridge", count: 1,
-      totalAmount: link.sourceAmount, facts: [], bridge,
+      totalAmount: link.sourceAmount, decimals: displayDecimals(undefined, link.sourceAsset, undefined, undefined), facts: [], bridge,
     });
   }
   return { nodes, edges: [...grouped.values()] };
