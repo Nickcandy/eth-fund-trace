@@ -426,6 +426,12 @@ paths:
     get:
       parameters: [{$ref: '#/components/parameters/ObjectID'}]
       responses: {'200': {description: Trace job and persisted result, content: {application/json: {schema: {$ref: '#/components/schemas/TraceJob'}}}}, '404': {description: Job not found}}
+  /api/v1/trace-jobs/{id}/stop:
+    post:
+      summary: Stop an active trace job and its current sync task
+      responses:
+        '200': { description: Stopped trace job }
+        '404': { description: Job not found }
   /api/v1/risk:
     get:
       parameters:

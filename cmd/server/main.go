@@ -137,6 +137,7 @@ func run(parent context.Context) error {
 	traceHandler := httpapi.NewTraceHandler(traceManager)
 	e.GET("/api/v1/trace", traceHandler.Enqueue)
 	e.GET("/api/v1/trace-jobs/latest", traceHandler.LatestJob)
+	e.POST("/api/v1/trace-jobs/:id/stop", traceHandler.Stop)
 	e.GET("/api/v1/trace-jobs/:id", traceHandler.Job)
 	e.GET("/api/v1/risk", httpapi.NewRiskHandler(traceManager).Get)
 	e.GET("/api/v1/transactions/:txHash", httpapi.NewTransactionHandler(transactionanalysis.New(ethereumClient, appStore, time.Now)).Get)

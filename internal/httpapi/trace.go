@@ -16,6 +16,7 @@ type TraceProvider interface {
 	Enqueue(context.Context, tracer.Request) (store.TraceJob, error)
 	Job(context.Context, string) (store.TraceJob, error)
 	LatestJob(context.Context, tracer.Query) (store.TraceJob, error)
+	Stop(context.Context, string) (store.TraceJob, error)
 }
 type TraceHandler struct{ manager TraceProvider }
 
@@ -48,6 +49,16 @@ func (h *TraceHandler) Job(c echo.Context) error {
 		return writeError(c, 400, "invalid_request", "invalid trace job id", false)
 	}
 	return c.JSON(200, job)
+}
+func (h *TraceHandler) Stop(c echo.Context) error {
+	job, err := h.manager.Stop(c.Request().Context(), c.Param("id"))
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return writeError(c, http.StatusNotFound, "trace_job_not_found", "trace job not found", false)
+	}
+	if err != nil {
+		return writeError(c, http.StatusBadRequest, "invalid_request", err.Error(), false)
+	}
+	return c.JSON(http.StatusOK, job)
 }
 func (h *TraceHandler) LatestJob(c echo.Context) error {
 	query, err := traceQuery(c)

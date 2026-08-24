@@ -72,6 +72,8 @@ type Manager struct {
 	queue      chan queuedJob
 	mu         sync.Mutex
 	active     map[string]primitive.ObjectID
+	cancelMu   sync.Mutex
+	cancels    map[string]context.CancelFunc
 }
 
 func New(source Source, repository Repository, config Config) *Manager {
@@ -94,7 +96,7 @@ func NewMulti(sources map[string]Source, repository Repository, config Config) *
 	if config.HistoryLookbackBlocks < 0 {
 		config.HistoryLookbackBlocks = 0
 	}
-	return &Manager{sources: sources, repository: repository, config: config, queue: make(chan queuedJob, config.QueueSize), active: make(map[string]primitive.ObjectID)}
+	return &Manager{sources: sources, repository: repository, config: config, queue: make(chan queuedJob, config.QueueSize), active: make(map[string]primitive.ObjectID), cancels: make(map[string]context.CancelFunc)}
 }
 
 func (m *Manager) Enqueue(ctx context.Context, request Request) (store.SyncJob, error) {
@@ -152,6 +154,29 @@ func (m *Manager) Job(ctx context.Context, id string) (store.SyncJob, error) {
 	}
 	return m.repository.GetSyncJob(ctx, objectID)
 }
+func (m *Manager) Stop(ctx context.Context, id string) error {
+	objectID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return ErrInvalidRequest
+	}
+	job, err := m.repository.GetSyncJob(ctx, objectID)
+	if err != nil {
+		return err
+	}
+	if job.Status == "queued" || job.Status == "running" {
+		job.Status, job.ErrorCode, job.Error, job.Retryable = "stopped", "stopped_by_user", "stopped by user", false
+		job.FinishedAt = m.config.Clock().UTC()
+		if err := m.repository.SaveSyncJob(ctx, job); err != nil {
+			return err
+		}
+		m.cancelMu.Lock()
+		if cancel := m.cancels[id]; cancel != nil {
+			cancel()
+		}
+		m.cancelMu.Unlock()
+	}
+	return nil
+}
 
 func (m *Manager) LatestJob(ctx context.Context, chainName, address string) (store.SyncJob, error) {
 	chain, chainErr := chains.Resolve(chainName)
@@ -185,11 +210,19 @@ type addressResult struct {
 type progressReporter func(func(*store.SyncProgress))
 
 func (m *Manager) process(ctx context.Context, queued queuedJob) {
+	jobCtx, cancel := context.WithCancel(ctx)
+	m.cancelMu.Lock()
+	m.cancels[queued.id.Hex()] = cancel
+	m.cancelMu.Unlock()
+	defer func() { cancel(); m.cancelMu.Lock(); delete(m.cancels, queued.id.Hex()); m.cancelMu.Unlock() }()
 	defer m.release(queued.request)
 	source := m.sources[queued.request.Chain]
 	chain, _ := chains.Resolve(queued.request.Chain)
 	job, err := m.repository.GetSyncJob(ctx, queued.id)
 	if err != nil {
+		return
+	}
+	if job.Status == "stopped" {
 		return
 	}
 	job.Status, job.StartedAt = "running", m.config.Clock().UTC()
@@ -221,8 +254,11 @@ func (m *Manager) process(ctx context.Context, queued queuedJob) {
 		return value, nil
 	}
 
-	seedResult, err := m.syncAddress(ctx, source, chain.ID, queued.request, job.Progress.ActionCheckpoints, getSafeHead, report)
+	seedResult, err := m.syncAddress(jobCtx, source, chain.ID, queued.request, job.Progress.ActionCheckpoints, getSafeHead, report)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return
+		}
 		m.finishFailed(ctx, &job, err)
 		return
 	}
@@ -248,8 +284,11 @@ func (m *Manager) process(ctx context.Context, queued queuedJob) {
 			m.finishFailed(ctx, &job, checkpointErr)
 			return
 		}
-		result, syncErr := m.syncAddress(ctx, source, chain.ID, request, checkpoints, getSafeHead, report)
+		result, syncErr := m.syncAddress(jobCtx, source, chain.ID, request, checkpoints, getSafeHead, report)
 		if syncErr != nil {
+			if errors.Is(syncErr, context.Canceled) {
+				return
+			}
 			code, retryable := classify(syncErr)
 			job.FailedNeighbors = append(job.FailedNeighbors, store.SyncFailure{Address: neighbor, Code: code, Message: syncErr.Error(), Retryable: retryable})
 			job.ProcessedAddresses++

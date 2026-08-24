@@ -14,6 +14,7 @@ export function describeTraceJob(job: JobProgress): JobDescription {
     case "succeeded": return { tone: "success", label: "分析完成", detail };
     case "partial": return { tone: "warning", label: "部分数据可用", detail };
     case "failed": return { tone: "error", label: "分析失败", detail };
+    case "stopped": return { tone: "warning", label: "已停止", detail: "任务已由用户停止" };
   }
 }
 

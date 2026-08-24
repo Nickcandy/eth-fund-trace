@@ -57,6 +57,7 @@ func (s traceStub) Job(context.Context, string) (store.TraceJob, error) { return
 func (s traceStub) LatestJob(context.Context, tracer.Query) (store.TraceJob, error) {
 	return s.job, nil
 }
+func (s traceStub) Stop(context.Context, string) (store.TraceJob, error) { return s.job, nil }
 
 func TestTraceHandlerReturnsAccepted(t *testing.T) {
 	id := primitive.NewObjectID()

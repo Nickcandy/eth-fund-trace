@@ -1,6 +1,6 @@
 export type Chain = "ethereum" | "base";
 export type Direction = "in" | "out" | "both";
-export type JobStatus = "queued" | "waiting_sync" | "running" | "succeeded" | "partial" | "failed";
+export type JobStatus = "queued" | "waiting_sync" | "running" | "succeeded" | "partial" | "failed" | "stopped";
 
 export interface ApiErrorBody {
   error: { code: string; message: string; retryable: boolean };

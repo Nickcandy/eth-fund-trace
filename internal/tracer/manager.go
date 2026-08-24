@@ -24,6 +24,7 @@ type JobRepository interface {
 type SyncJobs interface {
 	Enqueue(context.Context, syncer.Request) (store.SyncJob, error)
 	Job(context.Context, string) (store.SyncJob, error)
+	Stop(context.Context, string) error
 }
 type Request struct{ Query Query }
 type Manager struct {
@@ -34,12 +35,14 @@ type Manager struct {
 	mu       sync.Mutex
 	active   map[string]primitive.ObjectID
 	clock    func() time.Time
+	cancelMu sync.Mutex
+	cancels  map[string]context.CancelFunc
 }
 
 var ErrQueueFull = errors.New("trace queue is full")
 
 func NewManager(graph *Graph, jobs JobRepository, syncJobs SyncJobs) *Manager {
-	return &Manager{graph: graph, jobs: jobs, syncJobs: syncJobs, queue: make(chan primitive.ObjectID, 100), active: make(map[string]primitive.ObjectID), clock: time.Now}
+	return &Manager{graph: graph, jobs: jobs, syncJobs: syncJobs, queue: make(chan primitive.ObjectID, 100), active: make(map[string]primitive.ObjectID), clock: time.Now, cancels: make(map[string]context.CancelFunc)}
 }
 func (m *Manager) Enqueue(ctx context.Context, request Request) (store.TraceJob, error) {
 	normalized, err := normalize(request.Query)
@@ -81,6 +84,32 @@ func (m *Manager) Job(ctx context.Context, id string) (store.TraceJob, error) {
 	}
 	return m.jobs.GetTraceJob(ctx, parsed)
 }
+func (m *Manager) Stop(ctx context.Context, id string) (store.TraceJob, error) {
+	parsed, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return store.TraceJob{}, err
+	}
+	job, err := m.jobs.GetTraceJob(ctx, parsed)
+	if err != nil {
+		return store.TraceJob{}, err
+	}
+	if job.Status == "queued" || job.Status == "waiting_sync" || job.Status == "running" {
+		job.Status, job.ErrorCode, job.Error, job.Retryable = "stopped", "stopped_by_user", "stopped by user", false
+		job.FinishedAt = m.clock().UTC()
+		if err := m.jobs.SaveTraceJob(ctx, job); err != nil {
+			return store.TraceJob{}, err
+		}
+		m.cancelMu.Lock()
+		if cancel := m.cancels[id]; cancel != nil {
+			cancel()
+		}
+		m.cancelMu.Unlock()
+		for _, syncID := range job.SyncJobIDs {
+			_ = m.syncJobs.Stop(ctx, syncID)
+		}
+	}
+	return job, nil
+}
 func (m *Manager) LatestJob(ctx context.Context, query Query) (store.TraceJob, error) {
 	normalized, err := normalize(query)
 	if err != nil {
@@ -106,9 +135,17 @@ func (m *Manager) Run(ctx context.Context) error {
 	}
 }
 func (m *Manager) process(ctx context.Context, id primitive.ObjectID) {
+	jobCtx, cancel := context.WithCancel(ctx)
+	m.cancelMu.Lock()
+	m.cancels[id.Hex()] = cancel
+	m.cancelMu.Unlock()
+	defer func() { cancel(); m.cancelMu.Lock(); delete(m.cancels, id.Hex()); m.cancelMu.Unlock() }()
 	job, err := m.jobs.GetTraceJob(ctx, id)
 	if err != nil {
 		m.releaseID(id)
+		return
+	}
+	if job.Status == "stopped" {
 		return
 	}
 	key := queryKey(Query{Chain: job.Chain, Address: job.SeedAddress, Direction: job.Direction, Depth: job.Depth, TopN: job.TopN, Asset: job.Asset})
@@ -132,8 +169,11 @@ func (m *Manager) process(ctx context.Context, id primitive.ObjectID) {
 			m.fail(ctx, &job, errors.New("failed to persist trace job"))
 			return
 		}
-		current, pollErr := m.waitSync(ctx, syncJob.ID.Hex())
+		current, pollErr := m.waitSync(jobCtx, syncJob.ID.Hex())
 		if pollErr != nil {
+			if errors.Is(pollErr, context.Canceled) {
+				return
+			}
 			m.fail(ctx, &job, pollErr)
 			return
 		}
@@ -144,7 +184,7 @@ func (m *Manager) process(ctx context.Context, id primitive.ObjectID) {
 		m.fail(ctx, &job, errors.New("failed to persist trace job"))
 		return
 	}
-	result, traceErr := m.graph.Trace(ctx, request)
+	result, traceErr := m.graph.Trace(jobCtx, request)
 	for traceErr != nil {
 		var unsynced AddressNotSyncedError
 		if errors.As(traceErr, &unsynced) && m.syncJobs != nil && unsynced.Address != "" {
@@ -167,13 +207,16 @@ func (m *Manager) process(ctx context.Context, id primitive.ObjectID) {
 				m.fail(ctx, &job, errors.New("failed to persist trace job"))
 				return
 			}
-			current, pollErr := m.waitSync(ctx, syncJob.ID.Hex())
+			current, pollErr := m.waitSync(jobCtx, syncJob.ID.Hex())
 			if pollErr != nil {
+				if errors.Is(pollErr, context.Canceled) {
+					return
+				}
 				traceErr = pollErr
 				break
 			}
 			partialSync = partialSync || current.Status == "partial"
-			result, traceErr = m.graph.Trace(ctx, request)
+			result, traceErr = m.graph.Trace(jobCtx, request)
 			continue
 		}
 		break
