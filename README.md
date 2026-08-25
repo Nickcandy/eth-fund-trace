@@ -31,6 +31,7 @@
 | [外部数据源与链上语义研究](docs/07-外部数据源与链上语义研究.md) | 21 个官方来源核验与工程推论 |
 | [DEX 交易解析设计](docs/08-DEX交易解析设计.md) | Uniswap V3、Universal Router、WETH 和交易哈希分析边界 |
 | [M12 官方桥识别与状态同步设计](docs/09-M12官方桥识别与状态同步设计.md) | Ethereum↔Base 官方桥 ETH/ERC-20 自动识别、生命周期和有界状态同步 |
+| [项目难点与方案权衡](docs/10-项目难点与方案权衡.md) | 数据规模、查询、缓存、图追踪、协议语义和打标的工程权衡 |
 | [OpenAPI](docs/openapi.yaml) | 当前 HTTP 契约 |
 
 ## 启动
