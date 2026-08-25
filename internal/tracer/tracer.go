@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/big"
 	"sort"
 	"strings"
 
@@ -16,6 +17,11 @@ import (
 var ErrInvalidQuery = errors.New("invalid trace query")
 var ErrAddressNotSynced = errors.New("address is not synced")
 
+const (
+	traceRuleVersion    = "trace-v5"
+	conversionScanLimit = 20
+)
+
 type AddressNotSyncedError struct{ Chain, Address string }
 
 func (e AddressNotSyncedError) Error() string { return ErrAddressNotSynced.Error() + ": " + e.Address }
@@ -24,8 +30,15 @@ func (e AddressNotSyncedError) Unwrap() error { return ErrAddressNotSynced }
 type Repository interface {
 	FindAddress(context.Context, string, string) (store.Address, bool, error)
 	QueryTransfers(context.Context, store.TransferQuery) ([]store.Transfer, error)
+	TopCounterparties(context.Context, store.CounterpartyQuery) ([]store.CounterpartySummary, error)
+	TopRelationshipTransfers(context.Context, store.CounterpartyQuery, int) ([]store.Transfer, error)
 	ListLabels(context.Context, string, string) ([]store.Label, error)
 	ListCrossChainLinks(context.Context, string, string, int64) ([]store.CrossChainLink, error)
+}
+
+type TransactionAnalyzer interface {
+	Analyze(context.Context, string, string) (store.TransactionAnalysis, error)
+	SupportsContract(string) bool
 }
 
 type Query struct {
@@ -48,9 +61,21 @@ type BridgeEdge struct {
 	Path  []NodeRef            `json:"path"`
 }
 type Edge struct {
-	Transfer store.Transfer `json:"transfer"`
-	Depth    int            `json:"depth"`
-	Path     []string       `json:"path"`
+	Chain                 string   `bson:"chain" json:"chain"`
+	From                  string   `bson:"from" json:"from"`
+	To                    string   `bson:"to" json:"to"`
+	AssetType             string   `bson:"assetType" json:"assetType"`
+	Asset                 string   `bson:"asset" json:"asset"`
+	Symbol                string   `bson:"symbol,omitempty" json:"symbol,omitempty"`
+	Decimals              int32    `bson:"decimals" json:"decimals"`
+	TokenMetadataComplete bool     `bson:"tokenMetadataComplete,omitempty" json:"tokenMetadataComplete"`
+	TotalAmount           string   `bson:"totalAmount" json:"totalAmount"`
+	TransferCount         int64    `bson:"transferCount" json:"transferCount"`
+	Kind                  string   `bson:"kind" json:"kind"`
+	Depth                 int      `bson:"depth" json:"depth"`
+	Path                  []string `bson:"path" json:"path"`
+	ConversionStatus      string   `bson:"conversionStatus,omitempty" json:"conversionStatus,omitempty"`
+	ConversionScanned     int      `bson:"conversionScanned,omitempty" json:"conversionScanned,omitempty"`
 }
 type Result struct {
 	Nodes             []Node               `bson:"nodes" json:"nodes"`
@@ -68,9 +93,13 @@ type Result struct {
 }
 
 type branchState struct {
-	Address   string
-	Direction string
-	Path      []string
+	Address       string
+	Direction     string
+	AssetMode     string
+	Asset         string
+	EnteringQuery store.CounterpartyQuery
+	EnteringEdge  int
+	Path          []string
 }
 type bridgeBranchState struct {
 	Node      Node
@@ -78,9 +107,17 @@ type bridgeBranchState struct {
 	Path      []NodeRef
 }
 
-type Graph struct{ repository Repository }
+type Graph struct {
+	repository Repository
+	analyzer   TransactionAnalyzer
+}
 
 func New(repository Repository) *Graph { return &Graph{repository: repository} }
+
+func (g *Graph) WithTransactionAnalyzer(analyzer TransactionAnalyzer) *Graph {
+	g.analyzer = analyzer
+	return g
+}
 
 func ValidateQuery(query Query) error {
 	q, err := normalize(query)
@@ -113,132 +150,148 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 	if !found || metadata.SyncStatus != "synced" {
 		return Result{}, AddressNotSyncedError{Chain: q.Chain, Address: seed}
 	}
-	result := Result{DataThroughBlock: metadata.LatestSyncedBlock, DataStatus: "synced", RuleVersion: "trace-v1"}
+	result := Result{DataThroughBlock: metadata.LatestSyncedBlock, DataStatus: "synced", RuleVersion: traceRuleVersion}
 	seedLabels, err := g.repository.ListLabels(ctx, q.Chain, seed)
 	if err != nil {
 		return Result{}, err
 	}
-	seedState := branchState{Address: seed, Direction: q.Direction, Path: []string{seed}}
-	frontier := []branchState{seedState}
-	visitedStates := map[string]bool{branchStateKey(seed, q.Direction): true}
+	directions := []string{q.Direction}
+	if q.Direction == "both" {
+		directions = []string{"in", "out"}
+	}
+	assets := rootAssets(q.Chain)
+	frontier := make([]branchState, 0, len(directions)*len(assets))
+	visitedStates := make(map[string]bool, len(directions)*len(assets))
 	visitedNodes := map[string]bool{seed: true}
 	seedTerminal := metadata.IsTerminal || hasTerminalLabel(seedLabels)
 	result.Nodes = append(result.Nodes, Node{Chain: q.Chain, Address: seed, Depth: 0, Terminal: seedTerminal})
-	result.branchStates = append(result.branchStates, seedState)
-	allTransfers := make([]store.Transfer, 0)
-	resultFacts := make(map[string]bool)
-	seenFacts := make(map[string]bool)
+	for _, direction := range directions {
+		for _, asset := range assets {
+			state := branchState{Address: seed, Direction: direction, AssetMode: asset.AssetMode, Asset: asset.Asset, Path: []string{seed}}
+			frontier = append(frontier, state)
+			visitedStates[branchStateKey(state)] = true
+			result.branchStates = append(result.branchStates, state)
+		}
+	}
+	riskTransfers := make([]store.Transfer, 0)
 	for depth := 0; depth < q.Depth && len(frontier) > 0 && len(visitedNodes) < 5000; depth++ {
 		sort.Slice(frontier, func(i, j int) bool {
-			return branchStateKey(frontier[i].Address, frontier[i].Direction) < branchStateKey(frontier[j].Address, frontier[j].Direction)
+			return branchStateKey(frontier[i]) < branchStateKey(frontier[j])
 		})
 		next := make([]branchState, 0)
-		groups := map[string][]branchState{}
-		for _, state := range frontier {
-			groups[state.Direction] = append(groups[state.Direction], state)
-		}
-		for _, direction := range []string{"both", "in", "out"} {
-			states := groups[direction]
-			for offset := 0; offset < len(states); offset += 500 {
-				end := min(offset+500, len(states))
-				batchStates := states[offset:end]
-				batch := make([]string, len(batchStates))
-				stateByAddress := make(map[string]branchState, len(batchStates))
-				for index, state := range batchStates {
-					batch[index], stateByAddress[state.Address] = state.Address, state
+		expand := func(state branchState, candidates []store.CounterpartySummary) error {
+			for _, summary := range candidates {
+				if token, ok := knownTokenFor(q.Chain, summary.Asset); ok {
+					summary.AssetType = "erc20"
+					summary.Asset = token.Contract
+					summary.Symbol = token.Symbol
+					summary.Decimals = token.Decimals
+					summary.TokenMetadataComplete = true
 				}
-				transfers, queryErr := g.repository.QueryTransfers(ctx, store.TransferQuery{Chain: q.Chain, Addresses: batch, Direction: direction, AssetMode: assetMode(q.Asset), Asset: assetValue(q.Asset), Limit: 10000})
+				other := strings.ToLower(summary.To)
+				if state.Direction == "in" {
+					other = strings.ToLower(summary.From)
+				}
+				if other == "" {
+					continue
+				}
+				path := append(append([]string(nil), state.Path...), other)
+				edge := edgeFromSummary(summary, depth+1, path)
+				result.Edges = append(result.Edges, edge)
+				edgeIndex := len(result.Edges) - 1
+				riskTransfers = append(riskTransfers, summary.Representative)
+				if other == zeroAddress {
+					if !visitedNodes[other] && len(visitedNodes) < 5000 {
+						visitedNodes[other] = true
+						result.Nodes = append(result.Nodes, Node{Chain: q.Chain, Address: other, Depth: depth + 1, Terminal: true})
+					}
+					continue
+				}
+				otherMetadata, otherFound, metadataErr := g.repository.FindAddress(ctx, q.Chain, other)
+				if metadataErr != nil {
+					return metadataErr
+				}
+				if !otherFound || otherMetadata.SyncStatus != "synced" {
+					return AddressNotSyncedError{Chain: q.Chain, Address: other}
+				}
+				assetMode, asset := summaryAsset(summary)
+				relation := store.CounterpartyQuery{Chain: q.Chain, Address: state.Address, Counterparty: other, Direction: state.Direction, AssetMode: assetMode, Asset: asset}
+				nextState := branchState{Address: other, Direction: state.Direction, AssetMode: assetMode, Asset: asset, EnteringQuery: relation, EnteringEdge: edgeIndex, Path: path}
+				stateKey := branchStateKey(nextState)
+				if visitedStates[stateKey] || len(visitedNodes) >= 5000 {
+					continue
+				}
+				otherLabels, labelsErr := g.repository.ListLabels(ctx, q.Chain, other)
+				if labelsErr != nil {
+					return labelsErr
+				}
+				terminal := otherMetadata.IsTerminal || hasTerminalLabel(otherLabels)
+				visitedStates[stateKey] = true
+				result.branchStates = append(result.branchStates, nextState)
+				isNewNode := !visitedNodes[other]
+				visitedNodes[other] = true
+				if !terminal {
+					next = append(next, nextState)
+				}
+				if isNewNode {
+					result.Nodes = append(result.Nodes, Node{Chain: q.Chain, Address: other, Depth: depth + 1, Terminal: terminal})
+				}
+				result.Paths = append(result.Paths, path)
+			}
+			return nil
+		}
+		for _, state := range frontier {
+			if nodeTerminal(result.Nodes, state.Address) {
+				continue
+			}
+			if state.EnteringQuery.Address != "" && g.analyzer != nil && g.analyzer.SupportsContract(state.Address) && q.Chain == "ethereum" {
+				transfers, queryErr := g.repository.TopRelationshipTransfers(ctx, state.EnteringQuery, conversionScanLimit+1)
 				if queryErr != nil {
 					return Result{}, queryErr
 				}
-				byAddress := make(map[string][]store.Transfer)
-				for _, transfer := range transfers {
-					if !seenFacts[edgeKey(transfer)] {
-						allTransfers = append(allTransfers, transfer)
-						seenFacts[edgeKey(transfer)] = true
+				scanned := min(len(transfers), conversionScanLimit)
+				if state.EnteringEdge >= 0 && state.EnteringEdge < len(result.Edges) {
+					result.Edges[state.EnteringEdge].ConversionScanned = scanned
+					result.Edges[state.EnteringEdge].ConversionStatus = "complete"
+					if len(transfers) > conversionScanLimit {
+						result.Edges[state.EnteringEdge].ConversionStatus = "partial"
 					}
-					for _, address := range batch {
-						if direction == "both" {
-							if strings.EqualFold(transfer.To, address) {
-								byAddress[strings.ToLower(address)+"|in"] = append(byAddress[strings.ToLower(address)+"|in"], transfer)
-							}
-							if strings.EqualFold(transfer.From, address) {
-								byAddress[strings.ToLower(address)+"|out"] = append(byAddress[strings.ToLower(address)+"|out"], transfer)
-							}
-						} else if (direction == "in" && strings.EqualFold(transfer.To, address)) || (direction == "out" && strings.EqualFold(transfer.From, address)) {
-							byAddress[strings.ToLower(address)+"|"+direction] = append(byAddress[strings.ToLower(address)+"|"+direction], transfer)
+				}
+				converted := make([]store.Transfer, 0, scanned)
+				for _, transfer := range transfers[:scanned] {
+					conversionState := state
+					conversionState.EnteringQuery = store.CounterpartyQuery{}
+					conversionState.AssetMode, conversionState.Asset = transferAsset(transfer)
+					conversion, ok, conversionErr := g.conversionTransfer(ctx, q.Chain, conversionState, transfer.TxHash)
+					if conversionErr != nil {
+						return Result{}, conversionErr
+					}
+					if ok {
+						converted = append(converted, conversion)
+					}
+				}
+				if len(converted) > 0 {
+					aggregates := aggregateConversions(converted, q.TopN)
+					assets := make([]string, 0, len(aggregates))
+					for asset := range aggregates {
+						assets = append(assets, asset)
+					}
+					sort.Strings(assets)
+					for _, asset := range assets {
+						summaries := aggregates[asset]
+						if err := expand(state, summaries); err != nil {
+							return Result{}, err
 						}
 					}
 				}
-				for _, address := range batch {
-					state := stateByAddress[address]
-					if nodeTerminal(result.Nodes, address) {
-						continue
-					}
-					directions := []string{direction}
-					if direction == "both" {
-						directions = []string{"in", "out"}
-					}
-					for _, selectedDirection := range directions {
-						candidates := byAddress[strings.ToLower(address)+"|"+selectedDirection]
-						sort.SliceStable(candidates, func(i, j int) bool { return edgeKey(candidates[i]) > edgeKey(candidates[j]) })
-						count := 0
-						for _, transfer := range candidates {
-							if count >= q.TopN {
-								break
-							}
-							other := strings.ToLower(transfer.To)
-							if selectedDirection == "in" {
-								other = strings.ToLower(transfer.From)
-							} else if other == strings.ToLower(address) {
-								other = strings.ToLower(transfer.From)
-							}
-							if other == "" {
-								continue
-							}
-							path := append(append([]string(nil), state.Path...), other)
-							if !resultFacts[edgeKey(transfer)] {
-								result.Edges = append(result.Edges, Edge{Transfer: transfer, Depth: depth + 1, Path: path})
-								resultFacts[edgeKey(transfer)] = true
-							}
-							count++
-							if other == zeroAddress {
-								if !visitedNodes[other] && len(visitedNodes) < 5000 {
-									visitedNodes[other] = true
-									result.Nodes = append(result.Nodes, Node{Chain: q.Chain, Address: other, Depth: depth + 1, Terminal: true})
-								}
-								continue
-							}
-							stateKey := branchStateKey(other, selectedDirection)
-							if visitedStates[stateKey] || len(visitedNodes) >= 5000 {
-								continue
-							}
-							otherMetadata, otherFound, metadataErr := g.repository.FindAddress(ctx, q.Chain, other)
-							if metadataErr != nil {
-								return Result{}, metadataErr
-							}
-							if !otherFound || otherMetadata.SyncStatus != "synced" {
-								return Result{}, AddressNotSyncedError{Chain: q.Chain, Address: other}
-							}
-							otherLabels, labelsErr := g.repository.ListLabels(ctx, q.Chain, other)
-							if labelsErr != nil {
-								return Result{}, labelsErr
-							}
-							terminal := otherFound && otherMetadata.IsTerminal || hasTerminalLabel(otherLabels)
-							visitedStates[stateKey] = true
-							result.branchStates = append(result.branchStates, branchState{Address: other, Direction: selectedDirection, Path: path})
-							isNewNode := !visitedNodes[other]
-							visitedNodes[other] = true
-							if !terminal {
-								next = append(next, branchState{Address: other, Direction: selectedDirection, Path: path})
-							}
-							if isNewNode {
-								result.Nodes = append(result.Nodes, Node{Chain: q.Chain, Address: other, Depth: depth + 1, Terminal: terminal})
-							}
-							result.Paths = append(result.Paths, path)
-						}
-					}
-				}
+				continue
+			}
+			summaries, queryErr := g.repository.TopCounterparties(ctx, store.CounterpartyQuery{Chain: q.Chain, Address: state.Address, Direction: state.Direction, AssetMode: state.AssetMode, Asset: state.Asset, TopN: q.TopN})
+			if queryErr != nil {
+				return Result{}, queryErr
+			}
+			if err := expand(state, summaries); err != nil {
+				return Result{}, err
 			}
 		}
 		frontier = next
@@ -251,12 +304,185 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 		}
 		allLabels = append(allLabels, labels...)
 	}
-	result.Risk = risk.Analyze(seed, allTransfers, allLabels)
+	result.Risk = risk.Analyze(seed, riskTransfers, allLabels)
 	result.Labels = result.Risk.InferredLabels
 	return result, nil
 }
 
-func branchStateKey(address, direction string) string { return address + "|" + direction }
+func edgeFromSummary(summary store.CounterpartySummary, depth int, path []string) Edge {
+	kind := summary.Representative.TransferKind
+	if kind == "" {
+		kind = "transfer"
+	}
+	return Edge{Chain: summary.Chain, From: summary.From, To: summary.To, AssetType: summary.AssetType, Asset: summary.Asset, Symbol: summary.Symbol, Decimals: summary.Decimals, TokenMetadataComplete: summary.TokenMetadataComplete, TotalAmount: summary.TotalAmount, TransferCount: summary.TransferCount, Kind: kind, Depth: depth, Path: path}
+}
+
+func summaryAsset(summary store.CounterpartySummary) (string, string) {
+	if summary.AssetType == "eth" || strings.EqualFold(summary.Asset, "ETH") {
+		return "eth", "ETH"
+	}
+	return "contract", strings.ToLower(summary.Asset)
+}
+
+func aggregateConversions(transfers []store.Transfer, topN int) map[string][]store.CounterpartySummary {
+	byAsset := make(map[string]map[string]*store.CounterpartySummary)
+	for _, transfer := range transfers {
+		assetKey := strings.ToLower(transfer.Asset)
+		if byAsset[assetKey] == nil {
+			byAsset[assetKey] = make(map[string]*store.CounterpartySummary)
+		}
+		key := strings.ToLower(transfer.From + "|" + transfer.To)
+		summary := byAsset[assetKey][key]
+		if summary == nil {
+			summary = &store.CounterpartySummary{Chain: transfer.Chain, ChainID: transfer.ChainID, From: transfer.From, To: transfer.To, AssetType: transfer.AssetType, Asset: transfer.Asset, Symbol: transfer.Symbol, Decimals: transfer.Decimals, TokenMetadataComplete: transfer.TokenMetadataComplete, TotalAmount: "0", Representative: transfer}
+			byAsset[assetKey][key] = summary
+		}
+		amount, ok := new(big.Int).SetString(transferAmount(transfer), 10)
+		if !ok {
+			continue
+		}
+		total, _ := new(big.Int).SetString(summary.TotalAmount, 10)
+		summary.TotalAmount = total.Add(total, amount).String()
+		summary.TransferCount++
+	}
+	result := make(map[string][]store.CounterpartySummary, len(byAsset))
+	for asset, values := range byAsset {
+		for _, summary := range values {
+			result[asset] = append(result[asset], *summary)
+		}
+		sort.Slice(result[asset], func(i, j int) bool {
+			left, _ := new(big.Int).SetString(result[asset][i].TotalAmount, 10)
+			right, _ := new(big.Int).SetString(result[asset][j].TotalAmount, 10)
+			if comparison := left.Cmp(right); comparison != 0 {
+				return comparison > 0
+			}
+			return result[asset][i].To < result[asset][j].To
+		})
+		if len(result[asset]) > topN {
+			result[asset] = result[asset][:topN]
+		}
+	}
+	return result
+}
+
+func branchStateKey(state branchState) string {
+	return strings.Join([]string{strings.ToLower(state.Address), state.Direction, state.AssetMode, strings.ToLower(state.Asset)}, "|")
+}
+
+func transferAsset(transfer store.Transfer) (string, string) {
+	if transfer.AssetType == "eth" || strings.EqualFold(transfer.Asset, "ETH") {
+		return "eth", "ETH"
+	}
+	return "contract", strings.ToLower(transfer.Asset)
+}
+
+func compareTransferAmount(left, right store.Transfer) int {
+	leftAmount, leftOK := new(big.Int).SetString(transferAmount(left), 10)
+	rightAmount, rightOK := new(big.Int).SetString(transferAmount(right), 10)
+	if !leftOK || !rightOK {
+		return 0
+	}
+	return leftAmount.Cmp(rightAmount)
+}
+
+func transferAmount(transfer store.Transfer) string {
+	if transfer.AssetType == "eth" || strings.EqualFold(transfer.Asset, "ETH") {
+		return transfer.Amount
+	}
+	return transfer.TokenValue
+}
+
+func (g *Graph) conversionTransfer(ctx context.Context, chain string, state branchState, txHash string) (store.Transfer, bool, error) {
+	analysis, err := g.analyzer.Analyze(ctx, chain, txHash)
+	if err != nil {
+		return store.Transfer{}, false, fmt.Errorf("analyze contract conversion: %w", err)
+	}
+	if !analysis.Succeeded || analysis.Quality.Status != "complete" || analysis.Quality.AmbiguousRoute || !strings.EqualFold(analysis.TxHash, txHash) {
+		return store.Transfer{}, false, nil
+	}
+	if !strings.EqualFold(analysis.To, state.Address) && !strings.EqualFold(analysis.EntryContract, state.Address) {
+		return store.Transfer{}, false, nil
+	}
+	if len(analysis.Swaps) == 0 {
+		return wrapConversion(analysis, state)
+	}
+	for _, swap := range analysis.Swaps {
+		if !swap.Verified || swap.TokenIn == "" || swap.TokenOut == "" || swap.AmountIn == "" || swap.AmountOut == "" {
+			return store.Transfer{}, false, nil
+		}
+	}
+	first := analysis.Swaps[0]
+	last := analysis.Swaps[len(analysis.Swaps)-1]
+	var from, to, asset, amount string
+	if state.Direction == "out" {
+		if state.AssetMode == "eth" {
+			if !strings.EqualFold(first.TokenIn, "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2") || !hasWrap(analysis.Wraps, "deposit") {
+				return store.Transfer{}, false, nil
+			}
+		} else if !strings.EqualFold(first.TokenIn, state.Asset) {
+			return store.Transfer{}, false, nil
+		}
+		from, to, asset, amount = state.Address, analysis.FinalOutputAddress, last.TokenOut, last.AmountOut
+		if to == "" {
+			to = last.OutputAddress
+		}
+	} else {
+		if state.AssetMode == "eth" {
+			if !strings.EqualFold(last.TokenOut, "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2") || !hasWrap(analysis.Wraps, "withdrawal") {
+				return store.Transfer{}, false, nil
+			}
+		} else if !strings.EqualFold(last.TokenOut, state.Asset) {
+			return store.Transfer{}, false, nil
+		}
+		from, to, asset, amount = analysis.From, state.Address, first.TokenIn, first.AmountIn
+	}
+	if from == "" || to == "" || asset == "" || amount == "" {
+		return store.Transfer{}, false, nil
+	}
+	return semanticTransfer(analysis, from, to, asset, amount, "swap"), true, nil
+}
+
+func wrapConversion(analysis store.TransactionAnalysis, state branchState) (store.Transfer, bool, error) {
+	if state.AssetMode != "eth" {
+		return store.Transfer{}, false, nil
+	}
+	kind := "deposit"
+	if state.Direction == "in" {
+		kind = "withdrawal"
+	}
+	for _, wrap := range analysis.Wraps {
+		if wrap.Type != kind || wrap.Account == "" || wrap.Amount == "" {
+			continue
+		}
+		from, to, transferKind := state.Address, wrap.Account, "wrap"
+		if state.Direction == "in" {
+			from, to, transferKind = wrap.Account, state.Address, "unwrap"
+		}
+		return semanticTransfer(analysis, from, to, "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2", wrap.Amount, transferKind), true, nil
+	}
+	return store.Transfer{}, false, nil
+}
+
+func semanticTransfer(analysis store.TransactionAnalysis, from, to, asset, amount, kind string) store.Transfer {
+	chainID := analysis.ChainID
+	if chainID == 0 {
+		chainID = 1
+	}
+	return store.Transfer{
+		Chain: analysis.Chain, ChainID: chainID, TxHash: analysis.TxHash, BlockNumber: analysis.BlockNumber,
+		From: strings.ToLower(from), To: strings.ToLower(to), AssetType: "erc20", Asset: strings.ToLower(asset),
+		TokenValue: amount, TransferKind: kind, TransactionGroup: fmt.Sprintf("%d:%s", chainID, strings.ToLower(analysis.TxHash)), Source: "transactionanalysis",
+	}
+}
+
+func hasWrap(wraps []store.WrapEvent, kind string) bool {
+	for _, wrap := range wraps {
+		if wrap.Type == kind {
+			return true
+		}
+	}
+	return false
+}
 
 func (g *Graph) traceWithBridges(ctx context.Context, query Query) (Result, error) {
 	q, err := normalize(query)
@@ -267,7 +493,7 @@ func (g *Graph) traceWithBridges(ctx context.Context, query Query) (Result, erro
 	if err != nil {
 		return Result{}, err
 	}
-	result.RuleVersion = "trace-v2"
+	result.RuleVersion = traceRuleVersion
 	result.DataThroughBlocks = map[string]int64{q.Chain: result.DataThroughBlock}
 	visited := make(map[string]bool)
 	seedRef := NodeRef{Chain: q.Chain, Address: strings.ToLower(q.Address)}
@@ -295,7 +521,7 @@ func (g *Graph) traceWithBridges(ctx context.Context, query Query) (Result, erro
 	bridgeSeen := make(map[string]bool)
 	factSeen := make(map[string]bool)
 	for _, edge := range result.Edges {
-		factSeen[edgeKey(edge.Transfer)] = true
+		factSeen[aggregateEdgeKey(edge)] = true
 	}
 	for index := 0; index < len(queue) && len(visited) < 5000; index++ {
 		state := queue[index]
@@ -387,13 +613,13 @@ func (g *Graph) traceWithBridges(ctx context.Context, query Query) (Result, erro
 				queue = append(queue, bridgeBranchState{Node: subNode, Direction: state.Direction, Path: subPaths[key]})
 			}
 			for _, edge := range sub.Edges {
-				if edge.Depth+bridgeDepth > q.Depth || factSeen[edgeKey(edge.Transfer)] {
+				if edge.Depth+bridgeDepth > q.Depth || factSeen[aggregateEdgeKey(edge)] {
 					continue
 				}
 				edge.Depth += bridgeDepth
 				edge.Path = append(addresses(basePath), edge.Path[1:]...)
 				result.Edges = append(result.Edges, edge)
-				factSeen[edgeKey(edge.Transfer)] = true
+				factSeen[aggregateEdgeKey(edge)] = true
 			}
 		}
 	}
@@ -470,32 +696,11 @@ func normalize(q Query) (Query, error) {
 			return q, ErrInvalidQuery
 		}
 	}
+	q.Asset = "ETH"
 	return q, nil
 }
-func assetMode(value string) string {
-	switch strings.ToLower(value) {
-	case "", "all":
-		return "all"
-	case "eth":
-		return "eth"
-	case "erc20":
-		return "erc20"
-	default:
-		return "contract"
-	}
-}
-func assetValue(value string) string {
-	if strings.EqualFold(value, "eth") {
-		return "ETH"
-	}
-	if assetMode(value) == "contract" {
-		a, _ := ethaddr.Normalize(value)
-		return a
-	}
-	return ""
-}
-func edgeKey(t store.Transfer) string {
-	return fmt.Sprintf("%s|%020d|%s|%s|%s|%020d|%s", t.Chain, t.BlockNumber, t.TxHash, t.Source, t.TraceID, t.LogIndex, t.Asset)
+func aggregateEdgeKey(edge Edge) string {
+	return strings.ToLower(strings.Join([]string{edge.Chain, edge.From, edge.To, edge.Asset, fmt.Sprint(edge.Depth)}, "|"))
 }
 
 const zeroAddress = "0x0000000000000000000000000000000000000000"

@@ -1,4 +1,4 @@
-import type { BridgeEdge, NodeRef, TraceResult, Transfer } from "../api/types";
+import type { BridgeEdge, NodeRef, TraceResult } from "../api/types";
 import { displayDecimals } from "../lib/format";
 
 export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
@@ -11,17 +11,12 @@ export interface GraphNodeModel {
 export interface GraphEdgeModel {
   id: string; source: string; target: string; chain: string; asset: string; assetSymbol: string;
   sourceType: string; kind: string; count: number; totalAmount: string; decimals?: number;
-  facts: Transfer[]; bridge?: BridgeEdge;
+  conversionStatus?: "complete" | "partial"; conversionScanned?: number; bridge?: BridgeEdge;
 }
 
 export interface GraphModel { nodes: GraphNodeModel[]; edges: GraphEdgeModel[] }
 
 const nodeID = (chain: string, address: string) => `${chain}:${address.toLowerCase()}`;
-
-function addIntegerStrings(left: string, right: string): string {
-  try { return (BigInt(left || "0") + BigInt(right || "0")).toString(); }
-  catch { return left || right || "0"; }
-}
 
 function signedHops(result: TraceResult, seed: NodeRef): Map<string, number> {
   const seedID = nodeID(seed.chain, seed.address);
@@ -32,14 +27,13 @@ function signedHops(result: TraceResult, seed: NodeRef): Map<string, number> {
     const [chain, address] = current.split(":");
     const currentHop = hops.get(current)!;
     for (const edge of result.edges) {
-      const transfer = edge.transfer;
-      if (transfer.chain !== chain) continue;
+      if (edge.chain !== chain) continue;
       let next: string | undefined;
       let hop = currentHop;
-      if (transfer.to.toLowerCase() === address && currentHop <= 0) {
-        next = nodeID(chain, transfer.from); hop = currentHop - 1;
-      } else if (transfer.from.toLowerCase() === address && currentHop >= 0) {
-        next = nodeID(chain, transfer.to); hop = currentHop + 1;
+      if (edge.to.toLowerCase() === address && currentHop <= 0) {
+        next = nodeID(chain, edge.from); hop = currentHop - 1;
+      } else if (edge.from.toLowerCase() === address && currentHop >= 0) {
+        next = nodeID(chain, edge.to); hop = currentHop + 1;
       }
       if (next && !hops.has(next)) { hops.set(next, hop); queue.push(next); }
     }
@@ -54,7 +48,7 @@ function signedHops(result: TraceResult, seed: NodeRef): Map<string, number> {
   return hops;
 }
 
-export function buildGraphModel(result: TraceResult, seed: NodeRef, aggregate: boolean): GraphModel {
+export function buildGraphModel(result: TraceResult, seed: NodeRef): GraphModel {
   const hops = signedHops(result, seed);
   const labelMap = new Map<string, Array<{ type: string; confidence: number }>>();
   for (const label of result.labels ?? []) {
@@ -76,26 +70,14 @@ export function buildGraphModel(result: TraceResult, seed: NodeRef, aggregate: b
   });
   const grouped = new Map<string, GraphEdgeModel>();
   result.edges.forEach((edge, index) => {
-    const fact = edge.transfer;
-    const key = aggregate
-      ? [fact.chain, fact.from.toLowerCase(), fact.to.toLowerCase(), fact.asset.toLowerCase(), fact.source].join("|")
-      : `${fact.txHash}|${fact.source}|${fact.traceId}|${fact.logIndex}|${index}`;
-    const existing = grouped.get(key);
-    if (existing) {
-      existing.count += 1;
-      existing.totalAmount = addIntegerStrings(existing.totalAmount, fact.amount ?? fact.tokenValue ?? "0");
-      existing.facts.push(fact);
-      const decimals = displayDecimals(fact.assetType, fact.asset, fact.decimals, fact.tokenMetadataComplete);
-      if (existing.decimals === undefined && decimals !== undefined) existing.decimals = decimals;
-      if (existing.assetSymbol === existing.asset && fact.symbol) existing.assetSymbol = fact.symbol;
-    } else {
-      grouped.set(key, {
-        id: key, source: nodeID(fact.chain, fact.from), target: nodeID(fact.chain, fact.to), chain: fact.chain,
-        asset: fact.asset, assetSymbol: fact.symbol || fact.asset, sourceType: fact.source, kind: fact.transferKind ?? "transfer",
-        count: 1, totalAmount: fact.amount ?? fact.tokenValue ?? "0", decimals: displayDecimals(fact.assetType, fact.asset, fact.decimals, fact.tokenMetadataComplete),
-        facts: [fact],
-      });
-    }
+    const key = [edge.chain, edge.from.toLowerCase(), edge.to.toLowerCase(), edge.asset.toLowerCase(), edge.kind, index].join("|");
+    grouped.set(key, {
+      id: key, source: nodeID(edge.chain, edge.from), target: nodeID(edge.chain, edge.to), chain: edge.chain,
+      asset: edge.asset, assetSymbol: edge.symbol || edge.asset, sourceType: "aggregate", kind: edge.kind,
+      count: edge.transferCount, totalAmount: edge.totalAmount,
+      decimals: displayDecimals(edge.assetType, edge.asset, edge.decimals, edge.tokenMetadataComplete),
+      conversionStatus: edge.conversionStatus, conversionScanned: edge.conversionScanned,
+    });
   });
   for (const bridge of result.bridgeEdges ?? []) {
     const link = bridge.link;
@@ -103,7 +85,7 @@ export function buildGraphModel(result: TraceResult, seed: NodeRef, aggregate: b
     grouped.set(key, {
       id: key, source: nodeID(link.sourceChain, link.sourceAddress), target: nodeID(link.targetChain, link.targetAddress), chain: `${link.sourceChain}->${link.targetChain}`,
       asset: link.sourceAsset, assetSymbol: link.sourceAsset, sourceType: "bridge", kind: "bridge", count: 1,
-      totalAmount: link.sourceAmount, decimals: displayDecimals(undefined, link.sourceAsset, undefined, undefined), facts: [], bridge,
+      totalAmount: link.sourceAmount, decimals: displayDecimals(undefined, link.sourceAsset, undefined, undefined), bridge,
     });
   }
   return { nodes, edges: [...grouped.values()] };

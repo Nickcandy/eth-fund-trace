@@ -191,6 +191,31 @@ type TransferQuery struct {
 	After     *TransferCursor
 }
 
+type CounterpartyQuery struct {
+	Chain        string
+	Address      string
+	Counterparty string
+	Direction    string
+	AssetMode    string
+	Asset        string
+	TopN         int
+}
+
+type CounterpartySummary struct {
+	Chain                 string
+	ChainID               int64
+	From                  string
+	To                    string
+	AssetType             string
+	Asset                 string
+	Symbol                string
+	Decimals              int32
+	TokenMetadataComplete bool
+	TotalAmount           string
+	TransferCount         int64
+	Representative        Transfer
+}
+
 // TransactionAnalysis is a cached interpretation of a confirmed receipt.
 type TransactionAnalysis struct {
 	Chain              string            `bson:"chain" json:"chain"`

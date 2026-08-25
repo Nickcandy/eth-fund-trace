@@ -29,7 +29,11 @@ export interface Transfer {
   logIndex: number;
 }
 
-export interface TraceEdge { transfer: Transfer; depth: number; path: string[] }
+export interface TraceEdge {
+  chain: Chain; from: string; to: string; assetType: string; asset: string; symbol?: string; decimals?: number;
+  tokenMetadataComplete?: boolean; totalAmount: string; transferCount: number; kind: string; depth: number; path: string[];
+  conversionStatus?: "complete" | "partial"; conversionScanned?: number;
+}
 export interface TraceNode { chain: Chain; address: string; depth: number; terminal: boolean }
 export interface NodeRef { chain: Chain; address: string }
 

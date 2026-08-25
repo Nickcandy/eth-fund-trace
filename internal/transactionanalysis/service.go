@@ -68,6 +68,12 @@ func New(source Source, repo Repository, now func() time.Time) *Service {
 	return &Service{source: source, repo: repo, now: now}
 }
 
+// SupportsContract reports whether this analyzer has protocol rules for an entry contract.
+func (s *Service) SupportsContract(address string) bool {
+	_, ok := officialContracts[strings.ToLower(address)]
+	return ok
+}
+
 // Analyze returns cached analysis or derives it from Etherscan Proxy facts.
 func (s *Service) Analyze(ctx context.Context, chain, txHash string) (store.TransactionAnalysis, error) {
 	chain = strings.ToLower(strings.TrimSpace(chain))

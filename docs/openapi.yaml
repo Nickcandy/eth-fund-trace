@@ -129,11 +129,23 @@ components:
         terminal: {type: boolean}
     TraceEdge:
       type: object
-      required: [transfer, depth, path]
+      required: [chain, from, to, assetType, asset, totalAmount, transferCount, kind, depth, path]
       properties:
-        transfer: {$ref: '#/components/schemas/Transfer'}
+        chain: {type: string, enum: [ethereum, base]}
+        from: {type: string}
+        to: {type: string}
+        assetType: {type: string}
+        asset: {type: string}
+        symbol: {type: string}
+        decimals: {type: integer}
+        tokenMetadataComplete: {type: boolean}
+        totalAmount: {type: string, description: Cumulative amount in the asset's smallest unit}
+        transferCount: {type: integer, format: int64}
+        kind: {type: string}
         depth: {type: integer}
         path: {type: array, items: {type: string}}
+        conversionStatus: {type: string, enum: [complete, partial]}
+        conversionScanned: {type: integer, maximum: 20}
     BridgeEdge:
       type: object
       required: [link, depth, path]
@@ -204,7 +216,7 @@ components:
         dataStatus: {type: string}
         labels: {type: array, items: {$ref: '#/components/schemas/InferredLabel'}}
         risk: {$ref: '#/components/schemas/Risk'}
-        ruleVersion: {type: string, example: trace-v2}
+        ruleVersion: {type: string, example: trace-v5}
     TraceJob:
       type: object
       required: [id, chain, seedAddress, direction, depth, topN, asset, status, currentDepth, visitedNodes, edgeCount]
@@ -415,7 +427,7 @@ paths:
         - {name: direction, in: query, schema: {type: string, enum: [in, out, both], default: both}}
         - {name: depth, in: query, schema: {type: integer, minimum: 1, maximum: 5, default: 3}}
         - {name: topN, in: query, schema: {type: integer, minimum: 1, maximum: 20, default: 10}}
-        - {name: asset, in: query, schema: {type: string, default: all}}
+        - {name: asset, in: query, schema: {type: string, default: ETH, description: Trace roots include native ETH and chain-specific official ERC-20 allowlist assets}}
       responses:
         '202':
           description: Trace job accepted

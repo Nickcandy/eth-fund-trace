@@ -17,7 +17,7 @@ import (
 type JobRepository interface {
 	CreateTraceJob(context.Context, *store.TraceJob) error
 	GetTraceJob(context.Context, primitive.ObjectID) (store.TraceJob, error)
-	FindLatestTraceJob(context.Context, string, string, string, int, int, string) (store.TraceJob, error)
+	FindLatestTraceJob(context.Context, string, string, string, int, int, string, string) (store.TraceJob, error)
 	SaveTraceJob(context.Context, store.TraceJob) error
 	FailInterruptedTraceJobs(context.Context, time.Time) error
 }
@@ -62,7 +62,7 @@ func (m *Manager) Enqueue(ctx context.Context, request Request) (store.TraceJob,
 		m.mu.Unlock()
 		return m.jobs.GetTraceJob(ctx, id)
 	}
-	job := store.TraceJob{Chain: request.Query.Chain, SeedAddress: request.Query.Address, Direction: request.Query.Direction, Depth: request.Query.Depth, TopN: request.Query.TopN, Asset: request.Query.Asset, Status: "queued", CreatedAt: m.clock().UTC(), RuleVersion: "trace-v1"}
+	job := store.TraceJob{Chain: request.Query.Chain, SeedAddress: request.Query.Address, Direction: request.Query.Direction, Depth: request.Query.Depth, TopN: request.Query.TopN, Asset: request.Query.Asset, Status: "queued", CreatedAt: m.clock().UTC(), RuleVersion: traceRuleVersion}
 	if err := m.jobs.CreateTraceJob(ctx, &job); err != nil {
 		m.mu.Unlock()
 		return store.TraceJob{}, err
@@ -119,7 +119,7 @@ func (m *Manager) LatestJob(ctx context.Context, query Query) (store.TraceJob, e
 	if err != nil {
 		return store.TraceJob{}, ErrInvalidQuery
 	}
-	return m.jobs.FindLatestTraceJob(ctx, normalized.Chain, address, normalized.Direction, normalized.Depth, normalized.TopN, normalized.Asset)
+	return m.jobs.FindLatestTraceJob(ctx, normalized.Chain, address, normalized.Direction, normalized.Depth, normalized.TopN, normalized.Asset, traceRuleVersion)
 }
 func (m *Manager) Run(ctx context.Context) error {
 	if err := m.jobs.FailInterruptedTraceJobs(ctx, m.clock().UTC()); err != nil {

@@ -1,17 +1,10 @@
 import { useState, type FormEvent } from "react";
-import type { BridgeInput, Chain, LabelInput } from "../api/types";
+import type { BridgeInput, Chain } from "../api/types";
 
-interface LabelFormProps { chain: Chain; address: string; onSubmit: (input: LabelInput) => Promise<void> }
 interface BridgeFormProps { chain: Chain; address: string; onSubmit: (input: BridgeInput) => Promise<void> }
 
-export function WriteForms({ chain, address, onLabel, onBridge }: { chain: Chain; address: string; onLabel: LabelFormProps["onSubmit"]; onBridge: BridgeFormProps["onSubmit"] }) {
-  return <div className="write-grid"><LabelForm chain={chain} address={address} onSubmit={onLabel}/><BridgeForm chain={chain} address={address} onSubmit={onBridge}/></div>;
-}
-
-function LabelForm({ chain, address, onSubmit }: LabelFormProps) {
-  const [message,setMessage]=useState("");
-  const submit=async(event:FormEvent<HTMLFormElement>)=>{event.preventDefault();const data=new FormData(event.currentTarget);try{await onSubmit({chain,address,type:String(data.get("type")),source:String(data.get("source")) as LabelInput["source"],riskLevel:String(data.get("risk")) as LabelInput["riskLevel"],confidence:Number(data.get("confidence")),note:String(data.get("note")),evidence:lines(data.get("evidence"))});setMessage("标签已保存")}catch(error){setMessage(errorMessage(error))}};
-  return <form onSubmit={submit}><h3>添加确定性标签</h3><input name="type" required placeholder="标签类型，如 exchange"/><select name="source"><option value="manual">人工</option><option value="public-list">公开名单</option></select><select name="risk"><option value="">无风险级别</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option></select><input name="confidence" type="number" min="0" max="1" step="0.01" defaultValue="1"/><textarea name="evidence" placeholder="证据，每行一条"/><input name="note" placeholder="备注"/><button>保存标签</button>{message&&<p className="form-message">{message}</p>}</form>;
+export function WriteForms({ chain, address, onBridge }: { chain: Chain; address: string; onBridge: BridgeFormProps["onSubmit"] }) {
+  return <div className="write-grid"><BridgeForm chain={chain} address={address} onSubmit={onBridge}/></div>;
 }
 
 function BridgeForm({ chain, address, onSubmit }: BridgeFormProps) {

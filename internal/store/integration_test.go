@@ -264,6 +264,19 @@ func TestM5TransferQueryFiltersAndPaginates(t *testing.T) {
 	if err != nil || len(multiAddress) != 1 {
 		t.Fatalf("multi-address ERC-20=%+v err=%v", multiAddress, err)
 	}
+	neighborB := "0x0000000000000000000000000000000000000003"
+	neighborC := "0x0000000000000000000000000000000000000004"
+	if _, err := s.BulkUpsertTransfers(ctx, []Transfer{
+		{Chain: "ethereum", TxHash: "0x01", BlockNumber: 1, Source: "txlist", Asset: "ETH", AssetType: "eth", From: seed, To: neighbor, Amount: "100"},
+		{Chain: "ethereum", TxHash: "0x02", BlockNumber: 1, Source: "txlist", Asset: "ETH", AssetType: "eth", From: seed, To: neighborB, Amount: "60"},
+		{Chain: "ethereum", TxHash: "0x03", BlockNumber: 1, Source: "txlist", Asset: "ETH", AssetType: "eth", From: seed, To: neighborC, Amount: "50"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	topETH, err := s.TopCounterparties(ctx, CounterpartyQuery{Chain: "ethereum", Address: seed, Direction: "out", AssetMode: "eth", Asset: "ETH", TopN: 2})
+	if err != nil || len(topETH) != 2 || topETH[0].To != neighbor || topETH[0].TotalAmount != "103" || topETH[0].TransferCount != 2 || topETH[1].To != neighborB {
+		t.Fatalf("amount-ranked counterparties=%+v err=%v", topETH, err)
+	}
 }
 
 func TestM6M7TraceJobsAndLabels(t *testing.T) {

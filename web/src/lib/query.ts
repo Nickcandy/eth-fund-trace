@@ -9,8 +9,7 @@ export function validateTraceQuery(query: TraceQuery): string | undefined {
   if (!(["in", "out", "both"] as string[]).includes(query.direction)) return "不支持的追踪方向";
   if (!Number.isInteger(query.depth) || query.depth < 1 || query.depth > 5) return "深度必须在 1 到 5 之间";
   if (!Number.isInteger(query.topN) || query.topN < 1 || query.topN > 20) return "Top-N 必须在 1 到 20 之间";
-  if (!query.asset.trim()) return "请选择资产";
-  if (!["all", "ETH", "erc20"].includes(query.asset) && !ADDRESS.test(query.asset)) return "指定 Token 必须是有效合约地址";
+  if (query.asset !== "ETH") return "追踪必须从 ETH 开始";
 }
 
 export function readTraceQuery(search: string): TraceQuery {
@@ -26,7 +25,7 @@ export function readTraceQuery(search: string): TraceQuery {
     direction,
     depth: Number.isInteger(depth) && depth >= 1 && depth <= 5 ? depth : 3,
     topN: Number.isInteger(topN) && topN >= 1 && topN <= 20 ? topN : 10,
-    asset: params.get("asset") || "all",
+    asset: "ETH",
   };
 }
 

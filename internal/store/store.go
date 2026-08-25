@@ -1,8 +1,13 @@
 package store
 
 import (
+	"container/heap"
 	"context"
 	"errors"
+	"fmt"
+	"math/big"
+	"sort"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -60,6 +65,10 @@ func indexModels() map[string][]mongo.IndexModel {
 			{Keys: edgeIndex("to", "assetType"), Options: options.Index().SetName("idx_transfers_to_type_cursor")},
 			{Keys: edgeIndex("from", "asset"), Options: options.Index().SetName("idx_transfers_from_asset_cursor")},
 			{Keys: edgeIndex("to", "asset"), Options: options.Index().SetName("idx_transfers_to_asset_cursor")},
+			{Keys: bson.D{{Key: "chain", Value: 1}, {Key: "to", Value: 1}, {Key: "assetType", Value: 1}, {Key: "from", Value: 1}}, Options: options.Index().SetName("idx_transfers_to_type_from")},
+			{Keys: bson.D{{Key: "chain", Value: 1}, {Key: "from", Value: 1}, {Key: "assetType", Value: 1}, {Key: "to", Value: 1}}, Options: options.Index().SetName("idx_transfers_from_type_to")},
+			{Keys: bson.D{{Key: "chain", Value: 1}, {Key: "to", Value: 1}, {Key: "asset", Value: 1}, {Key: "from", Value: 1}}, Options: options.Index().SetName("idx_transfers_to_asset_from")},
+			{Keys: bson.D{{Key: "chain", Value: 1}, {Key: "from", Value: 1}, {Key: "asset", Value: 1}, {Key: "to", Value: 1}}, Options: options.Index().SetName("idx_transfers_from_asset_to")},
 		},
 		LabelsCollection: {
 			{Keys: bson.D{{Key: "chain", Value: 1}, {Key: "address", Value: 1}, {Key: "type", Value: 1}, {Key: "source", Value: 1}}, Options: options.Index().SetUnique(true).SetName("uq_labels_identity")},
@@ -358,7 +367,7 @@ func (s *Store) GetTraceJob(ctx context.Context, id primitive.ObjectID) (TraceJo
 	return job, err
 }
 
-func (s *Store) FindLatestTraceJob(ctx context.Context, chain, seedAddress, direction string, depth, topN int, asset string) (TraceJob, error) {
+func (s *Store) FindLatestTraceJob(ctx context.Context, chain, seedAddress, direction string, depth, topN int, asset, ruleVersion string) (TraceJob, error) {
 	var job TraceJob
 	filter := bson.D{
 		{Key: "chain", Value: chain},
@@ -367,6 +376,7 @@ func (s *Store) FindLatestTraceJob(ctx context.Context, chain, seedAddress, dire
 		{Key: "depth", Value: depth},
 		{Key: "topN", Value: topN},
 		{Key: "asset", Value: asset},
+		{Key: "ruleVersion", Value: ruleVersion},
 	}
 	err := s.db.Collection(TraceJobsCollection).FindOne(ctx, filter, options.FindOne().SetSort(bson.D{{Key: "createdAt", Value: -1}})).Decode(&job)
 	job.Result = normalizeBSON(job.Result)
@@ -532,6 +542,224 @@ func nonEmptyCount(values []any) int {
 		}
 	}
 	return count
+}
+
+func (s *Store) TopCounterparties(ctx context.Context, query CounterpartyQuery) ([]CounterpartySummary, error) {
+	if query.TopN < 1 || query.Address == "" || (query.Direction != "in" && query.Direction != "out") || !validCounterpartyAssetMode(query.AssetMode) {
+		return nil, errors.New("invalid counterparty query")
+	}
+	filter, counterparty := counterpartyFilter(query)
+	projection := bson.D{{Key: "chain", Value: 1}, {Key: "chainId", Value: 1}, {Key: "txHash", Value: 1}, {Key: "blockNumber", Value: 1}, {Key: "from", Value: 1}, {Key: "to", Value: 1}, {Key: "assetType", Value: 1}, {Key: "asset", Value: 1}, {Key: "symbol", Value: 1}, {Key: "decimals", Value: 1}, {Key: "tokenMetadataComplete", Value: 1}, {Key: "amount", Value: 1}, {Key: "tokenValue", Value: 1}, {Key: "transferKind", Value: 1}, {Key: "source", Value: 1}, {Key: "traceId", Value: 1}, {Key: "logIndex", Value: 1}}
+	cursor, err := s.db.Collection(TransfersCollection).Find(ctx, filter, options.Find().SetSort(bson.D{{Key: counterparty, Value: 1}}).SetProjection(projection).SetHint(counterpartyIndexName(query)).SetBatchSize(1000))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = cursor.Close(ctx) }()
+	selected := &counterpartyHeap{}
+	heap.Init(selected)
+	var current CounterpartySummary
+	hasCurrent := false
+	currentTotal := new(big.Int)
+	flush := func() {
+		if !hasCurrent {
+			return
+		}
+		current.TotalAmount = currentTotal.String()
+		if selected.Len() < query.TopN {
+			heap.Push(selected, current)
+			return
+		}
+		if summaryBetter(current, (*selected)[0]) {
+			(*selected)[0] = current
+			heap.Fix(selected, 0)
+		}
+	}
+	for cursor.Next(ctx) {
+		var transfer Transfer
+		if err := cursor.Decode(&transfer); err != nil {
+			return nil, err
+		}
+		other := transfer.To
+		if query.Direction == "in" {
+			other = transfer.From
+		}
+		amount, ok := new(big.Int).SetString(transferAmountString(transfer), 10)
+		if !ok || amount.Sign() < 0 {
+			return nil, fmt.Errorf("invalid transfer amount for %s", transfer.TxHash)
+		}
+		if !hasCurrent || !strings.EqualFold(summaryCounterparty(current, query.Direction), other) {
+			flush()
+			current = CounterpartySummary{Chain: transfer.Chain, ChainID: transfer.ChainID, From: transfer.From, To: transfer.To, AssetType: transfer.AssetType, Asset: transfer.Asset, Symbol: transfer.Symbol, Decimals: transfer.Decimals, TokenMetadataComplete: transfer.TokenMetadataComplete, TotalAmount: "0", Representative: transfer}
+			hasCurrent = true
+			currentTotal.SetInt64(0)
+		}
+		currentTotal.Add(currentTotal, amount)
+		current.TransferCount++
+		if transferBetter(transfer, current.Representative) {
+			current.Representative = transfer
+		}
+		if transfer.TokenMetadataComplete {
+			current.Symbol, current.Decimals, current.TokenMetadataComplete = transfer.Symbol, transfer.Decimals, true
+		}
+	}
+	if err := cursor.Err(); err != nil {
+		return nil, err
+	}
+	flush()
+	result := make([]CounterpartySummary, selected.Len())
+	copy(result, *selected)
+	sort.Slice(result, func(i, j int) bool { return summaryBetter(result[i], result[j]) })
+	return result, nil
+}
+
+func (s *Store) TopRelationshipTransfers(ctx context.Context, query CounterpartyQuery, limit int) ([]Transfer, error) {
+	if limit < 1 || query.Counterparty == "" || !validCounterpartyAssetMode(query.AssetMode) {
+		return nil, errors.New("invalid relationship query")
+	}
+	filter, _ := counterpartyFilter(query)
+	projection := bson.D{{Key: "chain", Value: 1}, {Key: "chainId", Value: 1}, {Key: "txHash", Value: 1}, {Key: "from", Value: 1}, {Key: "to", Value: 1}, {Key: "assetType", Value: 1}, {Key: "asset", Value: 1}, {Key: "amount", Value: 1}, {Key: "tokenValue", Value: 1}, {Key: "source", Value: 1}, {Key: "traceId", Value: 1}, {Key: "logIndex", Value: 1}}
+	cursor, err := s.db.Collection(TransfersCollection).Find(ctx, filter, options.Find().SetProjection(projection).SetHint(counterpartyIndexName(query)).SetBatchSize(1000))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = cursor.Close(ctx) }()
+	selected := &transferHeap{}
+	heap.Init(selected)
+	for cursor.Next(ctx) {
+		var transfer Transfer
+		if err := cursor.Decode(&transfer); err != nil {
+			return nil, err
+		}
+		amount, ok := new(big.Int).SetString(transferAmountString(transfer), 10)
+		if !ok || amount.Sign() < 0 {
+			return nil, fmt.Errorf("invalid transfer amount for %s", transfer.TxHash)
+		}
+		if selected.Len() < limit {
+			heap.Push(selected, transfer)
+		} else if transferBetter(transfer, (*selected)[0]) {
+			(*selected)[0] = transfer
+			heap.Fix(selected, 0)
+		}
+	}
+	if err := cursor.Err(); err != nil {
+		return nil, err
+	}
+	result := make([]Transfer, selected.Len())
+	copy(result, *selected)
+	sort.Slice(result, func(i, j int) bool { return transferBetter(result[i], result[j]) })
+	return result, nil
+}
+
+func validCounterpartyAssetMode(mode string) bool {
+	return mode == "eth" || mode == "erc20" || mode == "contract"
+}
+
+func counterpartyIndexName(query CounterpartyQuery) string {
+	prefix := "idx_transfers_from_"
+	other := "to"
+	if query.Direction == "in" {
+		prefix = "idx_transfers_to_"
+		other = "from"
+	}
+	field := "type_"
+	if query.AssetMode == "contract" {
+		field = "asset_"
+	}
+	return prefix + field + other
+}
+
+func counterpartyFilter(query CounterpartyQuery) (bson.D, string) {
+	parent, other := "from", "to"
+	if query.Direction == "in" {
+		parent, other = "to", "from"
+	}
+	filter := bson.D{{Key: "chain", Value: query.Chain}, {Key: parent, Value: query.Address}}
+	if query.Counterparty != "" {
+		filter = append(filter, bson.E{Key: other, Value: query.Counterparty})
+	}
+	switch query.AssetMode {
+	case "eth":
+		filter = append(filter, bson.E{Key: "assetType", Value: "eth"})
+	case "erc20":
+		filter = append(filter, bson.E{Key: "assetType", Value: "erc20"})
+	case "contract":
+		filter = append(filter, bson.E{Key: "asset", Value: query.Asset})
+	}
+	amountField := "tokenValue"
+	if query.AssetMode == "eth" {
+		amountField = "amount"
+	}
+	filter = append(filter, bson.E{Key: amountField, Value: bson.D{{Key: "$exists", Value: true}, {Key: "$nin", Value: bson.A{"", "0"}}}})
+	return filter, other
+}
+
+type counterpartyHeap []CounterpartySummary
+
+func (h counterpartyHeap) Len() int           { return len(h) }
+func (h counterpartyHeap) Less(i, j int) bool { return summaryBetter(h[j], h[i]) }
+func (h counterpartyHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *counterpartyHeap) Push(value any)    { *h = append(*h, value.(CounterpartySummary)) }
+func (h *counterpartyHeap) Pop() any {
+	old := *h
+	value := old[len(old)-1]
+	*h = old[:len(old)-1]
+	return value
+}
+
+type transferHeap []Transfer
+
+func (h transferHeap) Len() int           { return len(h) }
+func (h transferHeap) Less(i, j int) bool { return transferBetter(h[j], h[i]) }
+func (h transferHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *transferHeap) Push(value any)    { *h = append(*h, value.(Transfer)) }
+func (h *transferHeap) Pop() any {
+	old := *h
+	value := old[len(old)-1]
+	*h = old[:len(old)-1]
+	return value
+}
+
+func summaryBetter(left, right CounterpartySummary) bool {
+	if comparison := compareUnsignedDecimal(left.TotalAmount, right.TotalAmount); comparison != 0 {
+		return comparison > 0
+	}
+	return strings.ToLower(left.From+left.To) < strings.ToLower(right.From+right.To)
+}
+func summaryCounterparty(summary CounterpartySummary, direction string) string {
+	if direction == "in" {
+		return summary.From
+	}
+	return summary.To
+}
+func transferAmountString(transfer Transfer) string {
+	if transfer.AssetType == "eth" || strings.EqualFold(transfer.Asset, "ETH") {
+		return transfer.Amount
+	}
+	return transfer.TokenValue
+}
+func transferBetter(left, right Transfer) bool {
+	if comparison := compareUnsignedDecimal(transferAmountString(left), transferAmountString(right)); comparison != 0 {
+		return comparison > 0
+	}
+	return strings.Join([]string{left.TxHash, left.Source, left.TraceID, fmt.Sprint(left.LogIndex)}, "|") < strings.Join([]string{right.TxHash, right.Source, right.TraceID, fmt.Sprint(right.LogIndex)}, "|")
+}
+
+func compareUnsignedDecimal(left, right string) int {
+	left = strings.TrimLeft(left, "0")
+	right = strings.TrimLeft(right, "0")
+	if left == "" {
+		left = "0"
+	}
+	if right == "" {
+		right = "0"
+	}
+	if len(left) < len(right) {
+		return -1
+	}
+	if len(left) > len(right) {
+		return 1
+	}
+	return strings.Compare(left, right)
 }
 
 func (s *Store) QueryTransfers(ctx context.Context, query TransferQuery) ([]Transfer, error) {

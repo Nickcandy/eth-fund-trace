@@ -1,13 +1,34 @@
 package store
 
 import (
+	"container/heap"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 )
+
+func BenchmarkCounterpartyTopNMillionGroups(b *testing.B) {
+	for range b.N {
+		selected := &counterpartyHeap{}
+		heap.Init(selected)
+		for i := 0; i < 1_000_000; i++ {
+			candidate := CounterpartySummary{To: "0x0000000000000000000000000000000000000001", TotalAmount: strconv.Itoa(i)}
+			if selected.Len() < 20 {
+				heap.Push(selected, candidate)
+			} else if summaryBetter(candidate, (*selected)[0]) {
+				(*selected)[0] = candidate
+				heap.Fix(selected, 0)
+			}
+		}
+		if selected.Len() != 20 {
+			b.Fatalf("retained %d summaries, want 20", selected.Len())
+		}
+	}
+}
 
 func TestTransferJSONPreservesKnownZeroTokenDecimals(t *testing.T) {
 	encoded, err := json.Marshal(Transfer{AssetType: "erc20", Decimals: 0, TokenMetadataComplete: true})
@@ -96,8 +117,8 @@ func TestCollectionNames(t *testing.T) {
 
 func TestIndexModels(t *testing.T) {
 	indexes := indexModels()
-	if len(indexes[TransfersCollection]) != 7 {
-		t.Fatalf("transfer index count = %d, want 7", len(indexes[TransfersCollection]))
+	if len(indexes[TransfersCollection]) != 11 {
+		t.Fatalf("transfer index count = %d, want 11", len(indexes[TransfersCollection]))
 	}
 	if unique := indexes[TransfersCollection][0].Options.Unique; unique == nil || !*unique {
 		t.Fatal("transfer identity index must be unique")

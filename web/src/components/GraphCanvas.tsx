@@ -2,7 +2,7 @@ import {
   Background, BackgroundVariant, BaseEdge, Controls, EdgeLabelRenderer, MarkerType, Panel, ReactFlow, ReactFlowProvider,
   getBezierPath, useReactFlow, type Edge, type EdgeProps,
 } from "@xyflow/react";
-import { Download, Eye, EyeOff, FileJson, GitBranch, Layers, Maximize2, RotateCcw } from "lucide-react";
+import { Download, Eye, EyeOff, FileJson, GitBranch, Maximize2, RotateCcw } from "lucide-react";
 import { toPng } from "html-to-image";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatAssetAmount, GRAPH_AMOUNT_FRACTION_DIGITS, shortAddress } from "../lib/format";
@@ -11,7 +11,7 @@ import type { GraphEdgeModel, GraphModel } from "../graph/model";
 import { FundNode, type FundFlowNode } from "./FundNode";
 
 interface Props {
-  model: GraphModel; aggregate: boolean; onAggregateChange: (value: boolean) => void;
+  model: GraphModel;
   onSelectNode: (id: string) => void; onSelectEdge: (edge: GraphEdgeModel) => void;
   onFocusAddress: (chain: string, address: string) => void; onRelayout: () => void;
 }
@@ -30,7 +30,7 @@ function download(name: string, href: string) {
   const anchor = document.createElement("a"); anchor.download = name; anchor.href = href; anchor.click();
 }
 
-function Canvas({ model, aggregate, onAggregateChange, onSelectNode, onSelectEdge, onFocusAddress, onRelayout }: Props) {
+function Canvas({ model, onSelectNode, onSelectEdge, onFocusAddress, onRelayout }: Props) {
   const [positions, setPositions] = useState(new Map<string, { x: number; y: number }>());
   const [visibleDepth, setVisibleDepth] = useState(5);
   const [showLowConfidence, setShowLowConfidence] = useState(true);
@@ -75,7 +75,6 @@ function Canvas({ model, aggregate, onAggregateChange, onSelectNode, onSelectEdg
         <Panel position="top-left" className="graph-toolbar">
           <button title="适应视图" onClick={() => flow.fitView({ padding: .18, duration: 300 })}><Maximize2 size={16} /></button>
           <button title="重新布局" onClick={onRelayout}><RotateCcw size={16} /></button>
-          <button className={aggregate ? "active" : ""} title="聚合事实边" onClick={() => onAggregateChange(!aggregate)}><Layers size={16} /><span>{aggregate ? "聚合" : "事实"}</span></button>
           <label title="显示的最大跳数"><GitBranch size={16} /><select aria-label="显示层级" value={visibleDepth} onChange={(event) => setVisibleDepth(Number(event.target.value))}>{[1,2,3,4,5].map((n) => <option key={n} value={n}>{n} 跳</option>)}</select></label>
           <button className={showLowConfidence ? "active" : ""} title="显示低置信度推断" onClick={() => setShowLowConfidence(!showLowConfidence)}>{showLowConfidence ? <Eye size={16}/> : <EyeOff size={16}/>}<span>低置信度</span></button>
           <button title="导出 PNG" onClick={exportPNG}><Download size={16} /></button>

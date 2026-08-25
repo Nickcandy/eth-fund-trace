@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QueryBar } from "./QueryBar";
 
-const query = { chain: "ethereum" as const, address: "", direction: "both" as const, depth: 3, topN: 10, asset: "all" };
+const query = { chain: "ethereum" as const, address: "", direction: "both" as const, depth: 3, topN: 10, asset: "ETH" };
 afterEach(cleanup);
 
 describe("QueryBar", () => {
@@ -14,10 +14,9 @@ describe("QueryBar", () => {
     expect(submit).toHaveBeenCalledOnce();
   });
 
-  it("reveals a contract field for a specific token", async () => {
-    const change = vi.fn();
-    render(<QueryBar value={{ ...query, asset: "" }} onChange={change} onSubmit={() => undefined} busy={false} />);
-    expect(screen.getByLabelText("Token 合约")).toBeVisible();
+  it("keeps the trace root asset fixed to ETH", () => {
+    render(<QueryBar value={query} onChange={() => undefined} onSubmit={() => undefined} busy={false} />);
+    expect(screen.queryByLabelText("资产")).not.toBeInTheDocument();
   });
 
   it("switches to transaction hash mode", async () => {
