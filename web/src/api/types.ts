@@ -32,6 +32,7 @@ export interface Transfer {
 export interface TraceEdge {
   chain: Chain; from: string; to: string; assetType: string; asset: string; symbol?: string; decimals?: number;
   tokenMetadataComplete?: boolean; totalAmount: string; transferCount: number; kind: string; depth: number; path: string[];
+  firstBlock?: number; firstTime?: string; latestBlock?: number; latestTime?: string;
   conversionStatus?: "complete" | "partial"; conversionScanned?: number;
 }
 export interface TraceNode { chain: Chain; address: string; depth: number; terminal: boolean }
@@ -153,13 +154,13 @@ export interface RiskAssociation {
 export interface PropagationResult {
   status: "complete" | "partial" | "unknown"; score: number; level: string; directRisk: { present: boolean; score: number; labels: Label[] };
   nodes: NodeRiskAssessment[]; associations: RiskAssociation[]; coverage: PropagationCoverage[]; missingAddresses: string[]; candidateCoverage: number;
-  ruleVersion: "risk-association-v2"; propagationVersion: "propagation-v3"; dataThroughBlock: number; visitedNodes: number; edgeCount: number;
+  ruleVersion: "risk-association-v2"; propagationVersion: "propagation-v4"; dataThroughBlock: number; visitedNodes: number; edgeCount: number;
   truncated: boolean; truncationReason?: string;
 }
 
 export interface PropagationJob {
   id: string; chain: Chain; targetAddress: string; asset: string; direction: Direction;
-  status: Exclude<JobStatus, "waiting_sync">; maxHops: number; maxNodes: number; maxEdges: number;
+  status: Exclude<JobStatus, "waiting_sync">; maxHops: number; maxNodes: number; maxEdges: number; maxAssetChannels: number;
   perNodeCandidateCap: number; maxPathsPerTarget: number; currentHop: number; visitedNodes: number; edgeCount: number;
   dataThroughBlock: number; ruleVersion: string; propagationVersion: string; truncated: boolean; truncationReason?: string;
   retryCount: number; createdAt: string; startedAt?: string; finishedAt?: string; result?: PropagationResult;

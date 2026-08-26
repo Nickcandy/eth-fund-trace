@@ -404,7 +404,7 @@ func (s *Store) GetPropagationJob(ctx context.Context, id primitive.ObjectID) (P
 
 // ClaimPropagationJob atomically leases the oldest runnable job.
 func (s *Store) ClaimPropagationJob(ctx context.Context, now, leaseUntil time.Time, maxRetries int) (PropagationJob, error) {
-	filter := bson.D{{Key: "propagationVersion", Value: "propagation-v3"}, {Key: "retryCount", Value: bson.D{{Key: "$lt", Value: maxRetries}}}, {Key: "$or", Value: bson.A{
+	filter := bson.D{{Key: "propagationVersion", Value: "propagation-v4"}, {Key: "retryCount", Value: bson.D{{Key: "$lt", Value: maxRetries}}}, {Key: "$or", Value: bson.A{
 		bson.D{{Key: "status", Value: "queued"}},
 		bson.D{{Key: "status", Value: "running"}, {Key: "leaseUntil", Value: bson.D{{Key: "$lte", Value: now}}}},
 		bson.D{{Key: "status", Value: "failed"}, {Key: "retryable", Value: true}},
@@ -674,7 +674,7 @@ func (s *Store) TopCounterparties(ctx context.Context, query CounterpartyQuery) 
 		return nil, errors.New("invalid counterparty query")
 	}
 	filter, counterparty := counterpartyFilter(query)
-	projection := bson.D{{Key: "chain", Value: 1}, {Key: "chainId", Value: 1}, {Key: "txHash", Value: 1}, {Key: "blockNumber", Value: 1}, {Key: "from", Value: 1}, {Key: "to", Value: 1}, {Key: "assetType", Value: 1}, {Key: "asset", Value: 1}, {Key: "symbol", Value: 1}, {Key: "decimals", Value: 1}, {Key: "tokenMetadataComplete", Value: 1}, {Key: "amount", Value: 1}, {Key: "tokenValue", Value: 1}, {Key: "transferKind", Value: 1}, {Key: "source", Value: 1}, {Key: "traceId", Value: 1}, {Key: "logIndex", Value: 1}}
+	projection := bson.D{{Key: "chain", Value: 1}, {Key: "chainId", Value: 1}, {Key: "txHash", Value: 1}, {Key: "blockNumber", Value: 1}, {Key: "blockTime", Value: 1}, {Key: "from", Value: 1}, {Key: "to", Value: 1}, {Key: "assetType", Value: 1}, {Key: "asset", Value: 1}, {Key: "symbol", Value: 1}, {Key: "decimals", Value: 1}, {Key: "tokenMetadataComplete", Value: 1}, {Key: "amount", Value: 1}, {Key: "tokenValue", Value: 1}, {Key: "transferKind", Value: 1}, {Key: "source", Value: 1}, {Key: "traceId", Value: 1}, {Key: "logIndex", Value: 1}}
 	cursor, err := s.db.Collection(TransfersCollection).Find(ctx, filter, options.Find().SetSort(bson.D{{Key: counterparty, Value: 1}}).SetProjection(projection).SetHint(counterpartyIndexName(query)).SetBatchSize(1000))
 	if err != nil {
 		return nil, err
@@ -714,12 +714,18 @@ func (s *Store) TopCounterparties(ctx context.Context, query CounterpartyQuery) 
 		}
 		if !hasCurrent || !strings.EqualFold(summaryCounterparty(current, query.Direction), other) {
 			flush()
-			current = CounterpartySummary{Chain: transfer.Chain, ChainID: transfer.ChainID, From: transfer.From, To: transfer.To, AssetType: transfer.AssetType, Asset: transfer.Asset, Symbol: transfer.Symbol, Decimals: transfer.Decimals, TokenMetadataComplete: transfer.TokenMetadataComplete, TotalAmount: "0", Representative: transfer}
+			current = CounterpartySummary{Chain: transfer.Chain, ChainID: transfer.ChainID, From: transfer.From, To: transfer.To, AssetType: transfer.AssetType, Asset: transfer.Asset, Symbol: transfer.Symbol, Decimals: transfer.Decimals, TokenMetadataComplete: transfer.TokenMetadataComplete, TotalAmount: "0", EarliestBlock: transfer.BlockNumber, EarliestTime: transfer.BlockTime, LatestBlock: transfer.BlockNumber, LatestTime: transfer.BlockTime, LatestTransfer: transfer, Representative: transfer}
 			hasCurrent = true
 			currentTotal.SetInt64(0)
 		}
 		currentTotal.Add(currentTotal, amount)
 		current.TransferCount++
+		if transfer.BlockNumber < current.EarliestBlock {
+			current.EarliestBlock, current.EarliestTime = transfer.BlockNumber, transfer.BlockTime
+		}
+		if transfer.BlockNumber > current.LatestBlock {
+			current.LatestBlock, current.LatestTime, current.LatestTransfer = transfer.BlockNumber, transfer.BlockTime, transfer
+		}
 		if transferBetter(transfer, current.Representative) {
 			current.Representative = transfer
 		}
@@ -813,12 +819,15 @@ func (s *Store) PropagationCandidates(ctx context.Context, query CandidateQuery)
 		}
 		if !hasCurrent || !strings.EqualFold(summaryCounterparty(current, query.Direction), other) {
 			flush()
-			current = CounterpartySummary{Chain: transfer.Chain, ChainID: transfer.ChainID, From: transfer.From, To: transfer.To, AssetType: transfer.AssetType, Asset: transfer.Asset, Symbol: transfer.Symbol, Decimals: transfer.Decimals, LatestTime: transfer.BlockTime, LatestTransfer: transfer, Representative: transfer}
+			current = CounterpartySummary{Chain: transfer.Chain, ChainID: transfer.ChainID, From: transfer.From, To: transfer.To, AssetType: transfer.AssetType, Asset: transfer.Asset, Symbol: transfer.Symbol, Decimals: transfer.Decimals, EarliestBlock: transfer.BlockNumber, EarliestTime: transfer.BlockTime, LatestBlock: transfer.BlockNumber, LatestTime: transfer.BlockTime, LatestTransfer: transfer, Representative: transfer}
 			currentTotal.SetInt64(0)
 			hasCurrent = true
 		}
 		currentTotal.Add(currentTotal, amount)
 		current.TransferCount++
+		if transfer.BlockNumber < current.EarliestBlock {
+			current.EarliestBlock, current.EarliestTime = transfer.BlockNumber, transfer.BlockTime
+		}
 		if transfer.BlockNumber > current.LatestBlock {
 			current.LatestBlock = transfer.BlockNumber
 			current.LatestTime, current.LatestTransfer = transfer.BlockTime, transfer
@@ -845,6 +854,74 @@ func (s *Store) PropagationCandidates(ctx context.Context, query CandidateQuery)
 		coverage.Truncated, coverage.TruncationReason = true, "per_node_candidate_cap"
 	}
 	return CandidateResult{Items: items, Coverage: coverage}, nil
+}
+
+// ListTransferAssets returns the distinct funded asset channels observed for
+// one address and direction, bounded to protect propagation fan-out.
+func (s *Store) ListTransferAssets(ctx context.Context, chain, address, direction string, toBlock int64, limit int) (AssetChannelResult, error) {
+	if chain == "" || address == "" || (direction != "in" && direction != "out") || limit < 1 {
+		return AssetChannelResult{}, errors.New("invalid transfer asset query")
+	}
+	parent := "from"
+	if direction == "in" {
+		parent = "to"
+	}
+	match := bson.D{{Key: "chain", Value: chain}, {Key: parent, Value: address}}
+	if toBlock > 0 {
+		match = append(match, bson.E{Key: "blockNumber", Value: bson.D{{Key: "$lte", Value: toBlock}}})
+	}
+	match = append(match, bson.E{Key: "$or", Value: bson.A{
+		bson.D{{Key: "assetType", Value: "eth"}, {Key: "amount", Value: bson.D{{Key: "$exists", Value: true}, {Key: "$nin", Value: bson.A{"", "0"}}}}},
+		bson.D{{Key: "assetType", Value: "erc20"}, {Key: "asset", Value: bson.D{{Key: "$nin", Value: bson.A{"", nil}}}}, {Key: "tokenValue", Value: bson.D{{Key: "$exists", Value: true}, {Key: "$nin", Value: bson.A{"", "0"}}}}},
+	}})
+	pipeline := mongo.Pipeline{
+		bson.D{{Key: "$match", Value: match}},
+		bson.D{{Key: "$group", Value: bson.D{
+			{Key: "_id", Value: bson.D{{Key: "assetType", Value: "$assetType"}, {Key: "asset", Value: "$asset"}}},
+			{Key: "transferCount", Value: bson.D{{Key: "$sum", Value: 1}}},
+			{Key: "latestBlock", Value: bson.D{{Key: "$max", Value: "$blockNumber"}}},
+		}}},
+		bson.D{{Key: "$set", Value: bson.D{{Key: "nativePriority", Value: bson.D{{Key: "$cond", Value: bson.A{bson.D{{Key: "$eq", Value: bson.A{"$_id.assetType", "eth"}}}, 0, 1}}}}}}},
+		bson.D{{Key: "$sort", Value: bson.D{{Key: "nativePriority", Value: 1}, {Key: "transferCount", Value: -1}, {Key: "latestBlock", Value: -1}, {Key: "_id.asset", Value: 1}}}},
+		bson.D{{Key: "$limit", Value: limit + 1}},
+	}
+	hint := "idx_transfers_from_cursor"
+	if direction == "in" {
+		hint = "idx_transfers_to_cursor"
+	}
+	cursor, err := s.db.Collection(TransfersCollection).Aggregate(ctx, pipeline, options.Aggregate().SetHint(hint))
+	if err != nil {
+		return AssetChannelResult{}, fmt.Errorf("list transfer assets: %w", err)
+	}
+	defer func() { _ = cursor.Close(ctx) }()
+	type assetRow struct {
+		ID struct {
+			AssetType string `bson:"assetType"`
+			Asset     string `bson:"asset"`
+		} `bson:"_id"`
+	}
+	result := AssetChannelResult{Items: make([]AssetChannel, 0, limit)}
+	for cursor.Next(ctx) {
+		var row assetRow
+		if err := cursor.Decode(&row); err != nil {
+			return AssetChannelResult{}, fmt.Errorf("decode transfer asset: %w", err)
+		}
+		if len(result.Items) == limit {
+			result.Truncated = true
+			continue
+		}
+		if row.ID.AssetType == "eth" {
+			result.Items = append(result.Items, AssetChannel{AssetMode: "eth", Asset: "ETH"})
+			continue
+		}
+		if row.ID.AssetType == "erc20" && row.ID.Asset != "" {
+			result.Items = append(result.Items, AssetChannel{AssetMode: "contract", Asset: strings.ToLower(row.ID.Asset)})
+		}
+	}
+	if err := cursor.Err(); err != nil {
+		return AssetChannelResult{}, fmt.Errorf("scan transfer assets: %w", err)
+	}
+	return result, nil
 }
 
 type rankedSummaryHeap struct {

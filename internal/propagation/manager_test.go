@@ -151,8 +151,39 @@ func TestManagerAcceptsTargetWithoutDeterministicLabel(t *testing.T) {
 	target := "0x0000000000000000000000000000000000000001"
 	engineRepository := &engineRepository{addresses: map[string]store.Address{nodeKey("ethereum", target): {SyncStatus: "synced"}}, labels: map[string][]store.Label{nodeKey("ethereum", target): {{Type: "suspected_hot_wallet", Source: "profile", Confidence: 1}}}}
 	repository := newManagerRepository(engineRepository)
-	_, err := NewManager(NewEngine(repository), repository).Enqueue(context.Background(), Request{Chain: "ethereum", TargetAddress: target})
+	job, err := NewManager(NewEngine(repository), repository).Enqueue(context.Background(), Request{Chain: "ethereum", TargetAddress: target})
 	if err != nil {
 		t.Fatalf("err=%v", err)
+	}
+	if job.Asset != "all" {
+		t.Fatalf("asset=%s want all", job.Asset)
+	}
+}
+
+func TestManagerPersistsAssetChannelBudgetForQueuedWork(t *testing.T) {
+	now := time.Now().UTC()
+	source, target := "0x0000000000000000000000000000000000000001", "0x0000000000000000000000000000000000000002"
+	usdt := "0xdac17f958d2ee523a2206206994597c13d831ec7"
+	engineRepository := graphRepository([]string{source, target})
+	engineRepository.labels[nodeKey("ethereum", source)] = []store.Label{riskLabel(source, "high", 1, now)}
+	engineRepository.assets["ethereum:"+source+":out"] = store.AssetChannelResult{Items: []store.AssetChannel{{AssetMode: "eth", Asset: "ETH"}, {AssetMode: "contract", Asset: usdt}}}
+	engineRepository.candidates[queryKey(source, "out", usdt)] = tokenCandidate(source, target, "0x1", usdt, "100", "100", now)
+	repository := newManagerRepository(engineRepository)
+	manager := NewManager(NewEngine(repository), repository)
+	manager.config.MaxAssetChannels = 2
+	job, err := manager.Enqueue(context.Background(), Request{Chain: "ethereum", TargetAddress: source, Direction: "out", Asset: "all"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.config.MaxAssetChannels = 1
+	if err := manager.claimAndProcess(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := manager.Job(context.Background(), job.ID.Hex())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed.MaxAssetChannels != 2 || len(repository.associations) != 1 || repository.associations[0].TargetAddress != target {
+		t.Fatalf("job=%+v associations=%+v", completed, repository.associations)
 	}
 }

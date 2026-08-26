@@ -13,6 +13,57 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+func TestListTransferAssetsReturnsIndependentETHAndTokenChannels(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	uri := os.Getenv("MONGO_URI")
+	if uri == "" {
+		uri = "mongodb://localhost:27017"
+	}
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Disconnect(context.Background())
+	db := client.Database("eth_fund_trace_asset_channels_test")
+	if err := db.Drop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s := New(db)
+	if err := s.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer db.Drop(context.Background())
+	address := "0x0000000000000000000000000000000000000001"
+	token := "0xdac17f958d2ee523a2206206994597c13d831ec7"
+	if _, err := s.BulkUpsertTransfers(ctx, []Transfer{
+		{Chain: "ethereum", ChainID: 1, TxHash: "0xeth", BlockNumber: 10, From: address, To: "0x0000000000000000000000000000000000000002", AssetType: "eth", Asset: "ETH", Amount: "1", Source: "txlist"},
+		{Chain: "ethereum", ChainID: 1, TxHash: "0xtoken", BlockNumber: 11, From: address, To: "0x0000000000000000000000000000000000000003", AssetType: "erc20", Asset: token, TokenValue: "2", Source: "tokentx", LogIndex: 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := s.ListTransferAssets(ctx, "ethereum", address, "out", 11, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []AssetChannel{{AssetMode: "eth", Asset: "ETH"}, {AssetMode: "contract", Asset: token}}
+	if len(result.Items) != len(want) || result.Truncated {
+		t.Fatalf("result=%+v", result)
+	}
+	for index := range want {
+		if result.Items[index] != want[index] {
+			t.Fatalf("items=%+v want=%+v", result.Items, want)
+		}
+	}
+	bounded, err := s.ListTransferAssets(ctx, "ethereum", address, "out", 11, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bounded.Truncated || len(bounded.Items) != 1 || bounded.Items[0] != (AssetChannel{AssetMode: "eth", Asset: "ETH"}) {
+		t.Fatalf("bounded=%+v", bounded)
+	}
+}
+
 func TestTransferUpsertIsIdempotent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

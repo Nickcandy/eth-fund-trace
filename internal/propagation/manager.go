@@ -75,13 +75,13 @@ func (m *Manager) Enqueue(ctx context.Context, request Request) (store.Propagati
 		request.Direction = "both"
 	}
 	if request.Asset == "" {
-		request.Asset = "ETH"
+		request.Asset = "all"
 	}
 	address, err := ethaddr.Normalize(request.TargetAddress)
 	if err != nil || chainErr != nil || (request.Direction != "in" && request.Direction != "out" && request.Direction != "both") {
 		return store.PropagationJob{}, ErrInvalidRequest
 	}
-	if !strings.EqualFold(request.Asset, "ETH") {
+	if !strings.EqualFold(request.Asset, "ETH") && !strings.EqualFold(request.Asset, "all") {
 		request.Asset, err = ethaddr.Normalize(request.Asset)
 		if err != nil {
 			return store.PropagationJob{}, ErrInvalidRequest
@@ -100,7 +100,7 @@ func (m *Manager) Enqueue(ctx context.Context, request Request) (store.Propagati
 		return store.PropagationJob{}, fmt.Errorf("list propagation risk labels: %w", err)
 	}
 	key := idempotencyKey(request, riskLabels, metadata.LatestSyncedBlock)
-	job := store.PropagationJob{IdempotencyKey: key, Chain: request.Chain, TargetAddress: address, Asset: normalizeAsset(request.Asset), Direction: request.Direction, Status: "queued", MaxHops: 3, MaxNodes: m.config.MaxNodes, MaxEdges: m.config.MaxEdges, PerNodeCandidateCap: m.config.PerNodeCandidateCap, MaxPathsPerTarget: m.config.MaxPathsPerTarget, DataThroughBlock: metadata.LatestSyncedBlock, RuleVersion: RiskRuleVersion, PropagationVersion: Version, CreatedAt: m.clock().UTC()}
+	job := store.PropagationJob{IdempotencyKey: key, Chain: request.Chain, TargetAddress: address, Asset: normalizeAsset(request.Asset), Direction: request.Direction, Status: "queued", MaxHops: 3, MaxNodes: m.config.MaxNodes, MaxEdges: m.config.MaxEdges, MaxAssetChannels: m.config.MaxAssetChannels, PerNodeCandidateCap: m.config.PerNodeCandidateCap, MaxPathsPerTarget: m.config.MaxPathsPerTarget, DataThroughBlock: metadata.LatestSyncedBlock, RuleVersion: RiskRuleVersion, PropagationVersion: Version, CreatedAt: m.clock().UTC()}
 	if err := m.repository.CreatePropagationJob(ctx, &job); err != nil {
 		if mongo.IsDuplicateKeyError(err) {
 			return m.repository.FindPropagationJobByKey(ctx, key)
@@ -178,6 +178,7 @@ func (m *Manager) claimAndProcess(ctx context.Context) error {
 		lastHop, lastNodes := -1, -100
 		config := m.config
 		config.MaxHops, config.MaxNodes, config.MaxEdges = job.MaxHops, job.MaxNodes, job.MaxEdges
+		config.MaxAssetChannels = job.MaxAssetChannels
 		config.PerNodeCandidateCap, config.MaxPathsPerTarget = job.PerNodeCandidateCap, job.MaxPathsPerTarget
 		result, runErr := m.engine.Run(jobCtx, job.Chain, job.TargetAddress, job.Direction, job.Asset, job.DataThroughBlock, nil, nil, config, func(hop, nodes, edges int) error {
 			if hop == lastHop && nodes-lastNodes < 100 {
@@ -259,6 +260,9 @@ func (m *Manager) heartbeat(ctx context.Context, id primitive.ObjectID, cancel c
 func normalizeAsset(asset string) string {
 	if strings.EqualFold(asset, "ETH") {
 		return "ETH"
+	}
+	if strings.EqualFold(asset, "all") {
+		return "all"
 	}
 	return strings.ToLower(asset)
 }

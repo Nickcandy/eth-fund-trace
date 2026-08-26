@@ -1,7 +1,8 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GraphNodeModel } from "../graph/model";
+import type { PropagationJob, PropagationResult } from "../api/types";
+import type { GraphEdgeModel, GraphNodeModel } from "../graph/model";
 import { DetailsPanel } from "./DetailsPanel";
 
 afterEach(cleanup);
@@ -39,7 +40,7 @@ describe("DetailsPanel labels", () => {
       note: "",
       evidence: ["case-1"],
     }));
-    expect(screen.getByText("标签已保存，重新追踪后传播生效")).toBeVisible();
+    expect(screen.getByText("标签已保存，风险重新评估已提交")).toBeVisible();
   });
 
   it("shows automatic target assessment without a manual start action", async () => {
@@ -48,4 +49,49 @@ describe("DetailsPanel labels", () => {
     expect(screen.queryByRole("button", { name: "启动传播" })).toBeNull();
     expect(screen.getByText("等待 Trace 完成后自动评估")).toBeVisible();
   });
+
+  it("distinguishes an unevaluated node from a zero score", () => {
+    const node: GraphNodeModel = { id: "ethereum:0x2", chain: "ethereum", address: "0x0000000000000000000000000000000000000002", hop: 2, terminal: false, seed: false, risk: "normal", hotWallet: false, labelTypes: [] };
+    render(<DetailsPanel node={node} labels={[]} propagationJob={propagationJob(propagationResult())} propagationResult={propagationResult()} onLabel={vi.fn()} onClose={() => undefined} onFocus={() => undefined} />);
+    expect(screen.getByText("未纳入本次评估")).toBeVisible();
+    expect(screen.getByText("--")).toBeVisible();
+    expect(screen.queryByText("暂无关联结论")).toBeNull();
+  });
+
+  it("shows missing propagation data as unknown instead of zero", () => {
+    const node: GraphNodeModel = { id: "ethereum:0x2", chain: "ethereum", address: "0x0000000000000000000000000000000000000002", hop: 2, terminal: false, seed: false, risk: "normal", hotWallet: false, labelTypes: [] };
+    const result = propagationResult();
+    result.missingAddresses = [`ethereum:${node.address}`];
+    render(<DetailsPanel node={node} labels={[]} propagationJob={propagationJob(result)} propagationResult={result} onLabel={vi.fn()} onClose={() => undefined} onFocus={() => undefined} />);
+    expect(screen.getByText("数据不足")).toBeVisible();
+    expect(screen.getByText("--")).toBeVisible();
+  });
+
+  it("shows the selected transfer direction and endpoints", () => {
+    const edge: GraphEdgeModel = {
+      id: "edge-1", source: "ethereum:0x0000000000000000000000000000000000000002", target: "ethereum:0x0000000000000000000000000000000000000001",
+      chain: "ethereum", asset: "ETH", assetSymbol: "ETH", sourceType: "aggregate", kind: "transfer", count: 2, totalAmount: "10", flow: "inbound", firstBlock: 100, firstTime: "2025-05-12T14:18:23Z", latestBlock: 123, latestTime: "2025-06-02T14:37:35Z",
+    };
+    render(<DetailsPanel edge={edge} labels={[]} onLabel={vi.fn()} onClose={() => undefined} onFocus={() => undefined} />);
+    expect(screen.getByText("资金流入查询中心")).toBeVisible();
+    expect(screen.getByText(/0x000000000000/)).toBeVisible();
+    expect(screen.getByText(/区块范围/)).toBeVisible();
+    expect(screen.getByText(/时间范围/)).toBeVisible();
+    expect(screen.getByText(/不代表该金额来自查询中心/)).toBeVisible();
+  });
 });
+
+function propagationResult(): PropagationResult {
+  return {
+    status: "partial", score: 0, level: "no_evidence", directRisk: { present: false, score: 0, labels: [] }, nodes: [], associations: [], coverage: [], missingAddresses: [], candidateCoverage: 1,
+    ruleVersion: "risk-association-v2", propagationVersion: "propagation-v4", dataThroughBlock: 100, visitedNodes: 1, edgeCount: 0, truncated: false,
+  };
+}
+
+function propagationJob(result: PropagationResult): PropagationJob {
+  return {
+    id: "job-1", chain: "ethereum", targetAddress: "0x0000000000000000000000000000000000000001", asset: "ETH", direction: "both", status: "partial",
+    maxHops: 3, maxNodes: 100, maxEdges: 100, maxAssetChannels: 100, perNodeCandidateCap: 10, maxPathsPerTarget: 3, currentHop: 3, visitedNodes: result.visitedNodes, edgeCount: result.edgeCount,
+    dataThroughBlock: result.dataThroughBlock, ruleVersion: result.ruleVersion, propagationVersion: result.propagationVersion, truncated: false, retryCount: 0, createdAt: "2026-08-26T00:00:00Z", result, retryable: false,
+  };
+}

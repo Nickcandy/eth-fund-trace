@@ -15,10 +15,20 @@ import (
 type engineRepository struct {
 	addresses  map[string]store.Address
 	labels     map[string][]store.Label
+	assets     map[string]store.AssetChannelResult
 	candidates map[string]store.CandidateResult
 	analyses   map[string]store.TransactionAnalysis
 	bridges    map[string][]store.CrossChainLink
 	queries    []store.CandidateQuery
+}
+
+func (r *engineRepository) ListTransferAssets(_ context.Context, chain, address, direction string, _ int64, limit int) (store.AssetChannelResult, error) {
+	result := r.assets[chain+":"+address+":"+direction]
+	if len(result.Items) > limit {
+		result.Items = append([]store.AssetChannel(nil), result.Items[:limit]...)
+		result.Truncated = true
+	}
+	return result, nil
 }
 
 func (r *engineRepository) FindAddress(_ context.Context, chain, address string) (store.Address, bool, error) {
@@ -118,6 +128,48 @@ func TestRunRiskTargetScoresItsSynchronizedDownstream(t *testing.T) {
 	}
 }
 
+func TestRunAllAssetsPropagatesEachObservedTransferAssetIndependently(t *testing.T) {
+	now := time.Now().UTC()
+	source, middle, downstream := address(1), address(2), address(3)
+	usdt := "0xdac17f958d2ee523a2206206994597c13d831ec7"
+	repository := graphRepository([]string{source, middle, downstream})
+	repository.labels[nodeKey("ethereum", source)] = []store.Label{riskLabel(source, "high", 1, now)}
+	repository.assets["ethereum:"+source+":out"] = store.AssetChannelResult{Items: []store.AssetChannel{
+		{AssetMode: "eth", Asset: "ETH"},
+		{AssetMode: "contract", Asset: usdt},
+	}}
+	repository.candidates[queryKey(source, "out", usdt)] = tokenCandidate(source, middle, "0x1", usdt, "100", "100", now)
+	repository.candidates[queryKey(middle, "out", usdt)] = tokenCandidate(middle, downstream, "0x2", usdt, "100", "100", now)
+
+	result, err := NewEngine(repository).Run(context.Background(), "ethereum", source, "out", "all", 100, nil, nil, DefaultConfig(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assessment := assessmentByKey(result.Nodes, nodeKey("ethereum", downstream))
+	if assessment.Score != 65 || len(assessment.Associations) != 1 || assessment.Associations[0].Asset != usdt {
+		t.Fatalf("downstream=%+v", assessment)
+	}
+}
+
+func TestRunAllAssetsDoesNotSwitchAtAnUnverifiedIntermediateAddress(t *testing.T) {
+	now := time.Now().UTC()
+	source, middle, unrelated := address(1), address(2), address(3)
+	usdt := "0xdac17f958d2ee523a2206206994597c13d831ec7"
+	repository := graphRepository([]string{source, middle, unrelated})
+	repository.labels[nodeKey("ethereum", source)] = []store.Label{riskLabel(source, "high", 1, now)}
+	repository.assets["ethereum:"+source+":out"] = store.AssetChannelResult{Items: []store.AssetChannel{{AssetMode: "eth", Asset: "ETH"}}}
+	repository.candidates[queryKey(source, "out", "ETH")] = candidate(source, middle, "0x1", "100", "100", now)
+	repository.candidates[queryKey(middle, "out", usdt)] = tokenCandidate(middle, unrelated, "0x2", usdt, "100", "100", now)
+
+	result, err := NewEngine(repository).Run(context.Background(), "ethereum", source, "out", "all", 100, nil, nil, DefaultConfig(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := assessmentByKey(result.Nodes, nodeKey("ethereum", unrelated)); got.Score != 0 || got.Address != "" {
+		t.Fatalf("unrelated asset propagated without conversion: %+v", got)
+	}
+}
+
 func TestRunReportsUnknownForMissingCandidateAndStopsPublicNode(t *testing.T) {
 	now := time.Now().UTC()
 	target, missing := address(1), address(2)
@@ -176,12 +228,36 @@ func TestResultJSONUsesFrontendFieldNames(t *testing.T) {
 	}
 }
 
+func TestRunSerializesEmptyCollectionsAsArrays(t *testing.T) {
+	target := address(1)
+	repository := graphRepository([]string{target})
+	result, err := NewEngine(repository).Run(context.Background(), "ethereum", target, "out", "ETH", 100, nil, nil, DefaultConfig(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	for _, field := range []string{`"associations":[]`, `"missingAddresses":[]`, `"labels":[]`} {
+		if !strings.Contains(text, field) {
+			t.Fatalf("json=%s, want %s", text, field)
+		}
+	}
+}
+
 func graphRepository(addresses []string) *engineRepository {
-	r := &engineRepository{addresses: map[string]store.Address{}, labels: map[string][]store.Label{}, candidates: map[string]store.CandidateResult{}, analyses: map[string]store.TransactionAnalysis{}, bridges: map[string][]store.CrossChainLink{}}
+	r := &engineRepository{addresses: map[string]store.Address{}, labels: map[string][]store.Label{}, assets: map[string]store.AssetChannelResult{}, candidates: map[string]store.CandidateResult{}, analyses: map[string]store.TransactionAnalysis{}, bridges: map[string][]store.CrossChainLink{}}
 	for _, value := range addresses {
 		r.addresses[nodeKey("ethereum", value)] = store.Address{Chain: "ethereum", Address: value, SyncStatus: "synced", LatestSyncedBlock: 100}
 	}
 	return r
+}
+
+func tokenCandidate(from, to, hash, asset, amount, total string, at time.Time) store.CandidateResult {
+	transfer := store.Transfer{Chain: "ethereum", From: from, To: to, AssetType: "erc20", Asset: asset, TokenValue: amount, TxHash: hash, BlockNumber: 100, BlockTime: at}
+	return store.CandidateResult{Items: []store.CounterpartySummary{{Chain: "ethereum", From: from, To: to, AssetType: "erc20", Asset: asset, TotalAmount: amount, TransferCount: 1, LatestBlock: 100, LatestTime: at, LatestTransfer: transfer, Representative: transfer}}, Coverage: store.CandidateCoverage{SelectedCounterparties: 1, TotalCounterparties: 1, SelectedAmount: amount, TotalAmount: total, AmountCoverage: ratio(amount, total)}}
 }
 
 func candidate(from, to, hash, amount, total string, at time.Time) store.CandidateResult {

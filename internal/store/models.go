@@ -73,6 +73,7 @@ type PropagationJob struct {
 	MaxHops             int                `bson:"maxHops" json:"maxHops"`
 	MaxNodes            int                `bson:"maxNodes" json:"maxNodes"`
 	MaxEdges            int                `bson:"maxEdges" json:"maxEdges"`
+	MaxAssetChannels    int                `bson:"maxAssetChannels" json:"maxAssetChannels"`
 	PerNodeCandidateCap int                `bson:"perNodeCandidateCap" json:"perNodeCandidateCap"`
 	MaxPathsPerTarget   int                `bson:"maxPathsPerTarget" json:"maxPathsPerTarget"`
 	CurrentHop          int                `bson:"currentHop" json:"currentHop"`
@@ -269,6 +270,8 @@ type CounterpartySummary struct {
 	TokenMetadataComplete bool
 	TotalAmount           string
 	TransferCount         int64
+	EarliestBlock         int64
+	EarliestTime          time.Time
 	LatestBlock           int64
 	LatestTime            time.Time
 	LatestTransfer        Transfer
@@ -298,6 +301,18 @@ type CandidateCoverage struct {
 type CandidateResult struct {
 	Items    []CounterpartySummary
 	Coverage CandidateCoverage
+}
+
+// AssetChannel identifies one independently traceable transfer asset.
+type AssetChannel struct {
+	AssetMode string `bson:"assetMode" json:"assetMode"`
+	Asset     string `bson:"asset" json:"asset"`
+}
+
+// AssetChannelResult is a bounded set of assets observed for one address and direction.
+type AssetChannelResult struct {
+	Items     []AssetChannel
+	Truncated bool
 }
 
 // TransactionAnalysis is a cached interpretation of a confirmed receipt.

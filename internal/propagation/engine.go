@@ -14,23 +14,24 @@ import (
 )
 
 const (
-	Version         = "propagation-v3"
+	Version         = "propagation-v4"
 	RiskRuleVersion = "risk-association-v2"
 )
 
 type Config struct {
 	MaxHops, MaxNodes, MaxEdges, PerNodeCandidateCap, MaxPathsPerTarget int
-	PerChannelLimit                                                     int
+	PerChannelLimit, MaxAssetChannels                                   int
 }
 
 func DefaultConfig() Config {
-	return Config{MaxHops: 3, MaxNodes: 10000, MaxEdges: 50000, PerNodeCandidateCap: 50, MaxPathsPerTarget: 3, PerChannelLimit: 20}
+	return Config{MaxHops: 3, MaxNodes: 10000, MaxEdges: 50000, PerNodeCandidateCap: 50, MaxPathsPerTarget: 3, PerChannelLimit: 20, MaxAssetChannels: 100}
 }
 
 type Repository interface {
 	FindAddress(context.Context, string, string) (store.Address, bool, error)
 	ListLabels(context.Context, string, string) ([]store.Label, error)
 	ListRiskLabels(context.Context, string, int64) ([]store.Label, error)
+	ListTransferAssets(context.Context, string, string, string, int64, int) (store.AssetChannelResult, error)
 	PropagationCandidates(context.Context, store.CandidateQuery) (store.CandidateResult, error)
 	ListCrossChainLinks(context.Context, string, string, int64) ([]store.CrossChainLink, error)
 	FindTransactionAnalysis(context.Context, string, string) (store.TransactionAnalysis, bool, error)
@@ -154,7 +155,11 @@ func NewEngine(repository Repository) *Engine {
 
 // Run evaluates the target against already synchronized facts only.
 func (e *Engine) Run(ctx context.Context, chain, targetAddress, direction, asset string, dataThroughBlock int64, _ []store.Label, _ []string, config Config, progress func(int, int, int) error) (Result, error) {
-	result := Result{Status: "complete", RiskRuleVersion: RiskRuleVersion, PropagationVersion: Version, CandidateCoverage: 1}
+	result := Result{
+		Status: "complete", RiskRuleVersion: RiskRuleVersion, PropagationVersion: Version, CandidateCoverage: 1,
+		Nodes: []NodeRiskAssessment{}, Associations: []Association{}, Coverage: []Coverage{}, MissingAddresses: []string{},
+		DirectRisk: DirectRisk{Labels: []store.Label{}},
+	}
 	metadata, found, err := e.repository.FindAddress(ctx, chain, targetAddress)
 	if err != nil {
 		return result, fmt.Errorf("find propagation target: %w", err)
@@ -173,10 +178,26 @@ func (e *Engine) Run(ctx context.Context, chain, targetAddress, direction, asset
 	if direction == "both" {
 		directions = []string{"in", "out"}
 	}
-	mode, normalizedAsset := assetMode(asset)
 	queue := make([]searchState, 0, len(directions))
 	for _, value := range directions {
-		queue = append(queue, searchState{chain: chain, address: targetAddress, direction: value, assetMode: mode, asset: normalizedAsset, path: []string{nodeKey(chain, targetAddress)}})
+		mode, normalizedAsset := assetMode(asset)
+		channels := []store.AssetChannel{{AssetMode: mode, Asset: normalizedAsset}}
+		if strings.EqualFold(asset, "all") {
+			observed, assetErr := e.repository.ListTransferAssets(ctx, chain, targetAddress, value, result.DataThroughBlock, config.MaxAssetChannels)
+			if assetErr != nil {
+				return result, fmt.Errorf("list propagation assets: %w", assetErr)
+			}
+			channels = observed.Items
+			if observed.Truncated {
+				markPartial(&result, "asset_channels")
+			}
+		}
+		for _, channel := range channels {
+			queue = append(queue, searchState{chain: chain, address: targetAddress, direction: value, assetMode: channel.AssetMode, asset: channel.Asset, path: []string{nodeKey(chain, targetAddress)}})
+		}
+	}
+	if len(queue) == 0 {
+		queue = append(queue, searchState{chain: chain, address: targetAddress, direction: directions[0], assetMode: "eth", asset: "ETH", path: []string{nodeKey(chain, targetAddress)}})
 	}
 	seen := make(map[string]struct{})
 	visited := make(map[string]struct{})
@@ -366,7 +387,13 @@ func buildNodeAssessments(visited map[string]struct{}, direct map[string]DirectR
 	for key := range visited {
 		parts := strings.SplitN(key, ":", 2)
 		items := byNode[key]
+		if items == nil {
+			items = []Association{}
+		}
 		directRisk := direct[key]
+		if directRisk.Labels == nil {
+			directRisk.Labels = []store.Label{}
+		}
 		score := max(directRisk.Score, aggregateAssociations(items))
 		result = append(result, NodeRiskAssessment{Chain: parts[0], Address: parts[1], Status: status, Score: score, Level: scoreLevel(score), DirectRisk: directRisk, Associations: items})
 	}
@@ -387,6 +414,9 @@ func aggregateAssociations(items []Association) int {
 }
 
 func directAssessment(labels []store.Label) DirectRisk {
+	if labels == nil {
+		labels = []store.Label{}
+	}
 	result := DirectRisk{Present: len(labels) > 0, Labels: labels}
 	for _, label := range labels {
 		result.Score = max(result.Score, int(math.Round(float64(sourceBase(label))*labelConfidence(label.Confidence))))

@@ -7,10 +7,11 @@ const baseAddress = "0x0000000000000000000000000000000000000004";
 const token = "0x0000000000000000000000000000000000000010";
 const traceJobID = "6a8a8c307fcbef52929d0d09";
 let jobPolls = 0;
+let propagationCreates = 0;
 
 const transfer = (from: string, to: string, hash: string, source = "txlist", asset = "ETH", amount = "1000000000000000000") => ({ chain: "ethereum", chainId: 1, txHash: hash, blockNumber: 19876543, blockTime: "2026-08-22T10:00:00Z", from, to, assetType: source === "tokentx" ? "erc20" : "native", asset, symbol: source === "tokentx" ? "USDC" : "ETH", decimals: source === "tokentx" ? 6 : 18, amount, tokenMetadataComplete: true, source, traceId: "", logIndex: source === "tokentx" ? 1 : 0, transferKind: "transfer" });
 const facts = [transfer(upstream, seed, "0x" + "a".repeat(64)), transfer(seed, downstream, "0x" + "b".repeat(64), "tokentx", token, "2500000")];
-const aggregate = (fact: ReturnType<typeof transfer>, depth: number, path: string[]) => ({ chain: fact.chain, from: fact.from, to: fact.to, assetType: fact.assetType, asset: fact.asset, symbol: fact.symbol, decimals: fact.decimals, tokenMetadataComplete: true, totalAmount: fact.amount, transferCount: 1, kind: "transfer", depth, path });
+const aggregate = (fact: ReturnType<typeof transfer>, depth: number, path: string[]) => ({ chain: fact.chain, from: fact.from, to: fact.to, assetType: fact.assetType, asset: fact.asset, symbol: fact.symbol, decimals: fact.decimals, tokenMetadataComplete: true, totalAmount: fact.amount, transferCount: 1, kind: "transfer", depth, path, firstBlock: fact.blockNumber, firstTime: fact.blockTime, latestBlock: fact.blockNumber, latestTime: fact.blockTime });
 const result = {
   nodes: [
     { chain: "ethereum", address: seed, depth: 0, terminal: false }, { chain: "ethereum", address: upstream, depth: 1, terminal: true },
@@ -34,13 +35,14 @@ const transactionAnalysis = {
 
 async function mockAPI(page: Page) {
   jobPolls = 0;
+  propagationCreates = 0;
   const labels = [{chain:"ethereum",address:seed,type:"phishing",source:"manual" as const,riskLevel:"high" as const,confidence:1,evidence:["case-42"]}];
   await page.route("**/api/v1/**", async route => {
     const url = new URL(route.request().url()); const path = url.pathname;
     const json = (body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
     if (path.startsWith("/api/v1/transactions/")) return json(transactionAnalysis);
-    if (path === "/api/v1/propagation-jobs") return json({ id: "propagation-1", chain: "ethereum", targetAddress: seed, asset: "ETH", direction: "both", status: "queued", maxHops: 3, maxNodes: 10000, maxEdges: 50000, perNodeCandidateCap: 50, maxPathsPerTarget: 3, currentHop: 0, visitedNodes: 0, edgeCount: 0, dataThroughBlock: 19876543, ruleVersion: "risk-association-v2", propagationVersion: "propagation-v3", truncated: false, retryCount: 0, retryable: false }, 202);
-    if (path === "/api/v1/propagation-jobs/propagation-1") return json({ id: "propagation-1", chain: "ethereum", targetAddress: seed, asset: "ETH", direction: "both", status: "succeeded", maxHops: 3, maxNodes: 10000, maxEdges: 50000, perNodeCandidateCap: 50, maxPathsPerTarget: 3, currentHop: 2, visitedNodes: 4, edgeCount: 3, dataThroughBlock: 19876543, ruleVersion: "risk-association-v2", propagationVersion: "propagation-v3", truncated: false, retryCount: 1, retryable: false, result: { status: "complete", score: 56, level: "suspected", directRisk: { present: false, score: 0, labels: [] }, nodes: [], associations: [{ sourceLabelId: "6a8a8c307fcbef52929d0d10", sourceAddress: upstream, sourceType: "phishing", targetChain: "ethereum", targetAddress: seed, direction: "in", asset: "ETH", confidence: 0.56, score: 56, distance: 1, level: "medium", path: { nodes: [`ethereum:${upstream}`, `ethereum:${seed}`], transactions: [], factors: { sourceBase: 100, labelConfidence: 0.8, hopFactor: 0.7, timeFactor: 1, amountFactor: 1, protocolFactor: 1 }, score: 56 }, paths: [[`ethereum:${upstream}`, `ethereum:${seed}`]], txHashes: [[facts[0].txHash]] }], coverage: [], missingAddresses: [], candidateCoverage: 1, ruleVersion: "risk-association-v2", propagationVersion: "propagation-v3", dataThroughBlock: 19876543, visitedNodes: 4, edgeCount: 3, truncated: false } });
+    if (path === "/api/v1/propagation-jobs") { propagationCreates++; return json({ id: `propagation-${propagationCreates}`, chain: "ethereum", targetAddress: seed, asset: "all", direction: "both", status: "queued", maxHops: 3, maxNodes: 10000, maxEdges: 50000, maxAssetChannels: 100, perNodeCandidateCap: 50, maxPathsPerTarget: 3, currentHop: 0, visitedNodes: 0, edgeCount: 0, dataThroughBlock: 19876543, ruleVersion: "risk-association-v2", propagationVersion: "propagation-v4", truncated: false, retryCount: 0, retryable: false }, 202); }
+    if (/\/api\/v1\/propagation-jobs\/propagation-\d+$/.test(path)) return json({ id: path.split("/").pop(), chain: "ethereum", targetAddress: seed, asset: "all", direction: "both", status: "succeeded", maxHops: 3, maxNodes: 10000, maxEdges: 50000, maxAssetChannels: 100, perNodeCandidateCap: 50, maxPathsPerTarget: 3, currentHop: 2, visitedNodes: 4, edgeCount: 3, dataThroughBlock: 19876543, ruleVersion: "risk-association-v2", propagationVersion: "propagation-v4", truncated: false, retryCount: 1, retryable: false, result: { status: "complete", score: 56, level: "suspected", directRisk: { present: false, score: 0, labels: [] }, nodes: [], associations: [{ sourceLabelId: "6a8a8c307fcbef52929d0d10", sourceAddress: upstream, sourceType: "phishing", targetChain: "ethereum", targetAddress: seed, direction: "in", asset: "ETH", confidence: 0.56, score: 56, distance: 1, level: "medium", path: { nodes: [`ethereum:${upstream}`, `ethereum:${seed}`], transactions: [], factors: { sourceBase: 100, labelConfidence: 0.8, hopFactor: 0.7, timeFactor: 1, amountFactor: 1, protocolFactor: 1 }, score: 56 }, paths: [[`ethereum:${upstream}`, `ethereum:${seed}`]], txHashes: [[facts[0].txHash]] }], coverage: [], missingAddresses: [], candidateCoverage: 1, ruleVersion: "risk-association-v2", propagationVersion: "propagation-v4", dataThroughBlock: 19876543, visitedNodes: 4, edgeCount: 3, truncated: false } });
     if (path === "/api/v1/trace") { const address = url.searchParams.get("address"); return json({ traceJobId: address?.endsWith("9") ? "job-fail" : address?.endsWith("8") ? "job-partial" : traceJobID, status: "queued" }, 202); }
     if (path === "/api/v1/trace-jobs/job-fail") return json({ id: "job-fail", chain: "ethereum", seedAddress: seed, direction: "both", depth: 3, topN: 10, asset: "all", status: "failed", createdAt: "2026-08-22T00:00:00Z", currentDepth: 1, visitedNodes: 2, edgeCount: 1, dataThroughBlock: 0, ruleVersion: "trace-v2", errorCode: "sync_failed", error: "上游同步失败", retryable: true });
     if (path === "/api/v1/trace-jobs/job-partial") return json({ id: "job-partial", chain: "ethereum", seedAddress: seed, direction: "both", depth: 3, topN: 10, asset: "all", status: "partial", createdAt: "2026-08-22T00:00:00Z", currentDepth: 2, visitedNodes: 4, edgeCount: 3, result, dataThroughBlock: 19876543, ruleVersion: "trace-v2", errorCode: "neighbor_sync_failed", error: "一个邻居同步失败", retryable: true });
@@ -67,7 +69,8 @@ test("creates an async trace and renders upstream, downstream, and bridge eviden
   await expect(page.getByText("分析完成")).toBeVisible({ timeout: 10_000 });
   await expect(page.locator(".fund-node")).toHaveCount(4); await expect(page.getByText("ETHEREUM", { exact: true })).toBeVisible(); await expect(page.getByText("BASE", { exact: true })).toBeVisible();
   const box = await page.getByTestId("graph-canvas").boundingBox(); expect(box?.width).toBeGreaterThan(250); expect(box?.height).toBeGreaterThan(250);
-  await page.locator(".edge-label").first().click(); await expect(page.getByRole("heading", { name: "资金边详情" })).toBeVisible(); await expect(page.locator(".edge-summary strong")).toContainText("1 笔 ETH");
+  await page.locator(".edge-label").first().click(); await expect(page.getByRole("heading", { name: "资金边详情" })).toBeVisible(); await expect(page.locator(".edge-summary > strong")).toContainText("1 笔累计 ETH");
+  await expect(page.getByText("区块范围")).toBeVisible(); await expect(page.getByText("时间范围")).toBeVisible();
   await expect(page.locator(".react-flow__edge").last().locator(".react-flow__edge-path")).toHaveCSS("stroke-dasharray", "8px, 6px");
   await page.getByRole("button", { name: /桥接关系/ }).click(); await expect(page.getByText("Ethereum → Base")).toBeVisible();
   await page.screenshot({ path: test.info().outputPath("analysis-console.png"), fullPage: true });
@@ -77,7 +80,7 @@ test("automatically assesses target risk after a trace completes", async ({ page
   const request = page.waitForRequest(value => value.url().endsWith("/api/v1/propagation-jobs") && value.method() === "POST");
   await page.getByLabel("分析地址").fill(seed); await page.getByRole("button", { name: "开始分析" }).click();
   await expect(page.getByText("分析完成")).toBeVisible({ timeout: 10_000 });
-  expect((await request).postDataJSON()).toEqual({ chain: "ethereum", targetAddress: seed, direction: "both", asset: "ETH" });
+  expect((await request).postDataJSON()).toEqual({ chain: "ethereum", targetAddress: seed, direction: "both", asset: "all" });
   await expect(page.getByText("风险传播 succeeded · 4 节点")).toBeVisible();
   await expect(page.getByText("完整检查 · 1 条路径证据")).toBeVisible();
 });
@@ -95,9 +98,11 @@ test("saves a deterministic label for the selected graph node", async ({ page })
   await page.getByPlaceholder("证据，每行一条").fill("public-list:2026-08-26\ncase-84");
   await page.getByPlaceholder("备注").fill("verified source");
   const request = page.waitForRequest(value => value.url().endsWith("/api/v1/labels") && value.method() === "POST");
+  const reassessment = page.waitForRequest(value => value.url().endsWith("/api/v1/propagation-jobs") && value.method() === "POST");
   await page.getByRole("button", { name: "保存标签" }).click();
   expect((await request).postDataJSON()).toEqual({ chain: "ethereum", address: downstream, type: "sanctions", source: "public-list", riskLevel: "high", confidence: 0.85, note: "verified source", evidence: ["public-list:2026-08-26", "case-84"] });
-  await expect(page.getByText("标签已保存，重新追踪后传播生效")).toBeVisible();
+  expect((await reassessment).postDataJSON()).toEqual({ chain: "ethereum", targetAddress: seed, direction: "both", asset: "all" });
+  await expect(page.getByText("标签已保存，风险重新评估已提交")).toBeVisible();
   await expect(page.getByText("sanctions")).toBeVisible();
   await expect(page.getByText("85%")).toBeVisible();
 });
