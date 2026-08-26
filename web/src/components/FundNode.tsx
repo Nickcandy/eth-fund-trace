@@ -12,7 +12,8 @@ export function FundNode({ data, selected }: NodeProps<FundFlowNode>) {
   const state = data.risk === "high" ? "risk-high" : data.terminal ? "terminal" : data.hotWallet ? "hot-wallet" : data.seed ? "seed" : "normal";
   return (
     <div className={`fund-node ${state} ${selected ? "selected" : ""}`}>
-      <Handle type="target" position={Position.Left} />
+      <Handle id="target-left" className="handle-target" type="target" position={Position.Left} />
+      <Handle id="source-left" className="handle-source" type="source" position={Position.Left} />
       <div className="node-heading"><span className={`chain-badge ${data.chain}`}>{chainLabel(data.chain)}</span>{data.seed && <span className="seed-label">查询中心</span>}</div>
       <div className="node-address" title={data.address}>{data.address === "0x0000000000000000000000000000000000000000" ? "零地址（铸造 / 销毁）" : shortAddress(data.address)}</div>
       <div className="node-signals">
@@ -22,7 +23,8 @@ export function FundNode({ data, selected }: NodeProps<FundFlowNode>) {
         {!data.risk.includes("high") && !data.terminal && !data.hotWallet && <span><Landmark size={13} />地址</span>}
       </div>
       <button className="node-focus" title="以此地址重新分析" onClick={(event) => { event.stopPropagation(); data.onFocus(data.chain, data.address); }}><Focus size={14} /></button>
-      <Handle type="source" position={Position.Right} />
+      <Handle id="target-right" className="handle-target" type="target" position={Position.Right} />
+      <Handle id="source-right" className="handle-source" type="source" position={Position.Right} />
     </div>
   );
 }

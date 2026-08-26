@@ -29,7 +29,7 @@ function queryString(values: object): string {
 
 async function requestSyncJobs(ids: string[], signal?: AbortSignal): Promise<SyncJob[]> {
   const jobs: SyncJob[] = [];
-  const batchSize = 5;
+  const batchSize = 2;
   for (let offset = 0; offset < ids.length; offset += batchSize) {
     const batch = ids.slice(offset, offset + batchSize);
     const results = await Promise.allSettled(batch.map((id) => request<SyncJob>(`/api/v1/sync-jobs/${encodeURIComponent(id)}`, { signal })));

@@ -11,6 +11,8 @@ export interface GraphNodeModel {
 export interface GraphEdgeModel {
   id: string; source: string; target: string; chain: string; asset: string; assetSymbol: string;
   sourceType: string; kind: string; count: number; totalAmount: string; decimals?: number;
+  firstBlock?: number; firstTime?: string; latestBlock?: number; latestTime?: string;
+  flow?: "inbound" | "outbound" | "return";
   conversionStatus?: "complete" | "partial"; conversionScanned?: number; bridge?: BridgeEdge;
 }
 
@@ -48,7 +50,8 @@ function signedHops(result: TraceResult, seed: NodeRef): Map<string, number> {
   return hops;
 }
 
-export function buildGraphModel(result: TraceResult, seed: NodeRef, associations: RiskAssociation[] = [], riskSource?: NodeRef): GraphModel {
+export function buildGraphModel(result: TraceResult, seed: NodeRef, associations: RiskAssociation[] | null = [], riskSource?: NodeRef): GraphModel {
+  const normalizedAssociations = associations ?? [];
   const hops = signedHops(result, seed);
   const labelMap = new Map<string, Array<{ type: string; confidence: number }>>();
   for (const label of result.labels ?? []) {
@@ -58,7 +61,7 @@ export function buildGraphModel(result: TraceResult, seed: NodeRef, associations
   const nodes = result.nodes.map((node): GraphNodeModel => {
     const isSeedChain = node.chain === seed.chain;
     const labels = isSeedChain ? labelMap.get(node.address.toLowerCase()) ?? [] : [];
-    const association = associations.find((item) => item.targetChain === node.chain && item.targetAddress.toLowerCase() === node.address.toLowerCase());
+    const association = normalizedAssociations.find((item) => item.targetChain === node.chain && item.targetAddress.toLowerCase() === node.address.toLowerCase());
     const isRiskSource = riskSource && nodeID(node.chain, node.address) === nodeID(riskSource.chain, riskSource.address);
     return {
       id: nodeID(node.chain, node.address), chain: node.chain, address: node.address.toLowerCase(),
@@ -69,24 +72,35 @@ export function buildGraphModel(result: TraceResult, seed: NodeRef, associations
       inferenceConfidence: association?.confidence,
     };
   });
+  const nodeHops = new Map(nodes.map((node) => [node.id, node.hop]));
+  const flow = (source: string, target: string): GraphEdgeModel["flow"] => {
+    const sourceHop = nodeHops.get(source) ?? 0;
+    const targetHop = nodeHops.get(target) ?? 0;
+    if (Math.abs(targetHop) < Math.abs(sourceHop)) return "inbound";
+    if (Math.abs(targetHop) > Math.abs(sourceHop)) return "outbound";
+    return "return";
+  };
   const grouped = new Map<string, GraphEdgeModel>();
   result.edges.forEach((edge, index) => {
     const key = [edge.chain, edge.from.toLowerCase(), edge.to.toLowerCase(), edge.asset.toLowerCase(), edge.kind, index].join("|");
+    const source = nodeID(edge.chain, edge.from); const target = nodeID(edge.chain, edge.to);
     grouped.set(key, {
-      id: key, source: nodeID(edge.chain, edge.from), target: nodeID(edge.chain, edge.to), chain: edge.chain,
+      id: key, source, target, chain: edge.chain,
       asset: edge.asset, assetSymbol: edge.symbol || edge.asset, sourceType: "aggregate", kind: edge.kind,
-      count: edge.transferCount, totalAmount: edge.totalAmount,
+      count: edge.transferCount, totalAmount: edge.totalAmount, flow: flow(source, target),
       decimals: displayDecimals(edge.assetType, edge.asset, edge.decimals, edge.tokenMetadataComplete),
+      firstBlock: edge.firstBlock, firstTime: edge.firstTime, latestBlock: edge.latestBlock, latestTime: edge.latestTime,
       conversionStatus: edge.conversionStatus, conversionScanned: edge.conversionScanned,
     });
   });
   for (const bridge of result.bridgeEdges ?? []) {
     const link = bridge.link;
     const key = `bridge:${link.sourceChain}:${link.sourceTxHash}:${link.sourceLogIndex}:${link.targetChain}:${link.targetTxHash}:${link.targetLogIndex}`;
+    const source = nodeID(link.sourceChain, link.sourceAddress); const target = nodeID(link.targetChain, link.targetAddress);
     grouped.set(key, {
-      id: key, source: nodeID(link.sourceChain, link.sourceAddress), target: nodeID(link.targetChain, link.targetAddress), chain: `${link.sourceChain}->${link.targetChain}`,
+      id: key, source, target, chain: `${link.sourceChain}->${link.targetChain}`,
       asset: link.sourceAsset, assetSymbol: link.sourceAsset, sourceType: "bridge", kind: "bridge", count: 1,
-      totalAmount: link.sourceAmount, decimals: displayDecimals(undefined, link.sourceAsset, undefined, undefined), bridge,
+      totalAmount: link.sourceAmount, decimals: displayDecimals(undefined, link.sourceAsset, undefined, undefined), flow: flow(source, target), bridge,
     });
   }
   return { nodes, edges: [...grouped.values()] };

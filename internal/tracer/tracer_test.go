@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/Nickcandy/eth-fund-trace/internal/store"
 )
@@ -20,9 +21,9 @@ func TestTraceTopNMeansCounterpartiesRankedByCumulativeAmount(t *testing.T) {
 	r := &fakeRepository{addresses: map[string]store.Address{
 		seed: {SyncStatus: "synced"}, a: {SyncStatus: "synced"}, b: {SyncStatus: "synced"}, c: {SyncStatus: "synced"}, d: {SyncStatus: "synced"},
 	}, labels: map[string][]store.Label{}, transfers: []store.Transfer{
-		{Chain: "ethereum", TxHash: "0xa1", From: seed, To: a, AssetType: "eth", Asset: "ETH", Amount: "40"},
-		{Chain: "ethereum", TxHash: "0xa2", From: seed, To: a, AssetType: "eth", Asset: "ETH", Amount: "30"},
-		{Chain: "ethereum", TxHash: "0xa3", From: seed, To: a, AssetType: "eth", Asset: "ETH", Amount: "20"},
+		{Chain: "ethereum", TxHash: "0xa1", BlockNumber: 10, BlockTime: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), From: seed, To: a, AssetType: "eth", Asset: "ETH", Amount: "40"},
+		{Chain: "ethereum", TxHash: "0xa2", BlockNumber: 12, BlockTime: time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC), From: seed, To: a, AssetType: "eth", Asset: "ETH", Amount: "30"},
+		{Chain: "ethereum", TxHash: "0xa3", BlockNumber: 11, BlockTime: time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC), From: seed, To: a, AssetType: "eth", Asset: "ETH", Amount: "20"},
 		{Chain: "ethereum", TxHash: "0xb1", From: seed, To: b, AssetType: "eth", Asset: "ETH", Amount: "50"},
 		{Chain: "ethereum", TxHash: "0xc1", From: seed, To: c, AssetType: "eth", Asset: "ETH", Amount: "10"},
 		{Chain: "ethereum", TxHash: "0xd1", From: seed, To: d, AssetType: "eth", Asset: "ETH", Amount: "5"},
@@ -37,6 +38,12 @@ func TestTraceTopNMeansCounterpartiesRankedByCumulativeAmount(t *testing.T) {
 	}
 	if result.Edges[0].TotalAmount != "90" || result.Edges[0].TransferCount != 3 {
 		t.Fatalf("first edge=%+v, want total=90 count=3", result.Edges[0])
+	}
+	if result.Edges[0].LatestBlock != 12 || !result.Edges[0].LatestTime.Equal(time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("first edge latest=%d %s", result.Edges[0].LatestBlock, result.Edges[0].LatestTime)
+	}
+	if result.Edges[0].FirstBlock != 10 || !result.Edges[0].FirstTime.Equal(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("first edge earliest=%d %s", result.Edges[0].FirstBlock, result.Edges[0].FirstTime)
 	}
 }
 
@@ -119,13 +126,19 @@ func (r *fakeRepository) TopCounterparties(_ context.Context, q store.Counterpar
 		}
 		summary := totals[other]
 		if summary == nil {
-			summary = &store.CounterpartySummary{Chain: transfer.Chain, ChainID: transfer.ChainID, From: transfer.From, To: transfer.To, AssetType: transfer.AssetType, Asset: transfer.Asset, Symbol: transfer.Symbol, Decimals: transfer.Decimals, TokenMetadataComplete: transfer.TokenMetadataComplete, TotalAmount: "0", Representative: transfer}
+			summary = &store.CounterpartySummary{Chain: transfer.Chain, ChainID: transfer.ChainID, From: transfer.From, To: transfer.To, AssetType: transfer.AssetType, Asset: transfer.Asset, Symbol: transfer.Symbol, Decimals: transfer.Decimals, TokenMetadataComplete: transfer.TokenMetadataComplete, TotalAmount: "0", EarliestBlock: transfer.BlockNumber, EarliestTime: transfer.BlockTime, LatestBlock: transfer.BlockNumber, LatestTime: transfer.BlockTime, LatestTransfer: transfer, Representative: transfer}
 			totals[other] = summary
 		}
 		left, _ := new(big.Int).SetString(summary.TotalAmount, 10)
 		right, _ := new(big.Int).SetString(transferAmount(transfer), 10)
 		summary.TotalAmount = new(big.Int).Add(left, right).String()
 		summary.TransferCount++
+		if transfer.BlockNumber < summary.EarliestBlock {
+			summary.EarliestBlock, summary.EarliestTime = transfer.BlockNumber, transfer.BlockTime
+		}
+		if transfer.BlockNumber > summary.LatestBlock {
+			summary.LatestBlock, summary.LatestTime, summary.LatestTransfer = transfer.BlockNumber, transfer.BlockTime, transfer
+		}
 		if compareTransferAmount(transfer, summary.Representative) > 0 {
 			summary.Representative = transfer
 		}

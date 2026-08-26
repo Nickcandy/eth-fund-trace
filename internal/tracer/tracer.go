@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/Nickcandy/eth-fund-trace/internal/chains"
 	"github.com/Nickcandy/eth-fund-trace/internal/ethaddr"
@@ -61,21 +62,25 @@ type BridgeEdge struct {
 	Path  []NodeRef            `json:"path"`
 }
 type Edge struct {
-	Chain                 string   `bson:"chain" json:"chain"`
-	From                  string   `bson:"from" json:"from"`
-	To                    string   `bson:"to" json:"to"`
-	AssetType             string   `bson:"assetType" json:"assetType"`
-	Asset                 string   `bson:"asset" json:"asset"`
-	Symbol                string   `bson:"symbol,omitempty" json:"symbol,omitempty"`
-	Decimals              int32    `bson:"decimals" json:"decimals"`
-	TokenMetadataComplete bool     `bson:"tokenMetadataComplete,omitempty" json:"tokenMetadataComplete"`
-	TotalAmount           string   `bson:"totalAmount" json:"totalAmount"`
-	TransferCount         int64    `bson:"transferCount" json:"transferCount"`
-	Kind                  string   `bson:"kind" json:"kind"`
-	Depth                 int      `bson:"depth" json:"depth"`
-	Path                  []string `bson:"path" json:"path"`
-	ConversionStatus      string   `bson:"conversionStatus,omitempty" json:"conversionStatus,omitempty"`
-	ConversionScanned     int      `bson:"conversionScanned,omitempty" json:"conversionScanned,omitempty"`
+	Chain                 string    `bson:"chain" json:"chain"`
+	From                  string    `bson:"from" json:"from"`
+	To                    string    `bson:"to" json:"to"`
+	AssetType             string    `bson:"assetType" json:"assetType"`
+	Asset                 string    `bson:"asset" json:"asset"`
+	Symbol                string    `bson:"symbol,omitempty" json:"symbol,omitempty"`
+	Decimals              int32     `bson:"decimals" json:"decimals"`
+	TokenMetadataComplete bool      `bson:"tokenMetadataComplete,omitempty" json:"tokenMetadataComplete"`
+	TotalAmount           string    `bson:"totalAmount" json:"totalAmount"`
+	TransferCount         int64     `bson:"transferCount" json:"transferCount"`
+	Kind                  string    `bson:"kind" json:"kind"`
+	Depth                 int       `bson:"depth" json:"depth"`
+	Path                  []string  `bson:"path" json:"path"`
+	FirstBlock            int64     `bson:"firstBlock,omitempty" json:"firstBlock,omitempty"`
+	FirstTime             time.Time `bson:"firstTime,omitempty" json:"firstTime,omitempty"`
+	LatestBlock           int64     `bson:"latestBlock,omitempty" json:"latestBlock,omitempty"`
+	LatestTime            time.Time `bson:"latestTime,omitempty" json:"latestTime,omitempty"`
+	ConversionStatus      string    `bson:"conversionStatus,omitempty" json:"conversionStatus,omitempty"`
+	ConversionScanned     int       `bson:"conversionScanned,omitempty" json:"conversionScanned,omitempty"`
 }
 type Result struct {
 	Nodes             []Node               `bson:"nodes" json:"nodes"`
@@ -303,7 +308,7 @@ func edgeFromSummary(summary store.CounterpartySummary, depth int, path []string
 	if kind == "" {
 		kind = "transfer"
 	}
-	return Edge{Chain: summary.Chain, From: summary.From, To: summary.To, AssetType: summary.AssetType, Asset: summary.Asset, Symbol: summary.Symbol, Decimals: summary.Decimals, TokenMetadataComplete: summary.TokenMetadataComplete, TotalAmount: summary.TotalAmount, TransferCount: summary.TransferCount, Kind: kind, Depth: depth, Path: path}
+	return Edge{Chain: summary.Chain, From: summary.From, To: summary.To, AssetType: summary.AssetType, Asset: summary.Asset, Symbol: summary.Symbol, Decimals: summary.Decimals, TokenMetadataComplete: summary.TokenMetadataComplete, TotalAmount: summary.TotalAmount, TransferCount: summary.TransferCount, Kind: kind, Depth: depth, Path: path, FirstBlock: summary.EarliestBlock, FirstTime: summary.EarliestTime, LatestBlock: summary.LatestBlock, LatestTime: summary.LatestTime}
 }
 
 func summaryAsset(summary store.CounterpartySummary) (string, string) {
@@ -323,7 +328,7 @@ func aggregateConversions(transfers []store.Transfer, topN int) map[string][]sto
 		key := strings.ToLower(transfer.From + "|" + transfer.To)
 		summary := byAsset[assetKey][key]
 		if summary == nil {
-			summary = &store.CounterpartySummary{Chain: transfer.Chain, ChainID: transfer.ChainID, From: transfer.From, To: transfer.To, AssetType: transfer.AssetType, Asset: transfer.Asset, Symbol: transfer.Symbol, Decimals: transfer.Decimals, TokenMetadataComplete: transfer.TokenMetadataComplete, TotalAmount: "0", Representative: transfer}
+			summary = &store.CounterpartySummary{Chain: transfer.Chain, ChainID: transfer.ChainID, From: transfer.From, To: transfer.To, AssetType: transfer.AssetType, Asset: transfer.Asset, Symbol: transfer.Symbol, Decimals: transfer.Decimals, TokenMetadataComplete: transfer.TokenMetadataComplete, TotalAmount: "0", EarliestBlock: transfer.BlockNumber, EarliestTime: transfer.BlockTime, LatestBlock: transfer.BlockNumber, LatestTime: transfer.BlockTime, LatestTransfer: transfer, Representative: transfer}
 			byAsset[assetKey][key] = summary
 		}
 		amount, ok := new(big.Int).SetString(transferAmount(transfer), 10)
@@ -333,6 +338,12 @@ func aggregateConversions(transfers []store.Transfer, topN int) map[string][]sto
 		total, _ := new(big.Int).SetString(summary.TotalAmount, 10)
 		summary.TotalAmount = total.Add(total, amount).String()
 		summary.TransferCount++
+		if transfer.BlockNumber < summary.EarliestBlock {
+			summary.EarliestBlock, summary.EarliestTime = transfer.BlockNumber, transfer.BlockTime
+		}
+		if transfer.BlockNumber > summary.LatestBlock {
+			summary.LatestBlock, summary.LatestTime, summary.LatestTransfer = transfer.BlockNumber, transfer.BlockTime, transfer
+		}
 	}
 	result := make(map[string][]store.CounterpartySummary, len(byAsset))
 	for asset, values := range byAsset {

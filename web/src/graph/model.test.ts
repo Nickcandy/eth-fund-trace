@@ -56,4 +56,14 @@ describe("buildGraphModel", () => {
     expect(model.nodes.find((node) => node.id === `base:${seed}`)?.hop).toBe(2);
     expect(model.nodes.find((node) => node.id === `base:${seed}`)?.risk).toBe("normal");
   });
+
+  it("treats null associations from historical propagation results as empty", () => {
+    expect(() => buildGraphModel(result(), { chain: "ethereum", address: seed }, null as never)).not.toThrow();
+  });
+
+  it("classifies transfer direction relative to the query center", () => {
+    const model = buildGraphModel(result(), { chain: "ethereum", address: seed });
+    expect(model.edges.find((edge) => edge.source.endsWith(upstream))?.flow).toBe("inbound");
+    expect(model.edges.find((edge) => edge.target.endsWith(downstream))?.flow).toBe("outbound");
+  });
 });

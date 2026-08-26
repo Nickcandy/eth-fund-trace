@@ -60,7 +60,7 @@ describe("API authentication", () => {
     )));
     vi.stubGlobal("fetch", fetchMock);
     const promise = api.syncJobs(Array.from({ length: 7 }, (_, index) => `job-${index + 1}`));
-    await vi.advanceTimersByTimeAsync(400);
+    await vi.advanceTimersByTimeAsync(1_200);
     const jobs = await promise;
     expect(jobs.map((job) => job.jobId)).toEqual(["job-1", "job-2", "job-4", "job-5", "job-6", "job-7"]);
     expect(fetchMock).toHaveBeenCalledTimes(7);

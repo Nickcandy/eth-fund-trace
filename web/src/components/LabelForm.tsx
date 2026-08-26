@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import type { Chain, LabelInput } from "../api/types";
 
-interface Props { chain: Chain; address: string; onSubmit: (input: LabelInput) => Promise<void> }
+interface Props { chain: Chain; address: string; onSubmit: (input: LabelInput) => Promise<boolean | void> }
 
 export function LabelForm({ chain, address, onSubmit }: Props) {
   const [state, setState] = useState<"idle" | "saving" | "success" | "error">("idle");
@@ -12,7 +12,7 @@ export function LabelForm({ chain, address, onSubmit }: Props) {
     setState("saving");
     setMessage("");
     try {
-      await onSubmit({
+      const reassessmentQueued = await onSubmit({
         chain,
         address,
         type: String(data.get("type")),
@@ -23,7 +23,7 @@ export function LabelForm({ chain, address, onSubmit }: Props) {
         evidence: lines(data.get("evidence")),
       });
       setState("success");
-      setMessage("标签已保存，重新追踪后传播生效");
+      setMessage(reassessmentQueued === false ? "标签已保存，风险重新评估提交失败" : "标签已保存，风险重新评估已提交");
     } catch (error) {
       setState("error");
       setMessage(error instanceof Error ? error.message : "标签保存失败");
