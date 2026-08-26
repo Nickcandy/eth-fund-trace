@@ -323,6 +323,50 @@ func TestM6M7TraceJobsAndLabels(t *testing.T) {
 	}
 }
 
+func TestPropagationJobResultDecodesAsJSONObject(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(os.Getenv("MONGO_URI")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Disconnect(context.Background())
+	db := client.Database("eth_fund_trace_propagation_result_test")
+	if err := db.Drop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s := New(db)
+	if err := s.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	job := PropagationJob{
+		IdempotencyKey: "result-shape", Chain: "ethereum", SourceAddress: "0x0000000000000000000000000000000000000001",
+		Status: "succeeded", Result: bson.D{{Key: "associations", Value: bson.A{}}, {Key: "propagationVersion", Value: "propagation-v2"}},
+	}
+	if err := s.CreatePropagationJob(ctx, &job); err != nil {
+		t.Fatal(err)
+	}
+	for name, load := range map[string]func() (PropagationJob, error){
+		"by ID":  func() (PropagationJob, error) { return s.GetPropagationJob(ctx, job.ID) },
+		"by key": func() (PropagationJob, error) { return s.FindPropagationJobByKey(ctx, job.IdempotencyKey) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			stored, err := load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, ok := stored.Result.(map[string]any)
+			if !ok {
+				t.Fatalf("result type = %T, want JSON object", stored.Result)
+			}
+			if _, ok := result["associations"].([]any); !ok {
+				t.Fatalf("associations type = %T, want array", result["associations"])
+			}
+		})
+	}
+}
+
 func TestM9CrossChainLinksAreIdempotentAndChainScoped(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

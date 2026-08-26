@@ -1,6 +1,6 @@
 import type {
   AddressProfile, AddressResponse, BridgeAnalysisInput, BridgeInput, BridgePage, BridgeSyncAccepted, CrossChainLink, EdgePage, Label, LabelInput,
-  SyncJob, TraceAccepted, TraceJob, TraceQuery, TransactionAnalysis,
+  PropagationJob, PropagationRequest, SyncJob, TraceAccepted, TraceJob, TraceQuery, TransactionAnalysis,
 } from "./types";
 
 export class ApiError extends Error {
@@ -52,6 +52,9 @@ export const api = {
   traceJob: (id: string, signal?: AbortSignal) => request<TraceJob>(`/api/v1/trace-jobs/${encodeURIComponent(id)}`, { signal }),
   stopTraceJob: (id: string) => request<TraceJob>(`/api/v1/trace-jobs/${encodeURIComponent(id)}/stop`, { method: "POST" }),
   latestTraceJob: (query: TraceQuery, signal?: AbortSignal) => request<TraceJob>(`/api/v1/trace-jobs/latest?${queryString(query)}`, { signal }),
+  createPropagation: (input: PropagationRequest) => request<PropagationJob>("/api/v1/propagation-jobs", { method: "POST", body: JSON.stringify(input) }),
+  propagationJob: (id: string, signal?: AbortSignal) => request<PropagationJob>(`/api/v1/propagation-jobs/${encodeURIComponent(id)}`, { signal }),
+  stopPropagationJob: (id: string) => request<PropagationJob>(`/api/v1/propagation-jobs/${encodeURIComponent(id)}/stop`, { method: "POST" }),
   createSync: (chain: string, address: string) => request<SyncJob>("/api/v1/sync", { method: "POST", body: JSON.stringify({ chain, address, neighborLimit: 0 }) }),
   syncJob: (id: string, signal?: AbortSignal) => request<SyncJob>(`/api/v1/sync-jobs/${encodeURIComponent(id)}`, { signal }),
   syncJobs: requestSyncJobs,

@@ -1,0 +1,60 @@
+.propagation-control {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 7px;
+  align-items: end;
+}
+
+.propagation-control h3,
+.propagation-control p {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.propagation-control label {
+  display: grid;
+  gap: 5px;
+}
+
+.propagation-control label span,
+.propagation-state {
+  font-size: 9px;
+  color: var(--muted);
+}
+
+.propagation-control select {
+  height: 31px;
+  min-width: 0;
+  color: #dae1e8;
+  background: #0f1317;
+  border: 1px solid #343c46;
+  border-radius: 4px;
+  padding: 0 7px;
+}
+
+.secondary-command,
+.icon-command {
+  height: 31px !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid #3b4652 !important;
+  border-radius: 4px;
+  background: #202832 !important;
+  color: #d8e0e8 !important;
+  padding: 0 9px;
+}
+
+.secondary-command:disabled {
+  opacity: 0.45;
+}
+
+.icon-command {
+  width: 31px;
+  padding: 0;
+}
+
+.propagation-state.error {
+  color: #e56a6a;
+}

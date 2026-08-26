@@ -23,6 +23,8 @@ const (
 	SyncJobsCollection            = "sync_jobs"
 	ProfilesCollection            = "address_profiles"
 	TraceJobsCollection           = "trace_jobs"
+	PropagationJobsCollection     = "propagation_jobs"
+	RiskAssociationsCollection    = "inferred_risk_associations"
 	CrossChainLinksCollection     = "cross_chain_links"
 	TransactionAnalysesCollection = "transaction_analyses"
 	PoolMetadataCollection        = "pool_metadata"
@@ -37,7 +39,7 @@ func New(db *mongo.Database) *Store {
 }
 
 func (s *Store) Initialize(ctx context.Context) error {
-	for _, name := range []string{AddressesCollection, TransfersCollection, LabelsCollection, SyncJobsCollection, ProfilesCollection, TraceJobsCollection, CrossChainLinksCollection, TransactionAnalysesCollection, PoolMetadataCollection} {
+	for _, name := range []string{AddressesCollection, TransfersCollection, LabelsCollection, SyncJobsCollection, ProfilesCollection, TraceJobsCollection, PropagationJobsCollection, RiskAssociationsCollection, CrossChainLinksCollection, TransactionAnalysesCollection, PoolMetadataCollection} {
 		if err := s.ensureCollection(ctx, name); err != nil {
 			return err
 		}
@@ -85,6 +87,14 @@ func indexModels() map[string][]mongo.IndexModel {
 		TraceJobsCollection: {
 			{Keys: bson.D{{Key: "status", Value: 1}, {Key: "createdAt", Value: 1}}, Options: options.Index().SetName("idx_trace_jobs_status_created")},
 			{Keys: bson.D{{Key: "chain", Value: 1}, {Key: "seedAddress", Value: 1}, {Key: "createdAt", Value: -1}}, Options: options.Index().SetName("idx_trace_jobs_seed_created")},
+		},
+		PropagationJobsCollection: {
+			{Keys: bson.D{{Key: "idempotencyKey", Value: 1}}, Options: options.Index().SetUnique(true).SetName("uq_propagation_jobs_idempotency")},
+			{Keys: bson.D{{Key: "propagationVersion", Value: 1}, {Key: "status", Value: 1}, {Key: "leaseUntil", Value: 1}, {Key: "createdAt", Value: 1}}, Options: options.Index().SetName("idx_propagation_jobs_claim")},
+		},
+		RiskAssociationsCollection: {
+			{Keys: bson.D{{Key: "sourceLabelId", Value: 1}, {Key: "targetChain", Value: 1}, {Key: "targetAddress", Value: 1}, {Key: "direction", Value: 1}, {Key: "asset", Value: 1}, {Key: "propagationVersion", Value: 1}, {Key: "dataThroughBlock", Value: 1}}, Options: options.Index().SetUnique(true).SetName("uq_risk_associations_version")},
+			{Keys: bson.D{{Key: "targetChain", Value: 1}, {Key: "targetAddress", Value: 1}, {Key: "stale", Value: 1}, {Key: "score", Value: -1}}, Options: options.Index().SetName("idx_risk_associations_target")},
 		},
 		CrossChainLinksCollection: {
 			{Keys: bson.D{{Key: "sourceChain", Value: 1}, {Key: "sourceTxHash", Value: 1}, {Key: "sourceLogIndex", Value: 1}, {Key: "targetChain", Value: 1}, {Key: "targetTxHash", Value: 1}, {Key: "targetLogIndex", Value: 1}}, Options: options.Index().SetUnique(true).SetName("uq_cross_chain_link_evidence")},
@@ -352,6 +362,119 @@ func (s *Store) ListLabels(ctx context.Context, chain, address string) ([]Label,
 	return result, cursor.All(ctx, &result)
 }
 
+// ListRiskLabels returns bounded deterministic high-risk labels for forced candidates.
+func (s *Store) ListRiskLabels(ctx context.Context, chain string, limit int64) ([]Label, error) {
+	filter := bson.D{{Key: "chain", Value: chain}, {Key: "source", Value: bson.D{{Key: "$in", Value: bson.A{"manual", "public-list"}}}}, {Key: "riskLevel", Value: bson.D{{Key: "$in", Value: bson.A{"medium", "high"}}}}}
+	cursor, err := s.db.Collection(LabelsCollection).Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "observedAt", Value: -1}}).SetLimit(limit))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = cursor.Close(ctx) }()
+	var labels []Label
+	return labels, cursor.All(ctx, &labels)
+}
+
+// CreatePropagationJob inserts a new idempotent propagation request.
+func (s *Store) CreatePropagationJob(ctx context.Context, job *PropagationJob) error {
+	result, err := s.db.Collection(PropagationJobsCollection).InsertOne(ctx, job)
+	if err != nil {
+		return err
+	}
+	job.ID = result.InsertedID.(primitive.ObjectID)
+	return nil
+}
+
+// FindPropagationJobByKey returns an existing idempotent request.
+func (s *Store) FindPropagationJobByKey(ctx context.Context, key string) (PropagationJob, error) {
+	var job PropagationJob
+	err := s.db.Collection(PropagationJobsCollection).FindOne(ctx, bson.D{{Key: "idempotencyKey", Value: key}}).Decode(&job)
+	job.Result = normalizeBSON(job.Result)
+	return job, err
+}
+
+// GetPropagationJob returns one propagation job.
+func (s *Store) GetPropagationJob(ctx context.Context, id primitive.ObjectID) (PropagationJob, error) {
+	var job PropagationJob
+	err := s.db.Collection(PropagationJobsCollection).FindOne(ctx, bson.D{{Key: "_id", Value: id}}).Decode(&job)
+	job.Result = normalizeBSON(job.Result)
+	return job, err
+}
+
+// ClaimPropagationJob atomically leases the oldest runnable job.
+func (s *Store) ClaimPropagationJob(ctx context.Context, now, leaseUntil time.Time, maxRetries int) (PropagationJob, error) {
+	filter := bson.D{{Key: "propagationVersion", Value: "propagation-v3"}, {Key: "retryCount", Value: bson.D{{Key: "$lt", Value: maxRetries}}}, {Key: "$or", Value: bson.A{
+		bson.D{{Key: "status", Value: "queued"}},
+		bson.D{{Key: "status", Value: "running"}, {Key: "leaseUntil", Value: bson.D{{Key: "$lte", Value: now}}}},
+		bson.D{{Key: "status", Value: "failed"}, {Key: "retryable", Value: true}},
+	}}}
+	update := bson.D{{Key: "$set", Value: bson.D{{Key: "status", Value: "running"}, {Key: "leaseUntil", Value: leaseUntil}, {Key: "startedAt", Value: now}}}, {Key: "$inc", Value: bson.D{{Key: "retryCount", Value: 1}}}}
+	var job PropagationJob
+	err := s.db.Collection(PropagationJobsCollection).FindOneAndUpdate(ctx, filter, update, options.FindOneAndUpdate().SetSort(bson.D{{Key: "createdAt", Value: 1}}).SetReturnDocument(options.After)).Decode(&job)
+	return job, err
+}
+
+// SupersedeLegacyPropagationJobs prevents workers from executing obsolete rules.
+func (s *Store) SupersedeLegacyPropagationJobs(ctx context.Context, now time.Time, version string) error {
+	filter := bson.D{{Key: "propagationVersion", Value: bson.D{{Key: "$ne", Value: version}}}, {Key: "status", Value: bson.D{{Key: "$in", Value: bson.A{"queued", "running", "failed"}}}}}
+	update := bson.D{{Key: "$set", Value: bson.D{{Key: "status", Value: "failed"}, {Key: "errorCode", Value: "superseded_rule_version"}, {Key: "error", Value: "superseded propagation rule version"}, {Key: "retryable", Value: false}, {Key: "finishedAt", Value: now}, {Key: "leaseUntil", Value: time.Time{}}}}}
+	_, err := s.db.Collection(PropagationJobsCollection).UpdateMany(ctx, filter, update)
+	return err
+}
+
+// ExtendPropagationLease prevents an active job from being reclaimed.
+func (s *Store) ExtendPropagationLease(ctx context.Context, id primitive.ObjectID, leaseUntil time.Time) error {
+	result, err := s.db.Collection(PropagationJobsCollection).UpdateOne(ctx, bson.D{{Key: "_id", Value: id}, {Key: "status", Value: "running"}}, bson.D{{Key: "$set", Value: bson.D{{Key: "leaseUntil", Value: leaseUntil}}}})
+	if err == nil && result.MatchedCount == 0 {
+		return context.Canceled
+	}
+	return err
+}
+
+// UpdatePropagationProgress persists bounded task progress without replacing its lease.
+func (s *Store) UpdatePropagationProgress(ctx context.Context, id primitive.ObjectID, hop, nodes, edges int) error {
+	result, err := s.db.Collection(PropagationJobsCollection).UpdateOne(ctx, bson.D{{Key: "_id", Value: id}, {Key: "status", Value: "running"}}, bson.D{{Key: "$set", Value: bson.D{{Key: "currentHop", Value: hop}, {Key: "visitedNodes", Value: nodes}, {Key: "edgeCount", Value: edges}}}})
+	if err == nil && result.MatchedCount == 0 {
+		return context.Canceled
+	}
+	return err
+}
+
+// SavePropagationJob replaces a job after checking it was not stopped.
+func (s *Store) SavePropagationJob(ctx context.Context, job PropagationJob) error {
+	result, err := s.db.Collection(PropagationJobsCollection).ReplaceOne(ctx, bson.D{{Key: "_id", Value: job.ID}, {Key: "status", Value: bson.D{{Key: "$ne", Value: "stopped"}}}}, job)
+	if err == nil && result.MatchedCount == 0 {
+		return context.Canceled
+	}
+	return err
+}
+
+// StopPropagationJob marks a runnable job as stopped.
+func (s *Store) StopPropagationJob(ctx context.Context, id primitive.ObjectID, now time.Time) (PropagationJob, error) {
+	update := bson.D{{Key: "$set", Value: bson.D{{Key: "status", Value: "stopped"}, {Key: "errorCode", Value: "stopped_by_user"}, {Key: "error", Value: "stopped by user"}, {Key: "retryable", Value: false}, {Key: "finishedAt", Value: now}}}}
+	var job PropagationJob
+	filter := bson.D{{Key: "_id", Value: id}, {Key: "status", Value: bson.D{{Key: "$in", Value: bson.A{"queued", "running", "failed"}}}}}
+	err := s.db.Collection(PropagationJobsCollection).FindOneAndUpdate(ctx, filter, update, options.FindOneAndUpdate().SetReturnDocument(options.After)).Decode(&job)
+	return job, err
+}
+
+// UpsertRiskAssociation saves a versioned inferred result without touching labels.
+func (s *Store) UpsertRiskAssociation(ctx context.Context, association InferredRiskAssociation) error {
+	filter := bson.D{{Key: "sourceLabelId", Value: association.SourceLabelID}, {Key: "targetChain", Value: association.TargetChain}, {Key: "targetAddress", Value: association.TargetAddress}, {Key: "direction", Value: association.Direction}, {Key: "asset", Value: association.Asset}, {Key: "propagationVersion", Value: association.PropagationVersion}, {Key: "dataThroughBlock", Value: association.DataThroughBlock}}
+	association.ID = primitive.NilObjectID
+	_, err := s.db.Collection(RiskAssociationsCollection).ReplaceOne(ctx, filter, association, options.Replace().SetUpsert(true))
+	return err
+}
+
+// MarkRiskAssociationsStale expires results outside the newly completed version.
+func (s *Store) MarkRiskAssociationsStale(ctx context.Context, targetChain, targetAddress, version string, block int64) error {
+	filter := bson.D{{Key: "targetChain", Value: targetChain}, {Key: "targetAddress", Value: targetAddress}, {Key: "stale", Value: false}, {Key: "$or", Value: bson.A{
+		bson.D{{Key: "propagationVersion", Value: bson.D{{Key: "$ne", Value: version}}}},
+		bson.D{{Key: "dataThroughBlock", Value: bson.D{{Key: "$ne", Value: block}}}},
+	}}}
+	_, err := s.db.Collection(RiskAssociationsCollection).UpdateMany(ctx, filter, bson.D{{Key: "$set", Value: bson.D{{Key: "stale", Value: true}}}})
+	return err
+}
+
 func (s *Store) CreateTraceJob(ctx context.Context, job *TraceJob) error {
 	if job.ID.IsZero() {
 		job.ID = primitive.NewObjectID()
@@ -612,6 +735,178 @@ func (s *Store) TopCounterparties(ctx context.Context, query CounterpartyQuery) 
 	return result, nil
 }
 
+// PropagationCandidates scans one indexed relationship set and retains bounded
+// amount, frequency, recency, and forced-address channels.
+func (s *Store) PropagationCandidates(ctx context.Context, query CandidateQuery) (CandidateResult, error) {
+	if query.PerChannelLimit < 1 || query.Limit < 1 || query.Address == "" || (query.Direction != "in" && query.Direction != "out") || !validCounterpartyAssetMode(query.AssetMode) {
+		return CandidateResult{}, errors.New("invalid propagation candidate query")
+	}
+	base := CounterpartyQuery{Chain: query.Chain, Address: query.Address, Direction: query.Direction, AssetMode: query.AssetMode, Asset: query.Asset}
+	filter, counterparty := counterpartyFilter(base)
+	if query.ToBlock > 0 {
+		filter = append(filter, bson.E{Key: "blockNumber", Value: bson.D{{Key: "$lte", Value: query.ToBlock}}})
+	}
+	projection := bson.D{{Key: "chain", Value: 1}, {Key: "chainId", Value: 1}, {Key: "txHash", Value: 1}, {Key: "blockNumber", Value: 1}, {Key: "blockTime", Value: 1}, {Key: "from", Value: 1}, {Key: "to", Value: 1}, {Key: "assetType", Value: 1}, {Key: "asset", Value: 1}, {Key: "symbol", Value: 1}, {Key: "decimals", Value: 1}, {Key: "amount", Value: 1}, {Key: "tokenValue", Value: 1}, {Key: "transferKind", Value: 1}, {Key: "source", Value: 1}, {Key: "traceId", Value: 1}, {Key: "logIndex", Value: 1}}
+	cursor, err := s.db.Collection(TransfersCollection).Find(ctx, filter, options.Find().SetSort(bson.D{{Key: counterparty, Value: 1}}).SetProjection(projection).SetHint(counterpartyIndexName(base)).SetBatchSize(1000))
+	if err != nil {
+		return CandidateResult{}, fmt.Errorf("find propagation candidates: %w", err)
+	}
+	defer func() { _ = cursor.Close(ctx) }()
+	forced := make(map[string]struct{}, len(query.ForcedCounterparties))
+	for _, address := range query.ForcedCounterparties {
+		forced[strings.ToLower(address)] = struct{}{}
+	}
+	byAmount := &rankedSummaryHeap{better: summaryBetter}
+	byCount := &rankedSummaryHeap{better: func(left, right CounterpartySummary) bool {
+		if left.TransferCount != right.TransferCount {
+			return left.TransferCount > right.TransferCount
+		}
+		return summaryBetter(left, right)
+	}}
+	byRecent := &rankedSummaryHeap{better: func(left, right CounterpartySummary) bool {
+		if left.LatestBlock != right.LatestBlock {
+			return left.LatestBlock > right.LatestBlock
+		}
+		return summaryBetter(left, right)
+	}}
+	heap.Init(byAmount)
+	heap.Init(byCount)
+	heap.Init(byRecent)
+	forcedItems := make(map[string]CounterpartySummary)
+	totalAmount := new(big.Int)
+	totalCounterparties := 0
+	var current CounterpartySummary
+	currentTotal := new(big.Int)
+	hasCurrent := false
+	flush := func() {
+		if !hasCurrent {
+			return
+		}
+		other := strings.ToLower(summaryCounterparty(current, query.Direction))
+		if other == strings.ToLower(query.Address) {
+			return
+		}
+		current.TotalAmount = currentTotal.String()
+		totalCounterparties++
+		totalAmount.Add(totalAmount, currentTotal)
+		keepRankedSummary(byAmount, current, query.PerChannelLimit)
+		keepRankedSummary(byCount, current, query.PerChannelLimit)
+		keepRankedSummary(byRecent, current, query.PerChannelLimit)
+		if _, ok := forced[other]; ok {
+			forcedItems[other] = current
+		}
+	}
+	for cursor.Next(ctx) {
+		var transfer Transfer
+		if err := cursor.Decode(&transfer); err != nil {
+			return CandidateResult{}, fmt.Errorf("decode propagation candidate: %w", err)
+		}
+		amount, ok := new(big.Int).SetString(transferAmountString(transfer), 10)
+		if !ok || amount.Sign() < 0 {
+			return CandidateResult{}, fmt.Errorf("invalid transfer amount for %s", transfer.TxHash)
+		}
+		other := transfer.To
+		if query.Direction == "in" {
+			other = transfer.From
+		}
+		if !hasCurrent || !strings.EqualFold(summaryCounterparty(current, query.Direction), other) {
+			flush()
+			current = CounterpartySummary{Chain: transfer.Chain, ChainID: transfer.ChainID, From: transfer.From, To: transfer.To, AssetType: transfer.AssetType, Asset: transfer.Asset, Symbol: transfer.Symbol, Decimals: transfer.Decimals, LatestTime: transfer.BlockTime, LatestTransfer: transfer, Representative: transfer}
+			currentTotal.SetInt64(0)
+			hasCurrent = true
+		}
+		currentTotal.Add(currentTotal, amount)
+		current.TransferCount++
+		if transfer.BlockNumber > current.LatestBlock {
+			current.LatestBlock = transfer.BlockNumber
+			current.LatestTime, current.LatestTransfer = transfer.BlockTime, transfer
+		}
+		if transferBetter(transfer, current.Representative) {
+			current.Representative = transfer
+		}
+	}
+	if err := cursor.Err(); err != nil {
+		return CandidateResult{}, fmt.Errorf("scan propagation candidates: %w", err)
+	}
+	flush()
+	items := mergeCandidateChannels(query.Direction, query.Limit, forcedItems, rankedSummaries(byAmount), rankedSummaries(byCount), rankedSummaries(byRecent))
+	selectedAmount := new(big.Int)
+	for _, item := range items {
+		value, _ := new(big.Int).SetString(item.TotalAmount, 10)
+		selectedAmount.Add(selectedAmount, value)
+	}
+	coverage := CandidateCoverage{SelectedCounterparties: len(items), TotalCounterparties: totalCounterparties, SelectedAmount: selectedAmount.String(), TotalAmount: totalAmount.String(), AmountCoverage: "1.0000"}
+	if totalAmount.Sign() > 0 {
+		coverage.AmountCoverage = new(big.Rat).SetFrac(selectedAmount, totalAmount).FloatString(4)
+	}
+	if len(items) < totalCounterparties {
+		coverage.Truncated, coverage.TruncationReason = true, "per_node_candidate_cap"
+	}
+	return CandidateResult{Items: items, Coverage: coverage}, nil
+}
+
+type rankedSummaryHeap struct {
+	items  []CounterpartySummary
+	better func(CounterpartySummary, CounterpartySummary) bool
+}
+
+func (h rankedSummaryHeap) Len() int           { return len(h.items) }
+func (h rankedSummaryHeap) Less(i, j int) bool { return h.better(h.items[j], h.items[i]) }
+func (h rankedSummaryHeap) Swap(i, j int)      { h.items[i], h.items[j] = h.items[j], h.items[i] }
+func (h *rankedSummaryHeap) Push(value any)    { h.items = append(h.items, value.(CounterpartySummary)) }
+func (h *rankedSummaryHeap) Pop() any {
+	last := h.items[len(h.items)-1]
+	h.items = h.items[:len(h.items)-1]
+	return last
+}
+
+func keepRankedSummary(selected *rankedSummaryHeap, candidate CounterpartySummary, limit int) {
+	if selected.Len() < limit {
+		heap.Push(selected, candidate)
+		return
+	}
+	if selected.better(candidate, selected.items[0]) {
+		selected.items[0] = candidate
+		heap.Fix(selected, 0)
+	}
+}
+
+func rankedSummaries(selected *rankedSummaryHeap) []CounterpartySummary {
+	result := append([]CounterpartySummary(nil), selected.items...)
+	sort.Slice(result, func(i, j int) bool { return selected.better(result[i], result[j]) })
+	return result
+}
+
+func mergeCandidateChannels(direction string, limit int, forced map[string]CounterpartySummary, channels ...[]CounterpartySummary) []CounterpartySummary {
+	result := make([]CounterpartySummary, 0, limit)
+	seen := make(map[string]struct{}, limit)
+	forcedKeys := make([]string, 0, len(forced))
+	for address := range forced {
+		forcedKeys = append(forcedKeys, address)
+	}
+	sort.Strings(forcedKeys)
+	appendItem := func(item CounterpartySummary) {
+		key := strings.ToLower(summaryCounterparty(item, direction))
+		if len(result) >= limit {
+			return
+		}
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		result = append(result, item)
+	}
+	for _, key := range forcedKeys {
+		appendItem(forced[key])
+	}
+	for _, channel := range channels {
+		for _, item := range channel {
+			appendItem(item)
+		}
+	}
+	return result
+}
+
 func (s *Store) TopRelationshipTransfers(ctx context.Context, query CounterpartyQuery, limit int) ([]Transfer, error) {
 	if limit < 1 || query.Counterparty == "" || !validCounterpartyAssetMode(query.AssetMode) {
 		return nil, errors.New("invalid relationship query")
@@ -723,7 +1018,10 @@ func summaryBetter(left, right CounterpartySummary) bool {
 	if comparison := compareUnsignedDecimal(left.TotalAmount, right.TotalAmount); comparison != 0 {
 		return comparison > 0
 	}
-	return strings.ToLower(left.From+left.To) < strings.ToLower(right.From+right.To)
+	if left.From != right.From {
+		return left.From < right.From
+	}
+	return left.To < right.To
 }
 func summaryCounterparty(summary CounterpartySummary, direction string) string {
 	if direction == "in" {
@@ -741,7 +1039,16 @@ func transferBetter(left, right Transfer) bool {
 	if comparison := compareUnsignedDecimal(transferAmountString(left), transferAmountString(right)); comparison != 0 {
 		return comparison > 0
 	}
-	return strings.Join([]string{left.TxHash, left.Source, left.TraceID, fmt.Sprint(left.LogIndex)}, "|") < strings.Join([]string{right.TxHash, right.Source, right.TraceID, fmt.Sprint(right.LogIndex)}, "|")
+	if left.TxHash != right.TxHash {
+		return left.TxHash < right.TxHash
+	}
+	if left.Source != right.Source {
+		return left.Source < right.Source
+	}
+	if left.TraceID != right.TraceID {
+		return left.TraceID < right.TraceID
+	}
+	return left.LogIndex < right.LogIndex
 }
 
 func compareUnsignedDecimal(left, right string) int {

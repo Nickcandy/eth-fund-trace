@@ -133,6 +133,41 @@ export interface TraceJob {
 
 export interface TraceAccepted { traceJobId: string; status: JobStatus }
 
+export interface PropagationCoverage {
+  chain: Chain; address: string; direction: "in" | "out"; asset: string;
+  selectedCounterparties: number; totalCounterparties: number; selectedAmount: string; totalAmount: string;
+  amountCoverage: string; truncated: boolean; truncationReason?: string;
+  latestTime?: string; latestTxHash?: string;
+}
+
+export interface ScoreFactors { sourceBase: number; labelConfidence: number; hopFactor: number; timeFactor: number; amountFactor: number; protocolFactor: number }
+export interface PathEvidence { nodes: string[]; transactions: Array<{ chain: Chain; txHash: string; blockNumber: number; blockTime?: string; from: string; to: string; amount: string; protocol?: string }>; factors: ScoreFactors; score: number }
+export interface NodeRiskAssessment { chain: Chain; address: string; status: "complete" | "partial" | "unknown"; score: number; level: string; directRisk: { present: boolean; score: number; labels: Label[] }; associations: RiskAssociation[] }
+
+export interface RiskAssociation {
+  sourceLabelId: string; sourceAddress: string; sourceType: string; targetChain: Chain; targetAddress: string;
+  direction: "in" | "out"; asset: string; confidence: number; score: number; distance: number;
+  level: "strong" | "medium" | "weak"; path: PathEvidence; paths: string[][]; txHashes: string[][]; cycleDetected?: boolean;
+}
+
+export interface PropagationResult {
+  status: "complete" | "partial" | "unknown"; score: number; level: string; directRisk: { present: boolean; score: number; labels: Label[] };
+  nodes: NodeRiskAssessment[]; associations: RiskAssociation[]; coverage: PropagationCoverage[]; missingAddresses: string[]; candidateCoverage: number;
+  ruleVersion: "risk-association-v2"; propagationVersion: "propagation-v3"; dataThroughBlock: number; visitedNodes: number; edgeCount: number;
+  truncated: boolean; truncationReason?: string;
+}
+
+export interface PropagationJob {
+  id: string; chain: Chain; targetAddress: string; asset: string; direction: Direction;
+  status: Exclude<JobStatus, "waiting_sync">; maxHops: number; maxNodes: number; maxEdges: number;
+  perNodeCandidateCap: number; maxPathsPerTarget: number; currentHop: number; visitedNodes: number; edgeCount: number;
+  dataThroughBlock: number; ruleVersion: string; propagationVersion: string; truncated: boolean; truncationReason?: string;
+  retryCount: number; createdAt: string; startedAt?: string; finishedAt?: string; result?: PropagationResult;
+  errorCode?: string; error?: string; retryable: boolean;
+}
+
+export interface PropagationRequest { chain: Chain; targetAddress: string; direction: Direction; asset: string }
+
 export interface SyncJob {
   jobId: string; chain: Chain; address: string; status: string; createdAt: string; startedAt?: string; finishedAt?: string;
   safeHead: number; totalAddresses: number; completedAddresses: number; processedAddresses: number; cachedAddresses: number; fetched: number;

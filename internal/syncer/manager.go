@@ -50,6 +50,7 @@ type Request struct {
 
 type Config struct {
 	CacheTTL               time.Duration
+	DisableCache           bool
 	Confirmations          int64
 	QueueSize              int
 	InternalLookbackBlocks int64
@@ -327,7 +328,7 @@ func (m *Manager) syncAddress(ctx context.Context, source Source, chainID int64,
 		haveInternalFrom, haveInternalTo = address.EarliestSyncedBlock, address.LatestSyncedBlock
 	}
 	internalCached := exists && haveInternalFrom <= cacheInternalFrom && haveInternalTo >= address.LatestSyncedBlock
-	if exists && address.SyncStatus == "synced" && cacheHistoryFrom >= address.EarliestSyncedBlock && internalCached && now.Sub(address.LastSyncedAt) < m.config.CacheTTL {
+	if !m.config.DisableCache && exists && address.SyncStatus == "synced" && cacheHistoryFrom >= address.EarliestSyncedBlock && internalCached && now.Sub(address.LastSyncedAt) < m.config.CacheTTL {
 		if m.config.AfterAddressSynced != nil {
 			if err := m.config.AfterAddressSynced(ctx, request.Chain, request.Address); err != nil {
 				return addressResult{}, err

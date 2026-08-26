@@ -2,9 +2,9 @@
 
 ## 1. 目标与范围
 
-M11 第一阶段分析 Ethereum Mainnet 上的 Uniswap V3、Universal Router 和 WETH。输入一个已确认的交易哈希，输出发起地址、入口合约、经过验证的成交池、逐段资产输入输出、包装/解包事件和证据质量，并允许从明确的输出地址继续现有地址追踪。
+当前范围分析 Ethereum Mainnet 上的 Uniswap V3、Universal Router 和 WETH。输入一个已确认的交易哈希，输出发起地址、入口合约、经过验证的成交池、逐段资产输入输出、包装/解包事件和证据质量，并允许从明确的输出地址继续现有地址追踪。
 
-本阶段不支持 Uniswap V2/V4、1inch、Curve、Balancer、CowSwap 或自动跨链识别，也不把时间相关路径描述成逐币归因证明。
+当前不支持 Uniswap V2/V4、1inch、Curve、Balancer、CowSwap 或自动跨链识别，也不把时间相关路径描述成逐币归因证明。
 
 ## 2. 事实与解释
 
@@ -76,7 +76,7 @@ pool_metadata:         unique(chain, pool)
 GET /api/v1/transactions/:txHash?chain=ethereum
 ```
 
-成功返回单个 `TransactionAnalysis`。错误覆盖：无效参数、交易不存在、Receipt 未确认、上游限流、上游不可用和内部错误。现有 API 使用嵌套错误 envelope，本阶段保持兼容，不在功能开发中迁移全部错误格式。
+成功返回单个 `TransactionAnalysis`。错误覆盖：无效参数、交易不存在、Receipt 未确认、上游限流、上游不可用和内部错误。接口保持现有嵌套错误 envelope。
 
 ## 7. 前端闭环
 

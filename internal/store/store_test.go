@@ -87,6 +87,7 @@ func TestModelBSONFields(t *testing.T) {
 		{name: "sync job", model: SyncJob{}, required: []string{"chain", "chainId", "address", "status", "createdAt", "fetched"}},
 		{name: "address profile", model: AddressProfile{}, required: []string{"chain", "chainId", "address", "ruleVersion", "dataThroughBlock", "features", "score", "classification", "suspectedHotWallet", "computedAt"}},
 		{name: "trace job", model: TraceJob{}, required: []string{"chain", "seedAddress", "direction", "depth", "topN", "status", "ruleVersion"}},
+		{name: "propagation job", model: PropagationJob{}, required: []string{"chain", "targetAddress", "asset", "direction", "status", "maxHops", "maxNodes", "maxEdges", "perNodeCandidateCap", "maxPathsPerTarget", "ruleVersion", "propagationVersion"}},
 		{name: "transaction analysis", model: TransactionAnalysis{}, required: []string{"chain", "chainId", "txHash", "value", "transfers", "swaps", "wraps", "quality", "analyzedAt"}},
 		{name: "pool metadata", model: PoolMetadata{}, required: []string{"chain", "pool", "token0", "token1", "fee", "factory", "verified", "observedAt"}},
 	}
@@ -110,7 +111,7 @@ func TestModelBSONFields(t *testing.T) {
 }
 
 func TestCollectionNames(t *testing.T) {
-	if AddressesCollection != "addresses" || TransfersCollection != "transfers" || LabelsCollection != "labels" || SyncJobsCollection != "sync_jobs" || ProfilesCollection != "address_profiles" || TraceJobsCollection != "trace_jobs" || TransactionAnalysesCollection != "transaction_analyses" || PoolMetadataCollection != "pool_metadata" {
+	if AddressesCollection != "addresses" || TransfersCollection != "transfers" || LabelsCollection != "labels" || SyncJobsCollection != "sync_jobs" || ProfilesCollection != "address_profiles" || TraceJobsCollection != "trace_jobs" || PropagationJobsCollection != "propagation_jobs" || RiskAssociationsCollection != "inferred_risk_associations" || TransactionAnalysesCollection != "transaction_analyses" || PoolMetadataCollection != "pool_metadata" {
 		t.Fatal("unexpected collection name")
 	}
 }
@@ -132,7 +133,7 @@ func TestIndexModels(t *testing.T) {
 	if unique := indexes[LabelsCollection][0].Options.Unique; unique == nil || !*unique {
 		t.Fatal("label identity index must be unique")
 	}
-	for _, collection := range []string{TransactionAnalysesCollection, PoolMetadataCollection} {
+	for _, collection := range []string{PropagationJobsCollection, RiskAssociationsCollection, TransactionAnalysesCollection, PoolMetadataCollection} {
 		if unique := indexes[collection][0].Options.Unique; unique == nil || !*unique {
 			t.Fatalf("%s identity index must be unique", collection)
 		}
@@ -163,5 +164,29 @@ func TestLegacySyncCheckpointsResumeWithinObservedRange(t *testing.T) {
 	}
 	if _, found := got["tokentx"]; found {
 		t.Fatalf("future action must not have a checkpoint: %v", got)
+	}
+}
+
+func TestMergeCandidateChannelsForcesRiskAddressBeforeCap(t *testing.T) {
+	forcedAddress := "0x0000000000000000000000000000000000000099"
+	forced := CounterpartySummary{From: "0x1", To: forcedAddress, TotalAmount: "1"}
+	amount := []CounterpartySummary{{From: "0x1", To: "0x2", TotalAmount: "100"}, {From: "0x1", To: "0x3", TotalAmount: "90"}}
+	result := mergeCandidateChannels("out", 2, map[string]CounterpartySummary{forcedAddress: forced}, amount)
+	if len(result) != 2 || result[0].To != forcedAddress || result[1].To != "0x2" {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func BenchmarkRetainSummaryMillionRows(b *testing.B) {
+	for range b.N {
+		items := &rankedSummaryHeap{better: summaryBetter}
+		heap.Init(items)
+		candidate := CounterpartySummary{From: "0x1", To: "0x2", TotalAmount: "1"}
+		for range 1_000_000 {
+			keepRankedSummary(items, candidate, 20)
+		}
+		if items.Len() != 20 {
+			b.Fatalf("retained=%d", items.Len())
+		}
 	}
 }

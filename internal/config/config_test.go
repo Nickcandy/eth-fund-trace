@@ -81,3 +81,11 @@ func TestLoadEnvironment(t *testing.T) {
 		t.Fatalf("unexpected environment config: %+v", got)
 	}
 }
+
+func TestLoadAllowsDisabledSyncCache(t *testing.T) {
+	t.Setenv("SYNC_CACHE_TTL_MINUTES", "0")
+
+	if got := Load().SyncCacheTTLMinutes; got != 0 {
+		t.Fatalf("SyncCacheTTLMinutes = %d, want 0", got)
+	}
+}

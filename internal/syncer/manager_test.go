@@ -304,6 +304,33 @@ func TestManagerSyncsSeedAndReusesFreshCache(t *testing.T) {
 	}
 }
 
+func TestManagerSyncsSeedWithoutCache(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	source := &fakeSource{latest: 100}
+	repository := newMemoryRepository()
+	manager := New(source, repository, Config{
+		DisableCache: true, Confirmations: 12, QueueSize: 10, Clock: func() time.Time { return now },
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = manager.Run(ctx) }()
+
+	request := Request{Chain: "ethereum", Address: "0x0000000000000000000000000000000000000001"}
+	for range 2 {
+		job, err := manager.Enqueue(context.Background(), request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		job = waitForJob(t, manager, job.ID.Hex())
+		if job.Status != "succeeded" || job.CachedAddresses != 0 {
+			t.Fatalf("unexpected job: %+v", job)
+		}
+	}
+	if source.latestCalls != 2 {
+		t.Fatalf("latest calls = %d, want 2", source.latestCalls)
+	}
+}
+
 func TestManagerExposesPageProgressBeforeAddressCompletes(t *testing.T) {
 	seen, proceed := make(chan struct{}), make(chan struct{})
 	source := &fakeSource{latest: 100, progressSeen: seen, progressContinue: proceed}

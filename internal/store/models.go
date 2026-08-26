@@ -48,16 +48,72 @@ type Transfer struct {
 }
 
 type Label struct {
-	Chain      string    `bson:"chain" json:"chain"`
-	ChainID    int64     `bson:"chainId" json:"chainId"`
-	Address    string    `bson:"address" json:"address"`
-	Type       string    `bson:"type" json:"type"`
-	Source     string    `bson:"source" json:"source"`
-	Note       string    `bson:"note,omitempty" json:"note,omitempty"`
-	RiskLevel  string    `bson:"riskLevel,omitempty" json:"riskLevel,omitempty"`
-	Confidence float64   `bson:"confidence" json:"confidence"`
-	Evidence   []string  `bson:"evidence,omitempty" json:"evidence,omitempty"`
-	ObservedAt time.Time `bson:"observedAt" json:"observedAt"`
+	ID         primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Chain      string             `bson:"chain" json:"chain"`
+	ChainID    int64              `bson:"chainId" json:"chainId"`
+	Address    string             `bson:"address" json:"address"`
+	Type       string             `bson:"type" json:"type"`
+	Source     string             `bson:"source" json:"source"`
+	Note       string             `bson:"note,omitempty" json:"note,omitempty"`
+	RiskLevel  string             `bson:"riskLevel,omitempty" json:"riskLevel,omitempty"`
+	Confidence float64            `bson:"confidence" json:"confidence"`
+	Evidence   []string           `bson:"evidence,omitempty" json:"evidence,omitempty"`
+	ObservedAt time.Time          `bson:"observedAt" json:"observedAt"`
+}
+
+// PropagationJob is a bounded, persistent risk-association computation.
+type PropagationJob struct {
+	ID                  primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	IdempotencyKey      string             `bson:"idempotencyKey" json:"-"`
+	Chain               string             `bson:"chain" json:"chain"`
+	TargetAddress       string             `bson:"targetAddress" json:"targetAddress"`
+	Asset               string             `bson:"asset" json:"asset"`
+	Direction           string             `bson:"direction" json:"direction"`
+	Status              string             `bson:"status" json:"status"`
+	MaxHops             int                `bson:"maxHops" json:"maxHops"`
+	MaxNodes            int                `bson:"maxNodes" json:"maxNodes"`
+	MaxEdges            int                `bson:"maxEdges" json:"maxEdges"`
+	PerNodeCandidateCap int                `bson:"perNodeCandidateCap" json:"perNodeCandidateCap"`
+	MaxPathsPerTarget   int                `bson:"maxPathsPerTarget" json:"maxPathsPerTarget"`
+	CurrentHop          int                `bson:"currentHop" json:"currentHop"`
+	VisitedNodes        int                `bson:"visitedNodes" json:"visitedNodes"`
+	EdgeCount           int                `bson:"edgeCount" json:"edgeCount"`
+	DataThroughBlock    int64              `bson:"dataThroughBlock" json:"dataThroughBlock"`
+	RuleVersion         string             `bson:"ruleVersion" json:"ruleVersion"`
+	PropagationVersion  string             `bson:"propagationVersion" json:"propagationVersion"`
+	Truncated           bool               `bson:"truncated" json:"truncated"`
+	TruncationReason    string             `bson:"truncationReason,omitempty" json:"truncationReason,omitempty"`
+	RetryCount          int                `bson:"retryCount" json:"retryCount"`
+	LeaseUntil          time.Time          `bson:"leaseUntil,omitempty" json:"leaseUntil,omitempty"`
+	CreatedAt           time.Time          `bson:"createdAt" json:"createdAt"`
+	StartedAt           time.Time          `bson:"startedAt,omitempty" json:"startedAt,omitempty"`
+	FinishedAt          time.Time          `bson:"finishedAt,omitempty" json:"finishedAt,omitempty"`
+	Result              any                `bson:"result,omitempty" json:"result,omitempty"`
+	ErrorCode           string             `bson:"errorCode,omitempty" json:"errorCode,omitempty"`
+	Error               string             `bson:"error,omitempty" json:"error,omitempty"`
+	Retryable           bool               `bson:"retryable" json:"retryable"`
+}
+
+// InferredRiskAssociation stores one versioned association without changing labels.
+type InferredRiskAssociation struct {
+	ID                 primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	SourceLabelID      primitive.ObjectID `bson:"sourceLabelId" json:"sourceLabelId"`
+	SourceAddress      string             `bson:"sourceAddress" json:"sourceAddress"`
+	SourceType         string             `bson:"sourceType" json:"sourceType"`
+	TargetChain        string             `bson:"targetChain" json:"targetChain"`
+	TargetAddress      string             `bson:"targetAddress" json:"targetAddress"`
+	Direction          string             `bson:"direction" json:"direction"`
+	Asset              string             `bson:"asset" json:"asset"`
+	PropagationVersion string             `bson:"propagationVersion" json:"propagationVersion"`
+	RuleVersion        string             `bson:"ruleVersion" json:"ruleVersion"`
+	DataThroughBlock   int64              `bson:"dataThroughBlock" json:"dataThroughBlock"`
+	Confidence         float64            `bson:"confidence" json:"confidence"`
+	Score              int                `bson:"score" json:"score"`
+	Paths              [][]string         `bson:"paths" json:"paths"`
+	TxHashes           [][]string         `bson:"txHashes" json:"txHashes"`
+	BestPathEvidence   any                `bson:"bestPathEvidence,omitempty" json:"bestPathEvidence,omitempty"`
+	Stale              bool               `bson:"stale" json:"stale"`
+	ComputedAt         time.Time          `bson:"computedAt" json:"computedAt"`
 }
 
 type TraceJob struct {
@@ -213,7 +269,35 @@ type CounterpartySummary struct {
 	TokenMetadataComplete bool
 	TotalAmount           string
 	TransferCount         int64
+	LatestBlock           int64
+	LatestTime            time.Time
+	LatestTransfer        Transfer
 	Representative        Transfer
+}
+
+// CandidateQuery selects bounded multi-channel propagation candidates.
+type CandidateQuery struct {
+	Chain, Address, Direction, AssetMode, Asset string
+	PerChannelLimit, Limit                      int
+	ToBlock                                     int64
+	ForcedCounterparties                        []string
+}
+
+// CandidateCoverage describes how much of the scanned relationship set was selected.
+type CandidateCoverage struct {
+	SelectedCounterparties int    `bson:"selectedCounterparties" json:"selectedCounterparties"`
+	TotalCounterparties    int    `bson:"totalCounterparties" json:"totalCounterparties"`
+	SelectedAmount         string `bson:"selectedAmount" json:"selectedAmount"`
+	TotalAmount            string `bson:"totalAmount" json:"totalAmount"`
+	AmountCoverage         string `bson:"amountCoverage" json:"amountCoverage"`
+	Truncated              bool   `bson:"truncated" json:"truncated"`
+	TruncationReason       string `bson:"truncationReason,omitempty" json:"truncationReason,omitempty"`
+}
+
+// CandidateResult contains selected summaries and explicit scan coverage.
+type CandidateResult struct {
+	Items    []CounterpartySummary
+	Coverage CandidateCoverage
 }
 
 // TransactionAnalysis is a cached interpretation of a confirmed receipt.

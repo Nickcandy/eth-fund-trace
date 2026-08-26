@@ -173,7 +173,6 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 			result.branchStates = append(result.branchStates, state)
 		}
 	}
-	riskTransfers := make([]store.Transfer, 0)
 	for depth := 0; depth < q.Depth && len(frontier) > 0 && len(visitedNodes) < 5000; depth++ {
 		sort.Slice(frontier, func(i, j int) bool {
 			return branchStateKey(frontier[i]) < branchStateKey(frontier[j])
@@ -199,7 +198,6 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 				edge := edgeFromSummary(summary, depth+1, path)
 				result.Edges = append(result.Edges, edge)
 				edgeIndex := len(result.Edges) - 1
-				riskTransfers = append(riskTransfers, summary.Representative)
 				if other == zeroAddress {
 					if !visitedNodes[other] && len(visitedNodes) < 5000 {
 						visitedNodes[other] = true
@@ -296,16 +294,7 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 		}
 		frontier = next
 	}
-	allLabels := append([]store.Label(nil), seedLabels...)
-	for _, node := range result.Nodes[1:] {
-		labels, labelErr := g.repository.ListLabels(ctx, q.Chain, node.Address)
-		if labelErr != nil {
-			return Result{}, labelErr
-		}
-		allLabels = append(allLabels, labels...)
-	}
-	result.Risk = risk.Analyze(seed, riskTransfers, allLabels)
-	result.Labels = result.Risk.InferredLabels
+	result.Risk = risk.Result{Level: "no_conclusion", RuleVersion: risk.RiskVersion, PropagationVersion: risk.PropagationVersion}
 	return result, nil
 }
 

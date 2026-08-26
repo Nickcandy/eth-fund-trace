@@ -65,7 +65,7 @@ func Load() Config {
 		EtherscanHTTPTimeoutSeconds:     intValue("ETHERSCAN_HTTP_TIMEOUT_SECONDS", 120),
 		EtherscanLookbackBlocks:         nonNegativeInt64Value("ETHERSCAN_LOOKBACK_BLOCKS", 0),
 		EtherscanInternalLookbackBlocks: nonNegativeInt64Value("ETHERSCAN_INTERNAL_LOOKBACK_BLOCKS", 100_000),
-		SyncCacheTTLMinutes:             intValue("SYNC_CACHE_TTL_MINUTES", 15),
+		SyncCacheTTLMinutes:             nonNegativeIntValue("SYNC_CACHE_TTL_MINUTES", 15),
 		SyncConfirmations:               nonNegativeIntValue("SYNC_CONFIRMATIONS", 12),
 		SyncQueueSize:                   intValue("SYNC_QUEUE_SIZE", 100),
 		EthereumSyncStartBlock:          int64Value("ETHEREUM_SYNC_START_BLOCK", 21525891),

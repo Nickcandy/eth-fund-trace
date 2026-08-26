@@ -41,6 +41,17 @@ describe("API authentication", () => {
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ chain: "ethereum", address: "0x0000000000000000000000000000000000000001", neighborLimit: 0 });
   });
 
+  it("creates and stops a propagation job through resource routes", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ id: "propagation-1" }), { status: 202 })));
+    vi.stubGlobal("fetch", fetchMock);
+    const input = { chain: "ethereum" as const, targetAddress: "0x0000000000000000000000000000000000000001", direction: "both" as const, asset: "ETH" };
+    await api.createPropagation(input);
+    await api.stopPropagationJob("propagation-1");
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/propagation-jobs");
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual(input);
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/v1/propagation-jobs/propagation-1/stop");
+  });
+
   it("loads sync job progress in bounded batches and keeps successful rows", async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn((path: string) => Promise.resolve(new Response(

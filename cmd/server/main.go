@@ -18,6 +18,7 @@ import (
 	"github.com/Nickcandy/eth-fund-trace/internal/fundgraph"
 	"github.com/Nickcandy/eth-fund-trace/internal/httpapi"
 	"github.com/Nickcandy/eth-fund-trace/internal/profile"
+	"github.com/Nickcandy/eth-fund-trace/internal/propagation"
 	"github.com/Nickcandy/eth-fund-trace/internal/store"
 	"github.com/Nickcandy/eth-fund-trace/internal/syncer"
 	"github.com/Nickcandy/eth-fund-trace/internal/tracer"
@@ -86,7 +87,7 @@ func run(parent context.Context) error {
 		bridgeCandidates = make(chan struct{ chain, hash string }, cfg.BridgeSyncBatchSize)
 	}
 	syncManager := syncer.NewMulti(etherscanClients, appStore, syncer.Config{
-		CacheTTL: time.Duration(cfg.SyncCacheTTLMinutes) * time.Minute, Confirmations: int64(cfg.SyncConfirmations), QueueSize: cfg.SyncQueueSize,
+		CacheTTL: time.Duration(cfg.SyncCacheTTLMinutes) * time.Minute, DisableCache: cfg.SyncCacheTTLMinutes == 0, Confirmations: int64(cfg.SyncConfirmations), QueueSize: cfg.SyncQueueSize,
 		InternalLookbackBlocks: cfg.EtherscanInternalLookbackBlocks,
 		HistoryLookbackBlocks:  cfg.EtherscanLookbackBlocks,
 		StartBlocks:            map[string]int64{"ethereum": cfg.EthereumSyncStartBlock, "base": cfg.BaseSyncStartBlock},
@@ -141,6 +142,11 @@ func run(parent context.Context) error {
 	e.POST("/api/v1/trace-jobs/:id/stop", traceHandler.Stop)
 	e.GET("/api/v1/trace-jobs/:id", traceHandler.Job)
 	e.GET("/api/v1/risk", httpapi.NewRiskHandler(traceManager).Get)
+	propagationManager := propagation.NewManager(propagation.NewEngine(appStore), appStore)
+	propagationHandler := httpapi.NewPropagationHandler(propagationManager)
+	e.POST("/api/v1/propagation-jobs", propagationHandler.Create)
+	e.GET("/api/v1/propagation-jobs/:id", propagationHandler.Job)
+	e.POST("/api/v1/propagation-jobs/:id/stop", propagationHandler.Stop)
 	e.GET("/api/v1/transactions/:txHash", httpapi.NewTransactionHandler(transactionAnalyzer).Get)
 	labelHandler := httpapi.NewLabelHandler(appStore)
 	e.POST("/api/v1/labels", labelHandler.Create)
@@ -183,6 +189,11 @@ func run(parent context.Context) error {
 	go func() {
 		if err := traceManager.Run(serverCtx); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("trace manager stopped", "error", err)
+		}
+	}()
+	go func() {
+		if err := propagationManager.Run(serverCtx); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("propagation manager stopped", "error", err)
 		}
 	}()
 	go func() {

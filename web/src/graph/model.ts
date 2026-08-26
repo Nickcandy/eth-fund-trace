@@ -1,4 +1,4 @@
-import type { BridgeEdge, NodeRef, TraceResult } from "../api/types";
+import type { BridgeEdge, NodeRef, RiskAssociation, TraceResult } from "../api/types";
 import { displayDecimals } from "../lib/format";
 
 export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
@@ -48,7 +48,7 @@ function signedHops(result: TraceResult, seed: NodeRef): Map<string, number> {
   return hops;
 }
 
-export function buildGraphModel(result: TraceResult, seed: NodeRef): GraphModel {
+export function buildGraphModel(result: TraceResult, seed: NodeRef, associations: RiskAssociation[] = [], riskSource?: NodeRef): GraphModel {
   const hops = signedHops(result, seed);
   const labelMap = new Map<string, Array<{ type: string; confidence: number }>>();
   for (const label of result.labels ?? []) {
@@ -58,14 +58,15 @@ export function buildGraphModel(result: TraceResult, seed: NodeRef): GraphModel 
   const nodes = result.nodes.map((node): GraphNodeModel => {
     const isSeedChain = node.chain === seed.chain;
     const labels = isSeedChain ? labelMap.get(node.address.toLowerCase()) ?? [] : [];
-    const riskEvidence = isSeedChain && result.risk.evidence?.some((e) => e.address.toLowerCase() === node.address.toLowerCase() && e.score >= 70);
+    const association = associations.find((item) => item.targetChain === node.chain && item.targetAddress.toLowerCase() === node.address.toLowerCase());
+    const isRiskSource = riskSource && nodeID(node.chain, node.address) === nodeID(riskSource.chain, riskSource.address);
     return {
       id: nodeID(node.chain, node.address), chain: node.chain, address: node.address.toLowerCase(),
       hop: hops.get(nodeID(node.chain, node.address)) ?? node.depth,
       terminal: node.terminal, seed: nodeID(node.chain, node.address) === nodeID(seed.chain, seed.address),
-      risk: riskEvidence ? "high" : labels.length ? "suspected" : "normal",
+      risk: isRiskSource || association?.level === "strong" ? "high" : association ? "suspected" : "normal",
       hotWallet: labels.some((label) => label.type === "suspected_hot_wallet"), labelTypes: labels.map((label) => label.type),
-      inferenceConfidence: labels.length ? Math.max(...labels.map((label) => label.confidence)) : undefined,
+      inferenceConfidence: association?.confidence,
     };
   });
   const grouped = new Map<string, GraphEdgeModel>();

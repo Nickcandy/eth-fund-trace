@@ -242,6 +242,56 @@ components:
         errorCode: {type: string}
         error: {type: string}
         retryable: {type: boolean}
+    RiskAssociation:
+      type: object
+      required: [sourceLabelId, sourceAddress, sourceType, targetChain, targetAddress, direction, asset, confidence, score, distance, level, path, paths, txHashes]
+      properties:
+        sourceLabelId: {type: string}
+        sourceAddress: {type: string}
+        sourceType: {type: string}
+        targetChain: {type: string, enum: [ethereum, base]}
+        targetAddress: {type: string}
+        direction: {type: string, enum: [in, out]}
+        asset: {type: string}
+        confidence: {type: number, minimum: 0, maximum: 1}
+        score: {type: integer, minimum: 0, maximum: 100}
+        distance: {type: integer, minimum: 1}
+        level: {type: string, enum: [strong, weak]}
+        paths: {type: array, items: {type: array, items: {type: string}}}
+        txHashes: {type: array, items: {type: array, items: {type: string}}}
+        path: {type: object}
+        cycleDetected: {type: boolean}
+    PropagationJob:
+      type: object
+      required: [id, chain, targetAddress, asset, direction, status, maxHops, maxNodes, maxEdges, perNodeCandidateCap, maxPathsPerTarget, visitedNodes, edgeCount, dataThroughBlock, ruleVersion, propagationVersion, truncated, retryCount, retryable]
+      properties:
+        id: {type: string}
+        chain: {type: string, enum: [ethereum, base]}
+        targetAddress: {type: string}
+        asset: {type: string}
+        direction: {type: string, enum: [in, out, both]}
+        status: {type: string, enum: [queued, running, succeeded, failed, stopped]}
+        maxHops: {type: integer, maximum: 6}
+        maxNodes: {type: integer, maximum: 10000}
+        maxEdges: {type: integer, maximum: 50000}
+        perNodeCandidateCap: {type: integer, maximum: 50}
+        maxPathsPerTarget: {type: integer, maximum: 3}
+        visitedNodes: {type: integer}
+        edgeCount: {type: integer}
+        dataThroughBlock: {type: integer}
+        ruleVersion: {type: string, example: risk-association-v2}
+        propagationVersion: {type: string, example: propagation-v3}
+        truncated: {type: boolean}
+        truncationReason: {type: string, enum: [candidate_coverage, cross_chain_waterline_unavailable, max_nodes, max_edges]}
+        result:
+          type: object
+          properties:
+            associations: {type: array, items: {$ref: '#/components/schemas/RiskAssociation'}}
+            coverage: {type: array, items: {type: object}}
+        retryCount: {type: integer}
+        errorCode: {type: string}
+        error: {type: string}
+        retryable: {type: boolean}
     EdgePage:
       type: object
       required: [items, dataThroughBlock, dataStatus]
@@ -444,6 +494,36 @@ paths:
       responses:
         '200': { description: Stopped trace job }
         '404': { description: Job not found }
+  /api/v1/propagation-jobs:
+    post:
+      summary: Create an idempotent bounded risk propagation job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chain, targetAddress, direction, asset]
+              properties:
+                chain: {type: string, enum: [ethereum, base]}
+                targetAddress: {type: string}
+                direction: {type: string, enum: [in, out, both]}
+                asset: {type: string}
+      responses:
+        '202': {description: Propagation job accepted, content: {application/json: {schema: {$ref: '#/components/schemas/PropagationJob'}}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+  /api/v1/propagation-jobs/{id}:
+    get:
+      parameters: [{$ref: '#/components/parameters/ObjectID'}]
+      responses:
+        '200': {description: Propagation job and result, content: {application/json: {schema: {$ref: '#/components/schemas/PropagationJob'}}}}
+        '404': {description: Propagation job not found}
+  /api/v1/propagation-jobs/{id}/stop:
+    post:
+      parameters: [{$ref: '#/components/parameters/ObjectID'}]
+      responses:
+        '200': {description: Stopped propagation job, content: {application/json: {schema: {$ref: '#/components/schemas/PropagationJob'}}}}
+        '404': {description: Propagation job not found or already complete}
   /api/v1/risk:
     get:
       parameters:

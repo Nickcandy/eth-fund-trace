@@ -10,12 +10,13 @@ let jobPolls = 0;
 
 const transfer = (from: string, to: string, hash: string, source = "txlist", asset = "ETH", amount = "1000000000000000000") => ({ chain: "ethereum", chainId: 1, txHash: hash, blockNumber: 19876543, blockTime: "2026-08-22T10:00:00Z", from, to, assetType: source === "tokentx" ? "erc20" : "native", asset, symbol: source === "tokentx" ? "USDC" : "ETH", decimals: source === "tokentx" ? 6 : 18, amount, tokenMetadataComplete: true, source, traceId: "", logIndex: source === "tokentx" ? 1 : 0, transferKind: "transfer" });
 const facts = [transfer(upstream, seed, "0x" + "a".repeat(64)), transfer(seed, downstream, "0x" + "b".repeat(64), "tokentx", token, "2500000")];
+const aggregate = (fact: ReturnType<typeof transfer>, depth: number, path: string[]) => ({ chain: fact.chain, from: fact.from, to: fact.to, assetType: fact.assetType, asset: fact.asset, symbol: fact.symbol, decimals: fact.decimals, tokenMetadataComplete: true, totalAmount: fact.amount, transferCount: 1, kind: "transfer", depth, path });
 const result = {
   nodes: [
     { chain: "ethereum", address: seed, depth: 0, terminal: false }, { chain: "ethereum", address: upstream, depth: 1, terminal: true },
     { chain: "ethereum", address: downstream, depth: 1, terminal: false }, { chain: "base", address: baseAddress, depth: 2, terminal: false },
   ],
-  edges: [{ transfer: facts[0], depth: 1, path: [seed, upstream] }, { transfer: facts[1], depth: 1, path: [seed, downstream] }],
+  edges: [aggregate(facts[0], 1, [seed, upstream]), aggregate(facts[1], 1, [seed, downstream])],
   bridgeEdges: [{ depth: 2, path: [{ chain: "ethereum", address: downstream }, { chain: "base", address: baseAddress }], link: { sourceChain: "ethereum", sourceChainId: 1, sourceTxHash: "0x" + "c".repeat(64), sourceLogIndex: 2, sourceAddress: downstream, targetChain: "base", targetChainId: 8453, targetTxHash: "0x" + "d".repeat(64), targetLogIndex: 3, targetAddress: baseAddress, bridgeAddress: "0x0000000000000000000000000000000000000099", sourceAsset: token, sourceAmount: "2500000", targetAsset: token, targetAmount: "2490000", status: "confirmed", evidence: ["case-42"] } }],
   paths: [[seed, upstream], [seed, downstream]], crossChainPaths: [[{chain:"ethereum",address:seed},{chain:"base",address:baseAddress}]], dataThroughBlock: 19876543, dataThroughBlocks: { ethereum: 19876543, base: 18765432 }, dataStatus: "synced", labels: [{ address: upstream, type: "exchange", source: "propagation", confidence: .8, direction: "upstream", distance: 1, path: [seed, upstream], txHashes: [facts[0].txHash] }], risk: { score: 70, level: "known_high", inferredLabels: [], evidence: [{ address: seed, labelType: "phishing", baseScore: 70, score: 70, confidence: 1, distance: 0, direction: "direct", path: [seed], txHashes: [facts[0].txHash], rule: "risk-v1" }], ruleVersion: "risk-v1", propagationVersion: "propagation-v1" }, ruleVersion: "trace-v5",
 };
@@ -37,6 +38,8 @@ async function mockAPI(page: Page) {
     const url = new URL(route.request().url()); const path = url.pathname;
     const json = (body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
     if (path.startsWith("/api/v1/transactions/")) return json(transactionAnalysis);
+    if (path === "/api/v1/propagation-jobs") return json({ id: "propagation-1", chain: "ethereum", sourceAddress: seed, sourceLabelIds: ["6a8a8c307fcbef52929d0d10"], asset: "ETH", direction: "both", status: "queued", maxHops: 6, maxNodes: 10000, maxEdges: 50000, perNodeCandidateCap: 50, maxPathsPerTarget: 3, currentHop: 0, visitedNodes: 0, edgeCount: 0, dataThroughBlock: 19876543, ruleVersion: "risk-association-v1", propagationVersion: "propagation-v2", truncated: false, retryCount: 0, retryable: false }, 202);
+    if (path === "/api/v1/propagation-jobs/propagation-1") return json({ id: "propagation-1", chain: "ethereum", sourceAddress: seed, sourceLabelIds: ["6a8a8c307fcbef52929d0d10"], asset: "ETH", direction: "both", status: "succeeded", maxHops: 6, maxNodes: 10000, maxEdges: 50000, perNodeCandidateCap: 50, maxPathsPerTarget: 3, currentHop: 2, visitedNodes: 4, edgeCount: 3, dataThroughBlock: 19876543, ruleVersion: "risk-association-v1", propagationVersion: "propagation-v2", truncated: false, retryCount: 1, retryable: false, result: { associations: [{ sourceLabelId: "6a8a8c307fcbef52929d0d10", sourceAddress: seed, sourceType: "phishing", targetChain: "ethereum", targetAddress: downstream, direction: "out", asset: "ETH", confidence: 0.8, score: 56, distance: 1, level: "strong", paths: [[`ethereum:${seed}`, `ethereum:${downstream}`]], txHashes: [[facts[1].txHash]] }], coverage: [], ruleVersion: "risk-association-v1", propagationVersion: "propagation-v2", dataThroughBlock: 19876543, visitedNodes: 4, edgeCount: 3, truncated: false } });
     if (path === "/api/v1/trace") { const address = url.searchParams.get("address"); return json({ traceJobId: address?.endsWith("9") ? "job-fail" : address?.endsWith("8") ? "job-partial" : traceJobID, status: "queued" }, 202); }
     if (path === "/api/v1/trace-jobs/job-fail") return json({ id: "job-fail", chain: "ethereum", seedAddress: seed, direction: "both", depth: 3, topN: 10, asset: "all", status: "failed", createdAt: "2026-08-22T00:00:00Z", currentDepth: 1, visitedNodes: 2, edgeCount: 1, dataThroughBlock: 0, ruleVersion: "trace-v2", errorCode: "sync_failed", error: "上游同步失败", retryable: true });
     if (path === "/api/v1/trace-jobs/job-partial") return json({ id: "job-partial", chain: "ethereum", seedAddress: seed, direction: "both", depth: 3, topN: 10, asset: "all", status: "partial", createdAt: "2026-08-22T00:00:00Z", currentDepth: 2, visitedNodes: 4, edgeCount: 3, result, dataThroughBlock: 19876543, ruleVersion: "trace-v2", errorCode: "neighbor_sync_failed", error: "一个邻居同步失败", retryable: true });
@@ -59,10 +62,18 @@ test("creates an async trace and renders upstream, downstream, and bridge eviden
   await expect(page.getByText("分析完成")).toBeVisible({ timeout: 10_000 });
   await expect(page.locator(".fund-node")).toHaveCount(4); await expect(page.getByText("ETHEREUM", { exact: true })).toBeVisible(); await expect(page.getByText("BASE", { exact: true })).toBeVisible();
   const box = await page.getByTestId("graph-canvas").boundingBox(); expect(box?.width).toBeGreaterThan(250); expect(box?.height).toBeGreaterThan(250);
-  await page.locator(".edge-label").first().click(); await expect(page.getByRole("heading", { name: "资金边详情" })).toBeVisible(); await expect(page.getByRole("heading", { name: "交易哈希" })).toBeVisible();
+  await page.locator(".edge-label").first().click(); await expect(page.getByRole("heading", { name: "资金边详情" })).toBeVisible(); await expect(page.locator(".edge-summary strong")).toContainText("1 笔 ETH");
   await expect(page.locator(".react-flow__edge").last().locator(".react-flow__edge-path")).toHaveCSS("stroke-dasharray", "8px, 6px");
   await page.getByRole("button", { name: /桥接关系/ }).click(); await expect(page.getByText("Ethereum → Base")).toBeVisible();
   await page.screenshot({ path: test.info().outputPath("analysis-console.png"), fullPage: true });
+});
+
+test("starts an independent propagation job from a labelled node", async ({ page }) => {
+  await page.getByLabel("分析地址").fill(seed); await page.getByRole("button", { name: "开始分析" }).click();
+  await expect(page.getByText("分析完成")).toBeVisible({ timeout: 10_000 });
+  await page.getByRole("button", { name: "启动传播" }).click();
+  await expect(page.getByText("完成 · 1 条关联")).toBeVisible();
+  await expect(page.getByText(/风险传播 succeeded/)).toBeVisible();
 });
 
 test("restores the active trace job after a page refresh", async ({ page }) => {
