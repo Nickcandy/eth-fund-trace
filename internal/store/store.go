@@ -346,10 +346,12 @@ func (s *Store) SaveAddressProfile(ctx context.Context, profile AddressProfile) 
 	return err
 }
 
-func (s *Store) UpsertLabel(ctx context.Context, label Label) error {
+func (s *Store) UpsertLabel(ctx context.Context, label Label) (Label, error) {
 	filter := bson.D{{Key: "chain", Value: label.Chain}, {Key: "address", Value: label.Address}, {Key: "type", Value: label.Type}, {Key: "source", Value: label.Source}}
-	_, err := s.db.Collection(LabelsCollection).ReplaceOne(ctx, filter, label, options.Replace().SetUpsert(true))
-	return err
+	label.ID = primitive.NilObjectID
+	var stored Label
+	err := s.db.Collection(LabelsCollection).FindOneAndReplace(ctx, filter, label, options.FindOneAndReplace().SetUpsert(true).SetReturnDocument(options.After)).Decode(&stored)
+	return stored, err
 }
 
 func (s *Store) ListLabels(ctx context.Context, chain, address string) ([]Label, error) {
@@ -358,7 +360,7 @@ func (s *Store) ListLabels(ctx context.Context, chain, address string) ([]Label,
 		return nil, err
 	}
 	defer func() { _ = cursor.Close(ctx) }()
-	var result []Label
+	result := make([]Label, 0)
 	return result, cursor.All(ctx, &result)
 }
 

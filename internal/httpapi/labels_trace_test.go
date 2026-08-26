@@ -18,7 +18,11 @@ type labelStub struct {
 	value  store.Label
 }
 
-func (s *labelStub) UpsertLabel(_ context.Context, v store.Label) error { s.value = v; return nil }
+func (s *labelStub) UpsertLabel(_ context.Context, v store.Label) (store.Label, error) {
+	v.ID = primitive.NewObjectID()
+	s.value = v
+	return v, nil
+}
 func (s *labelStub) ListLabels(context.Context, string, string) ([]store.Label, error) {
 	return s.labels, nil
 }
@@ -26,25 +30,59 @@ func TestLabelHandlerValidatesAndPersistsEvidence(t *testing.T) {
 	s := &labelStub{}
 	h := NewLabelHandler(s)
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/labels", strings.NewReader(`{"address":"0x0000000000000000000000000000000000000001","type":"hacker","source":"manual","confidence":0.8,"evidence":["case-1"]}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/labels", strings.NewReader(`{"chain":"ethereum","address":"0x0000000000000000000000000000000000000001","type":" hacker ","source":"manual","confidence":0.8,"note":" reviewed ","evidence":[" case-1 ","","case-2"]}`))
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	res := httptest.NewRecorder()
 	if err := h.Create(e.NewContext(req, res)); err != nil {
 		t.Fatal(err)
 	}
-	if res.Code != 201 || s.value.Confidence != 0.8 || len(s.value.Evidence) != 1 {
+	if res.Code != 201 || s.value.ID.IsZero() || s.value.Confidence != 0.8 || s.value.Type != "hacker" || s.value.Note != "reviewed" || len(s.value.Evidence) != 2 || s.value.Evidence[0] != "case-1" {
 		t.Fatalf("status=%d value=%+v", res.Code, s.value)
 	}
 }
-func TestLabelHandlerRejectsConfidence(t *testing.T) {
+
+func TestLabelHandlerRequiresChainAndNonBlankType(t *testing.T) {
+	tests := map[string]string{
+		"missing chain": `{"address":"0x0000000000000000000000000000000000000001","type":"hacker","source":"manual"}`,
+		"blank type":    `{"chain":"ethereum","address":"0x0000000000000000000000000000000000000001","type":"  ","source":"manual"}`,
+	}
+	for name, body := range tests {
+		t.Run(name, func(t *testing.T) {
+			h := NewLabelHandler(&labelStub{})
+			e := echo.New()
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/labels", strings.NewReader(body))
+			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+			res := httptest.NewRecorder()
+			_ = h.Create(e.NewContext(req, res))
+			if res.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+			}
+		})
+	}
+}
+
+func TestLabelHandlerListReturnsEmptyArray(t *testing.T) {
 	h := NewLabelHandler(&labelStub{})
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"address":"0x0000000000000000000000000000000000000001","type":"hacker","source":"manual","confidence":2}`))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/labels?chain=ethereum&address=0x0000000000000000000000000000000000000001", nil)
+	res := httptest.NewRecorder()
+	if err := h.List(e.NewContext(req, res)); err != nil {
+		t.Fatal(err)
+	}
+	if res.Code != http.StatusOK || strings.TrimSpace(res.Body.String()) != "[]" {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+}
+func TestLabelHandlerRejectsConfidence(t *testing.T) {
+	provider := &labelStub{}
+	h := NewLabelHandler(provider)
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"chain":"ethereum","address":"0x0000000000000000000000000000000000000001","type":"hacker","source":"manual","confidence":2}`))
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	res := httptest.NewRecorder()
 	_ = h.Create(e.NewContext(req, res))
-	if res.Code != 400 {
-		t.Fatalf("status=%d", res.Code)
+	if res.Code != http.StatusBadRequest || !provider.value.ID.IsZero() {
+		t.Fatalf("status=%d persisted=%+v", res.Code, provider.value)
 	}
 }
 

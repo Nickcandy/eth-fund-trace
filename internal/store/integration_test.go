@@ -298,12 +298,20 @@ func TestM6M7TraceJobsAndLabels(t *testing.T) {
 
 	address := "0x0000000000000000000000000000000000000001"
 	label := Label{Chain: "ethereum", ChainID: 1, Address: address, Type: "hacker", RiskLevel: "high", Confidence: 0.8, Source: "manual", Evidence: []string{"case-1"}, ObservedAt: time.Now()}
-	if err := s.UpsertLabel(ctx, label); err != nil {
+	storedLabel, err := s.UpsertLabel(ctx, label)
+	if err != nil {
 		t.Fatal(err)
 	}
+	if storedLabel.ID.IsZero() {
+		t.Fatal("upserted label is missing its persisted ID")
+	}
 	label.Confidence = 1
-	if err := s.UpsertLabel(ctx, label); err != nil {
+	replacedLabel, err := s.UpsertLabel(ctx, label)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if replacedLabel.ID != storedLabel.ID {
+		t.Fatalf("label ID changed across upsert: %s != %s", replacedLabel.ID.Hex(), storedLabel.ID.Hex())
 	}
 	labels, err := s.ListLabels(ctx, "ethereum", address)
 	if err != nil || len(labels) != 1 || labels[0].Confidence != 1 {
@@ -341,7 +349,7 @@ func TestPropagationJobResultDecodesAsJSONObject(t *testing.T) {
 	}
 
 	job := PropagationJob{
-		IdempotencyKey: "result-shape", Chain: "ethereum", SourceAddress: "0x0000000000000000000000000000000000000001",
+		IdempotencyKey: "result-shape", Chain: "ethereum", TargetAddress: "0x0000000000000000000000000000000000000001",
 		Status: "succeeded", Result: bson.D{{Key: "associations", Value: bson.A{}}, {Key: "propagationVersion", Value: "propagation-v2"}},
 	}
 	if err := s.CreatePropagationJob(ctx, &job); err != nil {

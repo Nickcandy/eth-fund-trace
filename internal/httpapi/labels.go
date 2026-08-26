@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Nickcandy/eth-fund-trace/internal/chains"
@@ -12,7 +13,7 @@ import (
 )
 
 type LabelProvider interface {
-	UpsertLabel(context.Context, store.Label) error
+	UpsertLabel(context.Context, store.Label) (store.Label, error)
 	ListLabels(context.Context, string, string) ([]store.Label, error)
 }
 type LabelHandler struct{ provider LabelProvider }
@@ -35,10 +36,16 @@ func (h *LabelHandler) Create(c echo.Context) error {
 	if err := c.Bind(&body); err != nil {
 		return writeError(c, 400, "invalid_request", "invalid JSON request", false)
 	}
+	body.Chain = strings.TrimSpace(body.Chain)
+	body.Type = strings.TrimSpace(body.Type)
+	body.Source = strings.ToLower(strings.TrimSpace(body.Source))
+	body.RiskLevel = strings.ToLower(strings.TrimSpace(body.RiskLevel))
+	body.Note = strings.TrimSpace(body.Note)
+	body.Evidence = normalizedEvidence(body.Evidence)
 	chainConfig, chainErr := chains.Resolve(body.Chain)
 	chain := chainConfig.Name
 	address, err := ethaddr.Normalize(body.Address)
-	if err != nil || chainErr != nil || body.Type == "" || (body.Source != "manual" && body.Source != "public-list") || !validRiskLevel(body.RiskLevel) {
+	if body.Chain == "" || err != nil || chainErr != nil || body.Type == "" || (body.Source != "manual" && body.Source != "public-list") || !validRiskLevel(body.RiskLevel) {
 		return writeError(c, 400, "invalid_request", "invalid label fields", false)
 	}
 	confidence := 1.0
@@ -49,10 +56,11 @@ func (h *LabelHandler) Create(c echo.Context) error {
 		return writeError(c, 400, "invalid_request", "confidence must be between 0 and 1", false)
 	}
 	label := store.Label{Chain: chain, ChainID: chainConfig.ID, Address: address, Type: body.Type, RiskLevel: body.RiskLevel, Confidence: confidence, Source: body.Source, Note: body.Note, Evidence: body.Evidence, ObservedAt: time.Now().UTC()}
-	if err := h.provider.UpsertLabel(c.Request().Context(), label); err != nil {
+	stored, err := h.provider.UpsertLabel(c.Request().Context(), label)
+	if err != nil {
 		return writeError(c, 500, "internal_error", "internal server error", true)
 	}
-	return c.JSON(http.StatusCreated, label)
+	return c.JSON(http.StatusCreated, stored)
 }
 
 func validRiskLevel(value string) bool {
@@ -69,5 +77,18 @@ func (h *LabelHandler) List(c echo.Context) error {
 	if err != nil {
 		return writeError(c, 500, "internal_error", "internal server error", true)
 	}
+	if labels == nil {
+		labels = []store.Label{}
+	}
 	return c.JSON(200, labels)
+}
+
+func normalizedEvidence(values []string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			result = append(result, value)
+		}
+	}
+	return result
 }
