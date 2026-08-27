@@ -87,6 +87,26 @@ func TestClientPagesAndNormalizesAllActions(t *testing.T) {
 	}
 }
 
+func TestClientListsInternalTransactionsByHashIncludingFailures(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		if query.Get("module") != "account" || query.Get("action") != "txlistinternal" || query.Get("txhash") != "0xabc" || query.Get("address") != "" {
+			t.Fatalf("query=%s", r.URL.RawQuery)
+		}
+		_, _ = w.Write([]byte(`{"status":"1","message":"OK","result":[{"from":"0xfrom","to":"0xto","value":"42","type":"call","traceId":"0_1","isError":"0"},{"from":"0xto","to":"0xrecipient","value":"7","type":"call","traceId":"0_2","isError":"1"}]}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{APIKey: "secret", BaseURL: server.URL, HTTPClient: server.Client()})
+	calls, err := client.InternalTransactionsByHash(context.Background(), "0xabc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 2 || calls[0].Value != "42" || calls[0].TraceID != "0_1" || calls[0].IsError || !calls[1].IsError {
+		t.Fatalf("calls=%+v", calls)
+	}
+}
+
 func TestNewClientClampsPagesToEtherscanResultWindow(t *testing.T) {
 	client := NewClient(Config{PageSize: 1000, MaxPages: 50})
 	if client.config.MaxPages != 10 {
@@ -375,6 +395,20 @@ func TestClientReportsEachFetchedPage(t *testing.T) {
 	}
 	if len(pages) != 2 || pages[0].Page != 1 || pages[0].Items != 1 || pages[1].Page != 2 || pages[1].Items != 0 || pages[0].StartBlock != 5 || pages[0].EndBlock != 9 {
 		t.Fatalf("pages = %+v", pages)
+	}
+}
+
+func TestClientSortsDescendingWhenConfigured(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("sort") != "desc" {
+			t.Fatalf("sort=%q, want desc", r.URL.Query().Get("sort"))
+		}
+		_, _ = w.Write([]byte(`{"status":"0","message":"No transactions found","result":[]}`))
+	}))
+	defer server.Close()
+	client := NewClient(Config{BaseURL: server.URL, Descending: true, HTTPClient: server.Client()})
+	if _, err := client.ListTransactions(context.Background(), "0xseed", 5, 9); err != nil {
+		t.Fatal(err)
 	}
 }
 

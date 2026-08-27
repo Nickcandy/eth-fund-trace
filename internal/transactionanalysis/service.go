@@ -15,8 +15,14 @@ import (
 )
 
 const (
+	// AnalysisVersion invalidates cached analyses when semantic rules change.
+	AnalysisVersion   = "transaction-analysis-v2"
 	EthereumV3Factory = "0x1f98431c8ad98523631ae4a59f267346ea31f984"
 	EthereumWETH      = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
+	// KyberSwapRouter is the Ethereum MetaAggregation Router supported by the RFQ adapter.
+	KyberSwapRouter = "0x6131b5fae19ea4f9d964eac0408e4408b66337b5"
+	// KyberSwapExecutor is the Ethereum Executor supported by the RFQ adapter.
+	KyberSwapExecutor = "0x6e4141d33021b52c91c28608403db4a0ffb50ec6"
 	transferTopic     = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 	depositTopic      = "0xe1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c"
 	withdrawalTopic   = "0x7fcf532c15f0a6db0bd6d0e038bea71d30d808c7d98cb3bf7268a95bf5081b65"
@@ -36,6 +42,15 @@ var officialContracts = map[string]string{
 	"0x66a9893cc07d91d95644aedd05d03f95e1dba8af": "Uniswap Universal Router",
 	EthereumWETH:      "Wrapped Ether",
 	EthereumV3Factory: "Uniswap V3 Factory",
+	KyberSwapRouter:   "KyberSwap MetaAggregation Router",
+	KyberSwapExecutor: "KyberSwap Executor",
+}
+
+var contractIdentities = map[string]store.AddressIdentity{
+	KyberSwapRouter:   {AddressType: "contract", Protocol: "kyberswap", Roles: []string{"kyberswap_router"}},
+	KyberSwapExecutor: {AddressType: "contract", Protocol: "kyberswap", Roles: []string{"kyberswap_executor"}},
+	EthereumV3Factory: {AddressType: "contract", Protocol: "uniswap", Roles: []string{"factory"}},
+	EthereumWETH:      {AddressType: "contract", Protocol: "weth", Roles: []string{"wrapped_native_token"}},
 }
 
 // Source provides transaction facts and read-only contract calls.
@@ -43,6 +58,34 @@ type Source interface {
 	TransactionByHash(context.Context, string) (etherscan.RPCTransaction, error)
 	TransactionReceipt(context.Context, string) (etherscan.RPCReceipt, error)
 	Call(context.Context, string, string) (string, error)
+	CodeAt(context.Context, string) (string, error)
+	InternalTransactionsByHash(context.Context, string) ([]etherscan.InternalTransaction, error)
+}
+
+// InspectAddress returns a chain-confirmed account type and known protocol roles.
+func (s *Service) InspectAddress(ctx context.Context, chain, address string) (store.AddressIdentity, error) {
+	if strings.ToLower(strings.TrimSpace(chain)) != "ethereum" {
+		return store.AddressIdentity{}, ErrUnsupportedChain
+	}
+	address = strings.ToLower(strings.TrimSpace(address))
+	code, err := s.source.CodeAt(ctx, address)
+	if err != nil {
+		return store.AddressIdentity{}, fmt.Errorf("fetch address bytecode: %w", err)
+	}
+	if code == "0x" || code == "0x0" {
+		return store.AddressIdentity{AddressType: "eoa"}, nil
+	}
+	if identity, ok := contractIdentities[address]; ok {
+		return identity, nil
+	}
+	pool, found, err := s.repo.FindPoolMetadata(ctx, chain, address)
+	if err != nil {
+		return store.AddressIdentity{}, fmt.Errorf("find pool identity: %w", err)
+	}
+	if found && pool.Verified {
+		return store.AddressIdentity{AddressType: "contract", Protocol: "uniswap", Roles: []string{"pool"}}, nil
+	}
+	return store.AddressIdentity{AddressType: "contract"}, nil
 }
 
 // Repository persists transaction analysis and pool metadata caches.
@@ -89,7 +132,7 @@ func (s *Service) Analyze(ctx context.Context, chain, txHash string) (store.Tran
 	}
 	if cached, found, err := s.repo.FindTransactionAnalysis(ctx, chain, txHash); err != nil {
 		return store.TransactionAnalysis{}, fmt.Errorf("find transaction analysis: %w", err)
-	} else if found {
+	} else if found && cached.AnalysisVersion == AnalysisVersion {
 		return cached, nil
 	}
 	transaction, err := s.source.TransactionByHash(ctx, txHash)
@@ -100,6 +143,7 @@ func (s *Service) Analyze(ctx context.Context, chain, txHash string) (store.Tran
 	if err != nil {
 		return store.TransactionAnalysis{}, fmt.Errorf("fetch receipt: %w", err)
 	}
+	internalTransactions, internalErr := s.source.InternalTransactionsByHash(ctx, txHash)
 	blockNumber, err := hexInt64(receipt.BlockNumber)
 	if err != nil {
 		return store.TransactionAnalysis{}, fmt.Errorf("parse receipt block: %w", etherscan.ErrMalformedResponse)
@@ -111,10 +155,19 @@ func (s *Service) Analyze(ctx context.Context, chain, txHash string) (store.Tran
 		return store.TransactionAnalysis{}, fmt.Errorf("validate transaction fields: %w", etherscan.ErrMalformedResponse)
 	}
 	analysis := store.TransactionAnalysis{
-		Chain: "ethereum", ChainID: 1, TxHash: txHash, BlockNumber: blockNumber,
+		AnalysisVersion: AnalysisVersion, Chain: "ethereum", ChainID: 1, TxHash: txHash, BlockNumber: blockNumber,
 		From: from, To: to, Value: value, Input: transaction.Input,
-		Succeeded: receipt.Status == "0x1", Transfers: []store.ReceiptTransfer{}, Swaps: []store.SwapEvent{}, Wraps: []store.WrapEvent{},
+		Succeeded: receipt.Status == "0x1", Transfers: []store.ReceiptTransfer{}, Swaps: []store.SwapEvent{}, Wraps: []store.WrapEvent{}, InternalCalls: []store.InternalCall{}, Conversions: []store.SwapConversion{},
 		Quality: store.AnalysisQuality{Status: "complete", Evidence: []string{"transaction", "receipt"}}, AnalyzedAt: s.now().UTC(),
+	}
+	if internalErr != nil {
+		analysis.Quality.Status = "partial"
+		analysis.Quality.Issues = append(analysis.Quality.Issues, "internal transactions unavailable")
+	} else {
+		for _, call := range internalTransactions {
+			analysis.InternalCalls = append(analysis.InternalCalls, store.InternalCall{From: strings.ToLower(call.From), To: strings.ToLower(call.To), Value: call.Value, Type: call.Type, TraceID: call.TraceID, IsError: call.IsError})
+		}
+		analysis.Quality.Evidence = append(analysis.Quality.Evidence, "etherscan txlistinternal by transaction hash")
 	}
 	if name, ok := officialContracts[analysis.To]; ok {
 		analysis.EntryContract, analysis.EntryContractName = analysis.To, name
@@ -125,11 +178,122 @@ func (s *Service) Analyze(ctx context.Context, chain, txHash string) (store.Tran
 	} else {
 		s.parseLogs(ctx, receipt.Logs, &analysis)
 	}
-	s.finalizeRoute(&analysis)
+	if analysis.To == KyberSwapRouter {
+		s.finalizeKyberRFQ(&analysis, internalErr)
+	} else {
+		s.finalizeRoute(&analysis)
+		s.appendUniswapConversion(&analysis)
+	}
 	if err := s.repo.SaveTransactionAnalysis(ctx, analysis); err != nil {
 		return store.TransactionAnalysis{}, fmt.Errorf("save transaction analysis: %w", err)
 	}
 	return analysis, nil
+}
+
+func (s *Service) finalizeKyberRFQ(analysis *store.TransactionAnalysis, internalErr error) {
+	partial := store.SwapConversion{Protocol: "kyberswap", Version: "rfq", Status: "partial", Initiator: analysis.From, Router: KyberSwapRouter, Executor: KyberSwapExecutor}
+	if !analysis.Succeeded {
+		partial.Issues = []string{"transaction execution failed"}
+		analysis.Conversions = append(analysis.Conversions, partial)
+		analysis.Quality.Status = "partial"
+		return
+	}
+	if internalErr != nil {
+		partial.Issues = []string{"internal transactions unavailable"}
+		analysis.Conversions = append(analysis.Conversions, partial)
+		analysis.Quality.Status = "partial"
+		return
+	}
+	for _, call := range analysis.InternalCalls {
+		if call.IsError {
+			partial.Issues = []string{"failed internal call"}
+			analysis.Conversions = append(analysis.Conversions, partial)
+			analysis.Quality.Status = "partial"
+			return
+		}
+	}
+	if !hasInternalCall(analysis.InternalCalls, KyberSwapRouter, KyberSwapExecutor, "") {
+		partial.Issues = []string{"router to executor call missing"}
+		analysis.Conversions = append(analysis.Conversions, partial)
+		analysis.Quality.Status = "partial"
+		return
+	}
+	candidates := make([]store.SwapConversion, 0, 1)
+	for _, input := range analysis.Transfers {
+		if input.From != analysis.From || input.To != KyberSwapExecutor || input.Token == EthereumWETH {
+			continue
+		}
+		for _, payment := range analysis.Transfers {
+			if payment.From != KyberSwapExecutor || payment.Token != input.Token || payment.Amount != input.Amount {
+				continue
+			}
+			provider := payment.To
+			for _, output := range analysis.Transfers {
+				if output.Token != EthereumWETH || output.From != provider || output.To != KyberSwapExecutor {
+					continue
+				}
+				if !hasWithdrawal(analysis.Wraps, KyberSwapExecutor, output.Amount) || !hasInternalCall(analysis.InternalCalls, EthereumWETH, KyberSwapExecutor, output.Amount) {
+					continue
+				}
+				recipients := internalRecipients(analysis.InternalCalls, KyberSwapExecutor, output.Amount)
+				if len(recipients) != 1 {
+					continue
+				}
+				candidates = append(candidates, store.SwapConversion{
+					Protocol: "kyberswap", Version: "rfq", Status: "complete", Initiator: analysis.From, Router: KyberSwapRouter, Executor: KyberSwapExecutor,
+					LiquidityProvider: provider, Recipient: recipients[0], TokenIn: input.Token, AmountIn: input.Amount, TokenOut: "ETH", AmountOut: output.Amount,
+					Evidence: []string{"receipt transfer: initiator to executor", "receipt transfer: liquidity provider WETH to executor", "receipt transfer: executor token payment to liquidity provider", "WETH withdrawal log", "internal ETH calls"},
+				})
+			}
+		}
+	}
+	if len(candidates) != 1 {
+		partial.Issues = []string{"RFQ participants or amounts are ambiguous"}
+		analysis.Conversions = append(analysis.Conversions, partial)
+		analysis.Quality.Status = "partial"
+		return
+	}
+	analysis.Conversions = append(analysis.Conversions, candidates[0])
+	analysis.FinalOutputAddress = candidates[0].Recipient
+	analysis.Quality.Status = "complete"
+	analysis.Quality.AmbiguousRoute = false
+	analysis.Quality.Evidence = append(analysis.Quality.Evidence, "verified KyberSwap RFQ transfer and internal-call balance")
+}
+
+func hasInternalCall(calls []store.InternalCall, from, to, value string) bool {
+	for _, call := range calls {
+		if !call.IsError && call.From == from && call.To == to && (value == "" || call.Value == value) {
+			return true
+		}
+	}
+	return false
+}
+
+func internalRecipients(calls []store.InternalCall, from, value string) []string {
+	result := make([]string, 0, 1)
+	for _, call := range calls {
+		if !call.IsError && call.From == from && call.Value == value && call.To != EthereumWETH {
+			result = append(result, call.To)
+		}
+	}
+	return result
+}
+
+func hasWithdrawal(wraps []store.WrapEvent, account, amount string) bool {
+	for _, wrap := range wraps {
+		if wrap.Type == "withdrawal" && wrap.Account == account && wrap.Amount == amount {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) appendUniswapConversion(analysis *store.TransactionAnalysis) {
+	if analysis.Quality.Status != "complete" || len(analysis.Swaps) == 0 {
+		return
+	}
+	first, last := analysis.Swaps[0], analysis.Swaps[len(analysis.Swaps)-1]
+	analysis.Conversions = append(analysis.Conversions, store.SwapConversion{Protocol: "uniswap", Version: "v3", Status: "complete", Initiator: analysis.From, Router: analysis.To, Recipient: analysis.FinalOutputAddress, TokenIn: first.TokenIn, AmountIn: first.AmountIn, TokenOut: last.TokenOut, AmountOut: last.AmountOut, Evidence: []string{"verified Uniswap V3 pool logs"}})
 }
 
 func (s *Service) parseLogs(ctx context.Context, logs []etherscan.RPCLog, analysis *store.TransactionAnalysis) {

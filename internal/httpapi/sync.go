@@ -100,6 +100,8 @@ func jobResponse(job store.SyncJob) map[string]any {
 		"cachedAddresses":     job.CachedAddresses,
 		"fetched":             job.Fetched,
 		"actionCounts":        job.ActionCounts,
+		"maxRecordsPerAction": job.MaxRecordsPerAction,
+		"truncatedActions":    job.TruncatedActions,
 		"progress":            job.Progress,
 		"successfulNeighbors": job.SuccessfulNeighbors,
 		"failedNeighbors":     job.FailedNeighbors,

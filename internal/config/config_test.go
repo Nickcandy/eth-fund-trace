@@ -19,6 +19,8 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("SYNC_CACHE_TTL_MINUTES", "")
 	t.Setenv("SYNC_CONFIRMATIONS", "")
 	t.Setenv("SYNC_QUEUE_SIZE", "")
+	t.Setenv("SYNC_MAX_RECORDS_PER_ACTION", "")
+	t.Setenv("TRACE_EXISTING_DATA_ONLY", "")
 	t.Setenv("ETHEREUM_SYNC_START_BLOCK", "")
 	t.Setenv("BASE_SYNC_START_BLOCK", "")
 	t.Setenv("HTTP_API_KEY", "")
@@ -37,7 +39,7 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("BRIDGE_SYNC_MAX_CONCURRENCY", "")
 
 	got := Load()
-	if got.HTTPAddr != ":8080" || got.HTTPTimeoutSeconds != 30 || got.HTTPBodyLimit != "1M" || got.HTTPRequestsPerSecond != 20 || got.HTTPBurst != 10 || got.MongoURI != "mongodb://localhost:27017" || got.MongoDatabase != "eth_fund_trace" || got.EtherscanBaseURL != "https://api.etherscan.io/v2/api" || got.EtherscanPageSize != 1000 || got.EtherscanMaxPages != 10 || got.EtherscanRequestsPerSecond != 3 || got.EtherscanBurst != 1 || got.EtherscanMaxRetries != 5 || got.EtherscanRetryBaseMS != 1000 || got.EtherscanHTTPTimeoutSeconds != 120 || got.EtherscanInternalLookbackBlocks != 100_000 || got.SyncCacheTTLMinutes != 15 || got.SyncConfirmations != 12 || got.SyncQueueSize != 100 || got.EthereumSyncStartBlock != 21525891 || got.BaseSyncStartBlock != 24450127 || got.EthereumBridgeConfirmations != 12 || got.BaseBridgeConfirmations != 20 || got.BridgeSyncBatchSize != 50 {
+	if got.HTTPAddr != ":8080" || got.HTTPTimeoutSeconds != 30 || got.HTTPBodyLimit != "1M" || got.HTTPRequestsPerSecond != 20 || got.HTTPBurst != 10 || got.MongoURI != "mongodb://localhost:27017" || got.MongoDatabase != "eth_fund_trace" || got.EtherscanBaseURL != "https://api.etherscan.io/v2/api" || got.EtherscanPageSize != 1000 || got.EtherscanMaxPages != 10 || got.EtherscanRequestsPerSecond != 3 || got.EtherscanBurst != 1 || got.EtherscanMaxRetries != 5 || got.EtherscanRetryBaseMS != 1000 || got.EtherscanHTTPTimeoutSeconds != 120 || got.EtherscanInternalLookbackBlocks != 100_000 || got.SyncCacheTTLMinutes != 15 || got.SyncConfirmations != 12 || got.SyncQueueSize != 100 || got.SyncMaxRecordsPerAction != 0 || got.TraceExistingDataOnly || got.EthereumSyncStartBlock != 21525891 || got.BaseSyncStartBlock != 24450127 || got.EthereumBridgeConfirmations != 12 || got.BaseBridgeConfirmations != 20 || got.BridgeSyncBatchSize != 50 {
 		t.Fatalf("unexpected defaults: %+v", got)
 	}
 }
@@ -59,6 +61,8 @@ func TestLoadEnvironment(t *testing.T) {
 	t.Setenv("SYNC_CACHE_TTL_MINUTES", "30")
 	t.Setenv("SYNC_CONFIRMATIONS", "20")
 	t.Setenv("SYNC_QUEUE_SIZE", "50")
+	t.Setenv("SYNC_MAX_RECORDS_PER_ACTION", "100000")
+	t.Setenv("TRACE_EXISTING_DATA_ONLY", "true")
 	t.Setenv("ETHEREUM_SYNC_START_BLOCK", "22000000")
 	t.Setenv("BASE_SYNC_START_BLOCK", "25000000")
 	t.Setenv("HTTP_API_KEY", "api-secret")
@@ -77,7 +81,7 @@ func TestLoadEnvironment(t *testing.T) {
 	t.Setenv("BRIDGE_SYNC_MAX_CONCURRENCY", "4")
 
 	got := Load()
-	if got.HTTPAddr != ":9090" || got.HTTPAPIKey != "api-secret" || !got.HTTPAuthDisabled || got.HTTPTimeoutSeconds != 12 || got.HTTPBodyLimit != "2M" || got.HTTPRequestsPerSecond != 8 || got.HTTPBurst != 3 || got.MongoURI != "mongodb://mongo:27017" || got.MongoDatabase != "test_db" || got.EtherscanAPIKey != "secret" || got.EtherscanBaseURL != "http://localhost:9999/api" || got.EtherscanPageSize != 25 || got.EtherscanMaxPages != 4 || got.EtherscanRequestsPerSecond != 7 || got.EtherscanBurst != 2 || got.EtherscanMaxRetries != 4 || got.EtherscanRetryBaseMS != 25 || got.EtherscanHTTPTimeoutSeconds != 45 || got.EtherscanInternalLookbackBlocks != 250_000 || got.SyncCacheTTLMinutes != 30 || got.SyncConfirmations != 20 || got.SyncQueueSize != 50 || got.EthereumSyncStartBlock != 22000000 || got.BaseSyncStartBlock != 25000000 || got.EthereumRPCURL != "https://ethereum.example/rpc" || got.BaseRPCURL != "https://base.example/rpc" || got.BridgeSyncMaxConcurrency != 4 {
+	if got.HTTPAddr != ":9090" || got.HTTPAPIKey != "api-secret" || !got.HTTPAuthDisabled || got.HTTPTimeoutSeconds != 12 || got.HTTPBodyLimit != "2M" || got.HTTPRequestsPerSecond != 8 || got.HTTPBurst != 3 || got.MongoURI != "mongodb://mongo:27017" || got.MongoDatabase != "test_db" || got.EtherscanAPIKey != "secret" || got.EtherscanBaseURL != "http://localhost:9999/api" || got.EtherscanPageSize != 25 || got.EtherscanMaxPages != 4 || got.EtherscanRequestsPerSecond != 7 || got.EtherscanBurst != 2 || got.EtherscanMaxRetries != 4 || got.EtherscanRetryBaseMS != 25 || got.EtherscanHTTPTimeoutSeconds != 45 || got.EtherscanInternalLookbackBlocks != 250_000 || got.SyncCacheTTLMinutes != 30 || got.SyncConfirmations != 20 || got.SyncQueueSize != 50 || got.SyncMaxRecordsPerAction != 100_000 || !got.TraceExistingDataOnly || got.EthereumSyncStartBlock != 22000000 || got.BaseSyncStartBlock != 25000000 || got.EthereumRPCURL != "https://ethereum.example/rpc" || got.BaseRPCURL != "https://base.example/rpc" || got.BridgeSyncMaxConcurrency != 4 {
 		t.Fatalf("unexpected environment config: %+v", got)
 	}
 }

@@ -73,7 +73,7 @@ func TestSyncHandlerRejectsInvalidRequest(t *testing.T) {
 func TestSyncHandlerReturnsLatestJobForAddress(t *testing.T) {
 	id := primitive.NewObjectID()
 	address := "0x0000000000000000000000000000000000000001"
-	manager := &stubSyncManager{job: store.SyncJob{ID: id, Chain: "ethereum", Address: address, Status: "running", CreatedAt: time.Now()}}
+	manager := &stubSyncManager{job: store.SyncJob{ID: id, Chain: "ethereum", Address: address, Status: "partial", CreatedAt: time.Now(), MaxRecordsPerAction: 100_000, TruncatedActions: []string{"txlist"}}}
 	handler := NewSyncHandler(manager)
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/sync-jobs/latest?chain=ethereum&address="+address, nil)
@@ -83,7 +83,7 @@ func TestSyncHandlerReturnsLatestJobForAddress(t *testing.T) {
 	if err := handler.LatestJob(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if res.Code != http.StatusOK || manager.chain != "ethereum" || manager.address != address || !strings.Contains(res.Body.String(), id.Hex()) {
+	if res.Code != http.StatusOK || manager.chain != "ethereum" || manager.address != address || !containsAll(res.Body.String(), id.Hex(), `"maxRecordsPerAction":100000`, `"truncatedActions":["txlist"]`) {
 		t.Fatalf("status=%d chain=%s address=%s body=%s", res.Code, manager.chain, manager.address, res.Body.String())
 	}
 }

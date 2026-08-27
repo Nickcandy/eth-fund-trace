@@ -90,7 +90,7 @@ func indexModels() map[string][]mongo.IndexModel {
 		},
 		PropagationJobsCollection: {
 			{Keys: bson.D{{Key: "idempotencyKey", Value: 1}}, Options: options.Index().SetUnique(true).SetName("uq_propagation_jobs_idempotency")},
-			{Keys: bson.D{{Key: "propagationVersion", Value: 1}, {Key: "status", Value: 1}, {Key: "leaseUntil", Value: 1}, {Key: "createdAt", Value: 1}}, Options: options.Index().SetName("idx_propagation_jobs_claim")},
+			{Keys: bson.D{{Key: "propagationVersion", Value: 1}, {Key: "status", Value: 1}, {Key: "leaseUntil", Value: 1}, {Key: "createdAt", Value: 1}}, Options: options.Index().SetName("idx_propagation_jobs_claim_v2")},
 		},
 		RiskAssociationsCollection: {
 			{Keys: bson.D{{Key: "sourceLabelId", Value: 1}, {Key: "targetChain", Value: 1}, {Key: "targetAddress", Value: 1}, {Key: "direction", Value: 1}, {Key: "asset", Value: 1}, {Key: "propagationVersion", Value: 1}, {Key: "dataThroughBlock", Value: 1}}, Options: options.Index().SetUnique(true).SetName("uq_risk_associations_version")},
@@ -137,6 +137,19 @@ func (s *Store) FindAddress(ctx context.Context, chain, address string) (Address
 	return result, err == nil, err
 }
 
+// SetAddressIdentity persists a chain-confirmed address type and protocol roles.
+func (s *Store) SetAddressIdentity(ctx context.Context, chain, address string, identity AddressIdentity) error {
+	_, err := s.db.Collection(AddressesCollection).UpdateOne(ctx,
+		bson.D{{Key: "chain", Value: chain}, {Key: "address", Value: address}},
+		bson.D{{Key: "$set", Value: bson.D{
+			{Key: "addressType", Value: identity.AddressType},
+			{Key: "isContract", Value: identity.AddressType == "contract"},
+			{Key: "protocol", Value: identity.Protocol},
+			{Key: "roles", Value: identity.Roles},
+		}}}, options.Update().SetUpsert(true))
+	return err
+}
+
 func (s *Store) SetAddressSyncing(ctx context.Context, chain string, chainID int64, address string) error {
 	_, err := s.db.Collection(AddressesCollection).UpdateOne(ctx,
 		bson.D{{Key: "chain", Value: chain}, {Key: "address", Value: address}},
@@ -159,6 +172,21 @@ func (s *Store) CompleteAddressSync(ctx context.Context, chain, address string, 
 			{Key: "lastSyncedAt", Value: syncedAt},
 			{Key: "syncStatus", Value: "synced"},
 			{Key: "syncError", Value: ""},
+			{Key: "syncMaxRecordsPerAction", Value: int64(0)},
+		}}})
+	return err
+}
+
+func (s *Store) CompleteAddressPartial(ctx context.Context, chain, address string, latest, maxRecordsPerAction int64, syncedAt time.Time) error {
+	_, err := s.db.Collection(AddressesCollection).UpdateOne(ctx,
+		bson.D{{Key: "chain", Value: chain}, {Key: "address", Value: address}},
+		bson.D{{Key: "$set", Value: bson.D{
+			{Key: "historySyncedToBlock", Value: latest},
+			{Key: "latestSyncedBlock", Value: latest},
+			{Key: "lastSyncedAt", Value: syncedAt},
+			{Key: "syncStatus", Value: "partial"},
+			{Key: "syncError", Value: "record_limit"},
+			{Key: "syncMaxRecordsPerAction", Value: maxRecordsPerAction},
 		}}})
 	return err
 }
@@ -262,7 +290,7 @@ func (s *Store) FindLatestSyncJob(ctx context.Context, chain, address string) (S
 	return job, err
 }
 
-func (s *Store) FindSyncCheckpoints(ctx context.Context, chain, address string, startBlock, internalLookbackBlocks int64) (map[string]int64, error) {
+func (s *Store) FindSyncCheckpoints(ctx context.Context, chain, address string, startBlock, internalLookbackBlocks, maxRecordsPerAction int64) (map[string]int64, error) {
 	var job SyncJob
 	err := s.db.Collection(SyncJobsCollection).FindOne(ctx, bson.D{{Key: "chain", Value: chain}, {Key: "address", Value: address}, {Key: "startBlock", Value: startBlock}}, options.FindOne().SetSort(bson.D{{Key: "createdAt", Value: -1}})).Decode(&job)
 	if errors.Is(err, mongo.ErrNoDocuments) {
@@ -271,7 +299,10 @@ func (s *Store) FindSyncCheckpoints(ctx context.Context, chain, address string, 
 	if err != nil {
 		return nil, err
 	}
-	if job.Status != "failed" {
+	if job.Status != "failed" && job.Status != "stopped" {
+		return map[string]int64{}, nil
+	}
+	if job.MaxRecordsPerAction != maxRecordsPerAction {
 		return map[string]int64{}, nil
 	}
 	if len(job.Progress.ActionCheckpoints) > 0 {

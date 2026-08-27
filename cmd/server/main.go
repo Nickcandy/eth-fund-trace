@@ -58,7 +58,7 @@ func run(parent context.Context) error {
 	clientConfig := etherscan.Config{
 		APIKey: cfg.EtherscanAPIKey, BaseURL: cfg.EtherscanBaseURL, PageSize: cfg.EtherscanPageSize,
 		MaxPages: cfg.EtherscanMaxPages, RequestsPerSecond: float64(cfg.EtherscanRequestsPerSecond),
-		Burst: cfg.EtherscanBurst, MaxRetries: cfg.EtherscanMaxRetries, RetryBase: time.Duration(cfg.EtherscanRetryBaseMS) * time.Millisecond, HTTPClient: &http.Client{Timeout: time.Duration(cfg.EtherscanHTTPTimeoutSeconds) * time.Second}, Limiter: sharedEtherscanLimiter,
+		Burst: cfg.EtherscanBurst, MaxRetries: cfg.EtherscanMaxRetries, RetryBase: time.Duration(cfg.EtherscanRetryBaseMS) * time.Millisecond, Descending: cfg.SyncMaxRecordsPerAction > 0, HTTPClient: &http.Client{Timeout: time.Duration(cfg.EtherscanHTTPTimeoutSeconds) * time.Second}, Limiter: sharedEtherscanLimiter,
 	}
 	ethereumConfig := clientConfig
 	ethereumConfig.Chain, ethereumConfig.ChainID = "ethereum", 1
@@ -90,6 +90,7 @@ func run(parent context.Context) error {
 		CacheTTL: time.Duration(cfg.SyncCacheTTLMinutes) * time.Minute, DisableCache: cfg.SyncCacheTTLMinutes == 0, Confirmations: int64(cfg.SyncConfirmations), QueueSize: cfg.SyncQueueSize,
 		InternalLookbackBlocks: cfg.EtherscanInternalLookbackBlocks,
 		HistoryLookbackBlocks:  cfg.EtherscanLookbackBlocks,
+		MaxRecordsPerAction:    cfg.SyncMaxRecordsPerAction,
 		StartBlocks:            map[string]int64{"ethereum": cfg.EthereumSyncStartBlock, "base": cfg.BaseSyncStartBlock},
 		AfterAddressSynced: func(ctx context.Context, chain, address string) error {
 			_, err := addressProfiler.Get(ctx, chain, address)
@@ -129,13 +130,24 @@ func run(parent context.Context) error {
 	httpapi.UseGovernance(e, httpapi.GovernanceConfig{APIKey: cfg.HTTPAPIKey, DisableAuth: cfg.HTTPAuthDisabled, Timeout: time.Duration(cfg.HTTPTimeoutSeconds) * time.Second, BodyLimit: cfg.HTTPBodyLimit, RequestsPerSecond: float64(cfg.HTTPRequestsPerSecond), Burst: cfg.HTTPBurst})
 	e.GET("/healthz", httpapi.NewHealthHandler(client).Handle)
 	syncHandler := httpapi.NewSyncHandler(syncManager)
-	e.POST("/api/v1/sync", syncHandler.Enqueue)
+	if !cfg.TraceExistingDataOnly {
+		e.POST("/api/v1/sync", syncHandler.Enqueue)
+	}
 	e.GET("/api/v1/sync-jobs/latest", syncHandler.LatestJob)
 	e.GET("/api/v1/sync-jobs/:id", syncHandler.Job)
 	e.GET("/api/v1/addresses/:address/profile", httpapi.NewProfileHandler(addressProfiler).Get)
 	e.GET("/api/v1/addresses/:address", httpapi.NewAddressHandler(appStore).Get)
 	e.GET("/api/v1/edges", httpapi.NewEdgeHandler(fundgraph.New(appStore)).Get)
-	traceManager := tracer.NewManager(tracer.New(appStore).WithTransactionAnalyzer(transactionAnalyzer), appStore, syncManager)
+	traceGraph := tracer.New(appStore).
+		WithTransactionAnalyzer(transactionAnalyzer).
+		WithAddressInspector(transactionAnalyzer).
+		WithRequiredStartBlocks(map[string]int64{"ethereum": cfg.EthereumSyncStartBlock, "base": cfg.BaseSyncStartBlock}).
+		WithExistingDataOnly(cfg.TraceExistingDataOnly)
+	var traceSyncJobs tracer.SyncJobs
+	if !cfg.TraceExistingDataOnly {
+		traceSyncJobs = syncManager
+	}
+	traceManager := tracer.NewManager(traceGraph, appStore, traceSyncJobs)
 	traceHandler := httpapi.NewTraceHandler(traceManager)
 	e.GET("/api/v1/trace", traceHandler.Enqueue)
 	e.GET("/api/v1/trace-jobs/latest", traceHandler.LatestJob)
@@ -162,11 +174,13 @@ func run(parent context.Context) error {
 
 	serverCtx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	go func() {
-		if err := syncManager.Run(serverCtx); err != nil && !errors.Is(err, context.Canceled) {
-			slog.Error("sync manager stopped", "error", err)
-		}
-	}()
+	if !cfg.TraceExistingDataOnly {
+		go func() {
+			if err := syncManager.Run(serverCtx); err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error("sync manager stopped", "error", err)
+			}
+		}()
+	}
 	if bridgeWorker != nil {
 		go func() {
 			if err := bridgeWorker.Run(serverCtx); err != nil && !errors.Is(err, context.Canceled) {

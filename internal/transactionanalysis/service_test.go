@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -24,9 +25,16 @@ const (
 type sourceStub struct {
 	tx        etherscan.RPCTransaction
 	receipt   etherscan.RPCReceipt
+	code      string
+	internals []etherscan.InternalTransaction
 	calls     map[string]string
 	poolCalls map[string]string
 	txCalls   int
+}
+
+func (s *sourceStub) CodeAt(context.Context, string) (string, error) { return s.code, nil }
+func (s *sourceStub) InternalTransactionsByHash(context.Context, string) ([]etherscan.InternalTransaction, error) {
+	return s.internals, nil
 }
 
 func (s *sourceStub) TransactionByHash(context.Context, string) (etherscan.RPCTransaction, error) {
@@ -100,6 +108,121 @@ func TestAnalyzeVerifiedV3SwapPreservesSignedLargeAmountsAndCaches(t *testing.T)
 	}
 	if _, err := service.Analyze(context.Background(), "ethereum", testHash); err != nil || source.txCalls != 1 {
 		t.Fatalf("cache txCalls=%d err=%v", source.txCalls, err)
+	}
+}
+
+func TestInspectAddressClassifiesKyberExecutorAndEOA(t *testing.T) {
+	service := New(&sourceStub{code: "0x60016000"}, newRepoStub(), time.Now)
+	identity, err := service.InspectAddress(context.Background(), "ethereum", KyberSwapExecutor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.AddressType != "contract" || identity.Protocol != "kyberswap" || !slices.Equal(identity.Roles, []string{"kyberswap_executor"}) {
+		t.Fatalf("identity=%+v", identity)
+	}
+
+	service = New(&sourceStub{code: "0x"}, newRepoStub(), time.Now)
+	identity, err = service.InspectAddress(context.Background(), "ethereum", testUser)
+	if err != nil || identity.AddressType != "eoa" || identity.Protocol != "" || len(identity.Roles) != 0 {
+		t.Fatalf("identity=%+v err=%v", identity, err)
+	}
+}
+
+func TestInspectAddressClassifiesVerifiedPool(t *testing.T) {
+	repo := newRepoStub()
+	repo.pools["ethereum"+testPool] = store.PoolMetadata{Chain: "ethereum", Pool: testPool, Verified: true}
+	identity, err := New(&sourceStub{code: "0x6001"}, repo, time.Now).InspectAddress(context.Background(), "ethereum", testPool)
+	if err != nil || identity.AddressType != "contract" || identity.Protocol != "uniswap" || !slices.Equal(identity.Roles, []string{"pool"}) {
+		t.Fatalf("identity=%+v err=%v", identity, err)
+	}
+}
+
+func TestAnalyzeKyberRFQBuildsVerifiedConversion(t *testing.T) {
+	const (
+		initiator = "0x00000000000000000000000000000000000000a1"
+		provider  = "0x67336cec42645f55059eff241cb02ea5cc52ff86"
+		usdt      = "0xdac17f958d2ee523a2206206994597c13d831ec7"
+		amountIn  = "1000000000000"
+		amountOut = "274823886000000000000"
+	)
+	source := &sourceStub{
+		tx: etherscan.RPCTransaction{Hash: testHash, From: initiator, To: KyberSwapRouter, Value: "0x0", Input: "0x1234", BlockNumber: "0x10"},
+		receipt: etherscan.RPCReceipt{TransactionHash: testHash, BlockNumber: "0x10", Status: "0x1", Logs: []etherscan.RPCLog{
+			{Address: usdt, Topics: []string{transferTopic, topic(initiator), topic(KyberSwapExecutor)}, Data: "0x" + word(decimal(amountIn)), LogIndex: "0x1"},
+			{Address: EthereumWETH, Topics: []string{transferTopic, topic(provider), topic(KyberSwapExecutor)}, Data: "0x" + word(decimal(amountOut)), LogIndex: "0x2"},
+			{Address: usdt, Topics: []string{transferTopic, topic(KyberSwapExecutor), topic(provider)}, Data: "0x" + word(decimal(amountIn)), LogIndex: "0x3"},
+			{Address: EthereumWETH, Topics: []string{withdrawalTopic, topic(KyberSwapExecutor)}, Data: "0x" + word(decimal(amountOut)), LogIndex: "0x4"},
+		}},
+		internals: []etherscan.InternalTransaction{
+			{From: KyberSwapRouter, To: KyberSwapExecutor, Value: "0", Type: "call", TraceID: "0"},
+			{From: EthereumWETH, To: KyberSwapExecutor, Value: amountOut, Type: "call", TraceID: "0_1"},
+			{From: KyberSwapExecutor, To: initiator, Value: amountOut, Type: "call", TraceID: "0_2"},
+		},
+	}
+
+	analysis, err := New(source, newRepoStub(), time.Now).Analyze(context.Background(), "ethereum", testHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(analysis.InternalCalls) != 3 || len(analysis.Conversions) != 1 {
+		t.Fatalf("analysis=%+v", analysis)
+	}
+	conversion := analysis.Conversions[0]
+	if conversion.Status != "complete" || conversion.Protocol != "kyberswap" || conversion.Version != "rfq" || conversion.Initiator != initiator || conversion.Router != KyberSwapRouter || conversion.Executor != KyberSwapExecutor || conversion.LiquidityProvider != provider || conversion.Recipient != initiator || conversion.TokenIn != usdt || conversion.AmountIn != amountIn || conversion.TokenOut != "ETH" || conversion.AmountOut != amountOut {
+		t.Fatalf("conversion=%+v", conversion)
+	}
+	if analysis.Quality.Status != "complete" || analysis.FinalOutputAddress != initiator {
+		t.Fatalf("quality=%+v output=%s", analysis.Quality, analysis.FinalOutputAddress)
+	}
+}
+
+func TestAnalyzeKyberRFQRejectsIncompleteOrAmbiguousEvidence(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*sourceStub)
+	}{
+		{name: "missing internal payout", mutate: func(source *sourceStub) { source.internals = source.internals[:2] }},
+		{name: "failed internal call", mutate: func(source *sourceStub) { source.internals[2].IsError = true }},
+		{name: "amount mismatch", mutate: func(source *sourceStub) { source.internals[2].Value = "1" }},
+		{name: "multiple recipients", mutate: func(source *sourceStub) {
+			source.internals = append(source.internals, etherscan.InternalTransaction{From: KyberSwapExecutor, To: "0x00000000000000000000000000000000000000b2", Value: source.internals[2].Value, Type: "call", TraceID: "0_3"})
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source := kyberFixtureSource()
+			test.mutate(source)
+			analysis, err := New(source, newRepoStub(), time.Now).Analyze(context.Background(), "ethereum", testHash)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(analysis.Conversions) != 1 || analysis.Conversions[0].Status != "partial" || analysis.Quality.Status != "partial" || len(analysis.Conversions[0].Issues) == 0 {
+				t.Fatalf("analysis=%+v", analysis)
+			}
+		})
+	}
+}
+
+func kyberFixtureSource() *sourceStub {
+	const (
+		initiator = "0x00000000000000000000000000000000000000a1"
+		provider  = "0x67336cec42645f55059eff241cb02ea5cc52ff86"
+		usdt      = "0xdac17f958d2ee523a2206206994597c13d831ec7"
+		amountIn  = "1000000000000"
+		amountOut = "274823886000000000000"
+	)
+	return &sourceStub{
+		tx: etherscan.RPCTransaction{Hash: testHash, From: initiator, To: KyberSwapRouter, Value: "0x0", Input: "0x1234", BlockNumber: "0x10"},
+		receipt: etherscan.RPCReceipt{TransactionHash: testHash, BlockNumber: "0x10", Status: "0x1", Logs: []etherscan.RPCLog{
+			{Address: usdt, Topics: []string{transferTopic, topic(initiator), topic(KyberSwapExecutor)}, Data: "0x" + word(decimal(amountIn)), LogIndex: "0x1"},
+			{Address: EthereumWETH, Topics: []string{transferTopic, topic(provider), topic(KyberSwapExecutor)}, Data: "0x" + word(decimal(amountOut)), LogIndex: "0x2"},
+			{Address: usdt, Topics: []string{transferTopic, topic(KyberSwapExecutor), topic(provider)}, Data: "0x" + word(decimal(amountIn)), LogIndex: "0x3"},
+			{Address: EthereumWETH, Topics: []string{withdrawalTopic, topic(KyberSwapExecutor)}, Data: "0x" + word(decimal(amountOut)), LogIndex: "0x4"},
+		}},
+		internals: []etherscan.InternalTransaction{
+			{From: KyberSwapRouter, To: KyberSwapExecutor, Value: "0", Type: "call", TraceID: "0"},
+			{From: EthereumWETH, To: KyberSwapExecutor, Value: amountOut, Type: "call", TraceID: "0_1"},
+			{From: KyberSwapExecutor, To: initiator, Value: amountOut, Type: "call", TraceID: "0_2"},
+		},
 	}
 }
 
@@ -212,3 +335,7 @@ func topic(value string) string {
 	return "0x" + strings.Repeat("0", 24) + strings.TrimPrefix(value, "0x")
 }
 func returnWord(value string) string { return topic(value) }
+func decimal(value string) *big.Int {
+	result, _ := new(big.Int).SetString(value, 10)
+	return result
+}

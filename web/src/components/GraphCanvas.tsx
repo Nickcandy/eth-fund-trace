@@ -23,9 +23,17 @@ type InteractiveEdge = Edge<InteractiveEdgeData, "interactive">;
 const nodeTypes = { fund: FundNode };
 const edgeTypes = { interactive: InteractiveGraphEdge };
 const DENSE_GRAPH_EDGE_LIMIT = 20;
+export type AssetFilter = "all" | "ETH" | "USDT" | "erc20";
 
 export function labelsVisibleByDefault(edgeCount: number) { return edgeCount <= DENSE_GRAPH_EDGE_LIMIT; }
 export function edgeLabelVisible(showAll: boolean, selected: boolean, touchesSeed: boolean) { return showAll || selected || touchesSeed; }
+export function matchesAssetFilter(edge: GraphEdgeModel, filter: AssetFilter) {
+  if (filter === "all") return true;
+  if (edge.kind === "bridge") return false;
+  if (filter === "ETH") return edge.assetType === "eth" || edge.assetType === "native" || edge.asset.toUpperCase() === "ETH";
+  if (filter === "USDT") return edge.assetSymbol.toUpperCase() === "USDT";
+  return edge.assetType === "erc20" && edge.assetSymbol.toUpperCase() !== "USDT";
+}
 
 function InteractiveGraphEdge(props: EdgeProps<InteractiveEdge>) {
   const [path, labelX, labelY] = getSmoothStepPath({ ...props, borderRadius: 10, offset: 28 });
@@ -42,6 +50,7 @@ function Canvas({ model, onSelectNode, onSelectEdge, onFocusAddress, onRelayout 
   const [positions, setPositions] = useState(new Map<string, { x: number; y: number }>());
   const [visibleDepth, setVisibleDepth] = useState(5);
   const [showLowConfidence, setShowLowConfidence] = useState(true);
+  const [assetFilter, setAssetFilter] = useState<AssetFilter>("all");
   const [showEdgeLabels, setShowEdgeLabels] = useState(() => labelsVisibleByDefault(model.edges.length));
   const [selectedEdgeID, setSelectedEdgeID] = useState<string>();
   const wrapper = useRef<HTMLDivElement>(null);
@@ -50,7 +59,10 @@ function Canvas({ model, onSelectNode, onSelectEdge, onFocusAddress, onRelayout 
   useEffect(() => { setShowEdgeLabels(labelsVisibleByDefault(model.edges.length)); setSelectedEdgeID(undefined); }, [model]);
   useEffect(() => { if (positions.size) window.setTimeout(() => flow.fitView({ padding: 0.18, duration: 350 }), 20); }, [flow, positions]);
 
-  const nodes = useMemo(() => model.nodes.filter((node) => Math.abs(node.hop) <= visibleDepth).map((node): FundFlowNode => ({
+  const filteredModelEdges = useMemo(() => model.edges.filter((edge) => matchesAssetFilter(edge, assetFilter)), [assetFilter, model.edges]);
+  const nodes = useMemo(() => {
+    const connected = new Set(filteredModelEdges.flatMap((edge) => [edge.source, edge.target]));
+    return model.nodes.filter((node) => (node.seed || connected.has(node.id)) && Math.abs(node.hop) <= visibleDepth).map((node): FundFlowNode => ({
     id: node.id, type: "fund", position: positions.get(node.id) ?? { x: node.hop * 320, y: node.chain === "base" ? 180 : 0 },
     data: {
       ...node,
@@ -58,12 +70,13 @@ function Canvas({ model, onSelectNode, onSelectEdge, onFocusAddress, onRelayout 
       labelTypes: !showLowConfidence && (node.inferenceConfidence ?? 1) < 0.7 ? [] : node.labelTypes,
       onFocus: onFocusAddress,
     },
-  })), [model.nodes, onFocusAddress, positions, showLowConfidence, visibleDepth]);
+    }));
+  }, [filteredModelEdges, model.nodes, onFocusAddress, positions, showLowConfidence, visibleDepth]);
   const nodeIDs = useMemo(() => new Set(nodes.map((node) => node.id)), [nodes]);
   const seedIDs = useMemo(() => new Set(model.nodes.filter((node) => node.seed).map((node) => node.id)), [model.nodes]);
   const nodeHops = useMemo(() => new Map(model.nodes.map((node) => [node.id, node.hop])), [model.nodes]);
-  const edgeLookup = useMemo(() => new Map(model.edges.map((edge) => [edge.id, edge])), [model.edges]);
-  const edges = useMemo(() => model.edges.filter((edge) => nodeIDs.has(edge.source) && nodeIDs.has(edge.target)).map((edge): InteractiveEdge => {
+  const edgeLookup = useMemo(() => new Map(filteredModelEdges.map((edge) => [edge.id, edge])), [filteredModelEdges]);
+  const edges = useMemo(() => filteredModelEdges.filter((edge) => nodeIDs.has(edge.source) && nodeIDs.has(edge.target)).map((edge): InteractiveEdge => {
     const bridge = edge.kind === "bridge";
     const flowDirection = edge.flow ?? "return";
     const stroke = bridge ? "#ef8b2c" : flowDirection === "inbound" ? "#2fb6a8" : flowDirection === "outbound" ? "#438bea" : "#d0a44c";
@@ -80,7 +93,7 @@ function Canvas({ model, onSelectNode, onSelectEdge, onFocusAddress, onRelayout 
       style: { stroke, strokeWidth: bridge ? 3 : 2, strokeDasharray: bridge ? "8 6" : undefined },
       markerEnd: { type: MarkerType.ArrowClosed, color: stroke, width: 16, height: 16 },
     };
-  }), [model.edges, nodeHops, nodeIDs, onSelectEdge, seedIDs, selectedEdgeID, showEdgeLabels]);
+  }), [filteredModelEdges, nodeHops, nodeIDs, onSelectEdge, seedIDs, selectedEdgeID, showEdgeLabels]);
   const exportPNG = async () => { if (wrapper.current) download("fund-trace.png", await toPng(wrapper.current, { backgroundColor: "#101317", pixelRatio: 2 })); };
   const exportJSON = () => download("fund-trace.json", URL.createObjectURL(new Blob([JSON.stringify(model, null, 2)], { type: "application/json" })));
   return (
@@ -95,6 +108,7 @@ function Canvas({ model, onSelectNode, onSelectEdge, onFocusAddress, onRelayout 
           <label title="显示的最大跳数"><GitBranch size={16} /><select aria-label="显示层级" value={visibleDepth} onChange={(event) => setVisibleDepth(Number(event.target.value))}>{[1,2,3,4,5].map((n) => <option key={n} value={n}>{n} 跳</option>)}</select></label>
           <button className={showLowConfidence ? "active" : ""} title="显示低置信度推断" onClick={() => setShowLowConfidence(!showLowConfidence)}>{showLowConfidence ? <Eye size={16}/> : <EyeOff size={16}/>}<span>低置信度</span></button>
           <button className={showEdgeLabels ? "active" : ""} title={showEdgeLabels?"隐藏全部边金额":"显示全部边金额"} onClick={() => setShowEdgeLabels(!showEdgeLabels)}><CircleDollarSign size={16}/><span>金额</span></button>
+          <label title="筛选图中资产"><CircleDollarSign size={16}/><select aria-label="资产筛选" value={assetFilter} onChange={(event) => { setAssetFilter(event.target.value as AssetFilter); setSelectedEdgeID(undefined); }}>{<><option value="all">全部资产</option><option value="ETH">ETH</option><option value="USDT">USDT</option><option value="erc20">其他 ERC-20</option></>}</select></label>
           <button title="导出 PNG" onClick={exportPNG}><Download size={16} /></button>
           <button title="导出 JSON" onClick={exportJSON}><FileJson size={16} /></button>
         </Panel>

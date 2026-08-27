@@ -23,7 +23,7 @@
 
 ### 分析能力
 
-- `trace-v5` 上下游分层资金图；
+- `trace-v6` 上下游分层资金图；
 - 官方 Token 白名单和确定性 Token 元数据；
 - Ethereum Transaction/Receipt、ERC-20 Transfer、WETH 和 Uniswap V3 解释；
 - Ethereum/Base 官方 OP Stack Bridge 的有限协议解析和生命周期；

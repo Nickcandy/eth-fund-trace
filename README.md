@@ -17,7 +17,7 @@ Etherscan V2 / Ethereum RPC / Base RPC
                     |
           +---------+----------+
           |                    |
-      tracer trace-v5   propagation-v3
+	  tracer trace-v6   propagation-v3
           |                    |
           +---------+----------+
                     v
@@ -28,8 +28,8 @@ Etherscan V2 / Ethereum RPC / Base RPC
 
 - `syncer`：分页采集三类地址历史，保存检查点和同步进度；
 - `store`：MongoDB Adapter、事实幂等写入、索引和有界聚合查询；
-- `tracer`：`trace-v5` 异步分层追踪，按资产和方向选择累计金额 TopN 对手方；
-- `transactionanalysis`：基于交易、Receipt 和合约校验解释 Uniswap V3 与 WETH 证据；
+- `tracer`：`trace-v6` 异步分层追踪，先识别合约身份，再按资产和方向选择累计金额 TopN 对手方；
+- `transactionanalysis`：基于交易、Receipt、单交易 Internal Transaction 和合约校验解释 Uniswap V3、KyberSwap RFQ 与 WETH 证据；
 - `bridge`：识别 Ethereum/Base 官方 OP Stack Bridge 并维护生命周期；
 - `profile`：生成 `hot-wallet-v1` 地址画像快照；
 - `propagation`：`propagation-v3` 以查询目标为中心的双向风险评估任务，不依赖展示图的 TopN；
@@ -41,7 +41,7 @@ Etherscan V2 / Ethereum RPC / Base RPC
 
 - Ethereum/Base 地址历史同步、共享限流、重试、区间拆分、分页续跑和批量幂等写入；
 - 普通 ETH、内部 ETH、ERC-20 的统一事实模型和稳定游标分页；
-- `trace-v5` 持久化 TraceJob，上下游分别展开，TopN 按同资产的对手方累计金额排序；
+- `trace-v6` 持久化 TraceJob，上下游分别展开，TopN 按同资产的对手方累计金额排序；
 - 根节点展示 ETH 及官方白名单 Token：Ethereum 的 DAI、USDC、USDT、WETH，Base 的 USDC、WETH；
 - 合约关系最多分析金额最大的 20 笔交易，只依据完整且无歧义的 Swap/Wrap 证据切换资产；
 - 人工/公开确定性标签、`hot-wallet-v1` 行为画像和风险解释；
@@ -53,7 +53,7 @@ Etherscan V2 / Ethereum RPC / Base RPC
 
 当前实现验证了从数据采集、事实存储、图查询到风险解释的闭环，但不是全链生产索引器：
 
-- Trace 遇到未同步邻居时仍可能触发全历史同步，高频地址会拖慢交互任务；
+- Trace 遇到未同步 EOA 邻居时仍可能触发全历史同步，高频地址会拖慢交互任务；合约关系使用最多 20 笔关系交易分析，不同步合约全历史；
 - 同步和 Trace 调度以单进程队列为主，不具备完整的多实例领取与恢复能力；
 - 没有链重组回滚、持续缺块校验、多数据源容灾和全局 API 配额治理；
 - 地址余额、`profile_job`、高扇出专项分析、交易锚点追踪和通用多协议/多链适配尚未完成；

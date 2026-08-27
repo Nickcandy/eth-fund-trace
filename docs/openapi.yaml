@@ -60,6 +60,8 @@ components:
         cachedAddresses: {type: integer, minimum: 0}
         fetched: {type: integer, minimum: 0}
         actionCounts: {type: object, additionalProperties: {type: integer}}
+        maxRecordsPerAction: {type: integer, minimum: 0, description: Per-action record cap; zero means unlimited.}
+        truncatedActions: {type: array, items: {type: string, enum: [txlist, txlistinternal, tokentx]}}
         progress: {$ref: '#/components/schemas/SyncProgress'}
         successfulNeighbors: {type: array, items: {type: string}}
         failedNeighbors: {type: array, items: {type: object}}
@@ -122,12 +124,15 @@ components:
         logIndex: {type: integer}
     TraceNode:
       type: object
-      required: [chain, address, depth, terminal]
+      required: [chain, address, depth, terminal, addressType]
       properties:
         chain: {type: string, enum: [ethereum, base]}
         address: {type: string}
         depth: {type: integer}
         terminal: {type: boolean}
+        addressType: {type: string, enum: [unknown, eoa, contract]}
+        protocol: {type: string}
+        roles: {type: array, items: {type: string}}
     TraceEdge:
       type: object
       required: [chain, from, to, assetType, asset, totalAmount, transferCount, kind, depth, path]
@@ -147,6 +152,25 @@ components:
         path: {type: array, items: {type: string}}
         conversionStatus: {type: string, enum: [complete, partial]}
         conversionScanned: {type: integer, maximum: 20}
+        conversionEvidence: {type: array, maxItems: 20, items: {$ref: '#/components/schemas/ConversionEvidence'}}
+    ConversionEvidence:
+      type: object
+      required: [txHash, protocol, version, status, evidence]
+      properties:
+        txHash: {type: string}
+        protocol: {type: string}
+        version: {type: string}
+        status: {type: string, enum: [complete, partial]}
+        initiator: {type: string}
+        router: {type: string}
+        executor: {type: string}
+        liquidityProvider: {type: string}
+        recipient: {type: string}
+        tokenIn: {type: string}
+        amountIn: {type: string}
+        tokenOut: {type: string}
+        amountOut: {type: string}
+        evidence: {type: array, items: {type: string}}
     BridgeEdge:
       type: object
       required: [link, depth, path]
@@ -217,7 +241,7 @@ components:
         dataStatus: {type: string}
         labels: {type: array, items: {$ref: '#/components/schemas/InferredLabel'}}
         risk: {$ref: '#/components/schemas/Risk'}
-        ruleVersion: {type: string, example: trace-v5}
+        ruleVersion: {type: string, example: trace-v6}
     TraceJob:
       type: object
       required: [id, chain, seedAddress, direction, depth, topN, asset, status, currentDepth, visitedNodes, edgeCount]
@@ -316,8 +340,9 @@ components:
         signals: {type: array, items: {type: string}}
     TransactionAnalysis:
       type: object
-      required: [chain, chainId, txHash, blockNumber, from, to, value, input, succeeded, transfers, swaps, wraps, quality, analyzedAt]
+      required: [analysisVersion, chain, chainId, txHash, blockNumber, from, to, value, input, succeeded, transfers, swaps, wraps, internalCalls, conversions, quality, analyzedAt]
       properties:
+        analysisVersion: {type: string, example: transaction-analysis-v2}
         chain: {type: string, enum: [ethereum]}
         chainId: {type: integer, enum: [1]}
         txHash: {type: string, pattern: '^0x[0-9a-fA-F]{64}$'}
@@ -332,9 +357,39 @@ components:
         transfers: {type: array, items: {$ref: '#/components/schemas/ReceiptTransfer'}}
         swaps: {type: array, items: {$ref: '#/components/schemas/SwapEvent'}}
         wraps: {type: array, items: {$ref: '#/components/schemas/WrapEvent'}}
+        internalCalls: {type: array, items: {$ref: '#/components/schemas/InternalCall'}}
+        conversions: {type: array, items: {$ref: '#/components/schemas/SwapConversion'}}
         finalOutputAddress: {type: string}
         quality: {$ref: '#/components/schemas/AnalysisQuality'}
         analyzedAt: {type: string, format: date-time}
+    InternalCall:
+      type: object
+      required: [from, to, value, type, traceId, isError]
+      properties:
+        from: {type: string}
+        to: {type: string}
+        value: {type: string}
+        type: {type: string}
+        traceId: {type: string}
+        isError: {type: boolean}
+    SwapConversion:
+      type: object
+      required: [protocol, version, status, evidence]
+      properties:
+        protocol: {type: string}
+        version: {type: string}
+        status: {type: string, enum: [complete, partial]}
+        initiator: {type: string}
+        router: {type: string}
+        executor: {type: string}
+        liquidityProvider: {type: string}
+        recipient: {type: string}
+        tokenIn: {type: string}
+        amountIn: {type: string}
+        tokenOut: {type: string}
+        amountOut: {type: string}
+        evidence: {type: array, items: {type: string}}
+        issues: {type: array, items: {type: string}}
     ReceiptTransfer:
       type: object
       required: [token, from, to, amount, logIndex]

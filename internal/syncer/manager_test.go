@@ -29,6 +29,12 @@ type boundarySource struct {
 	transactionRanges [][2]int64
 }
 
+type recentSource struct{}
+
+type recentBoundarySource struct {
+	ranges map[string][][2]int64
+}
+
 type recordingSource struct {
 	fakeSource
 	ranges       [][2]int64
@@ -78,6 +84,58 @@ func (*boundarySource) ListInternalTransactions(context.Context, string, int64, 
 
 func (*boundarySource) ListTokenTransfers(context.Context, string, int64, int64) ([]store.Transfer, error) {
 	return nil, nil
+}
+
+func (*recentSource) LatestBlock(context.Context) (int64, error) { return 20, nil }
+
+func (*recentSource) ListTransactions(_ context.Context, address string, _, _ int64) ([]store.Transfer, error) {
+	return recentTransfers(address, "txlist"), nil
+}
+
+func (*recentSource) ListInternalTransactions(_ context.Context, address string, _, _ int64) ([]store.Transfer, error) {
+	return recentTransfers(address, "txlistinternal"), nil
+}
+
+func (*recentSource) ListTokenTransfers(_ context.Context, address string, _, _ int64) ([]store.Transfer, error) {
+	return recentTransfers(address, "tokentx"), nil
+}
+
+func recentTransfers(address, source string) []store.Transfer {
+	result := make([]store.Transfer, 0, 5)
+	for block := int64(20); block >= 16; block-- {
+		result = append(result, store.Transfer{TxHash: fmt.Sprintf("0x%s%d", source, block), BlockNumber: block, From: address, To: "0x0000000000000000000000000000000000000002", AssetType: "eth", Asset: "ETH", Amount: "1", Source: source})
+	}
+	return result
+}
+
+func (s *recentBoundarySource) LatestBlock(context.Context) (int64, error) { return 20, nil }
+
+func (s *recentBoundarySource) ListTransactions(_ context.Context, address string, start, end int64) ([]store.Transfer, error) {
+	return s.records(address, "txlist", start, end)
+}
+
+func (s *recentBoundarySource) ListInternalTransactions(_ context.Context, address string, start, end int64) ([]store.Transfer, error) {
+	return s.records(address, "txlistinternal", start, end)
+}
+
+func (s *recentBoundarySource) ListTokenTransfers(_ context.Context, address string, start, end int64) ([]store.Transfer, error) {
+	return s.records(address, "tokentx", start, end)
+}
+
+func (s *recentBoundarySource) records(address, action string, start, end int64) ([]store.Transfer, error) {
+	if s.ranges == nil {
+		s.ranges = make(map[string][][2]int64)
+	}
+	s.ranges[action] = append(s.ranges[action], [2]int64{start, end})
+	blocks := []int64{end, end - 1, end - 2}
+	result := make([]store.Transfer, 0, len(blocks))
+	for _, block := range blocks {
+		result = append(result, store.Transfer{TxHash: fmt.Sprintf("0x%s%d", action, block), BlockNumber: block, From: address, To: "0x0000000000000000000000000000000000000002", AssetType: "eth", Asset: "ETH", Amount: "1", Source: action})
+	}
+	if end == 20 {
+		return result, &etherscan.PageLimitError{Action: action, MaxPages: 1, LastBlock: 18}
+	}
+	return result, nil
 }
 
 func (f *fakeSource) transfersWithProgress(ctx context.Context, address, source string, start, end int64, progress etherscan.ProgressFunc) ([]store.Transfer, error) {
@@ -152,7 +210,7 @@ type memoryRepository struct {
 	omitEmptyActionCounts bool
 }
 
-func (r *memoryRepository) FindSyncCheckpoints(_ context.Context, chain, address string, startBlock, internalLookbackBlocks int64) (map[string]int64, error) {
+func (r *memoryRepository) FindSyncCheckpoints(_ context.Context, chain, address string, startBlock, internalLookbackBlocks, maxRecordsPerAction int64) (map[string]int64, error) {
 	var latest store.SyncJob
 	for _, job := range r.jobs {
 		if job.Chain == chain && job.Address == address && job.StartBlock == startBlock && job.CreatedAt.After(latest.CreatedAt) {
@@ -160,7 +218,10 @@ func (r *memoryRepository) FindSyncCheckpoints(_ context.Context, chain, address
 		}
 	}
 	result := map[string]int64{}
-	if latest.Status != "failed" {
+	if latest.Status != "failed" && latest.Status != "stopped" {
+		return result, nil
+	}
+	if latest.MaxRecordsPerAction != maxRecordsPerAction {
 		return result, nil
 	}
 	for k, v := range latest.Progress.ActionCheckpoints {
@@ -202,7 +263,25 @@ func (r *memoryRepository) CompleteAddressSync(_ context.Context, _, address str
 	return nil
 }
 
-func (r *memoryRepository) FailAddressSync(context.Context, string, string, string) error { return nil }
+func (r *memoryRepository) CompleteAddressPartial(_ context.Context, _, address string, latest, maxRecordsPerAction int64, syncedAt time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	value := r.addresses[address]
+	value.LatestSyncedBlock, value.HistorySyncedToBlock = latest, latest
+	value.LastSyncedAt, value.SyncStatus, value.SyncError = syncedAt, "partial", "record_limit"
+	value.SyncMaxRecordsPerAction = maxRecordsPerAction
+	r.addresses[address] = value
+	return nil
+}
+
+func (r *memoryRepository) FailAddressSync(_ context.Context, _, address, message string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	value := r.addresses[address]
+	value.SyncStatus, value.SyncError = "failed", message
+	r.addresses[address] = value
+	return nil
+}
 
 func (r *memoryRepository) BulkUpsertTransfers(_ context.Context, transfers []store.Transfer) (int64, error) {
 	r.mu.Lock()
@@ -361,6 +440,35 @@ func TestManagerExposesPageProgressBeforeAddressCompletes(t *testing.T) {
 	if completed.Progress.RecordsWritten != 3 || completed.Progress.PagesFetched != 3 {
 		t.Fatalf("completed progress = %+v", completed.Progress)
 	}
+}
+
+func TestManagerStopClearsRunningAddressState(t *testing.T) {
+	seen, proceed := make(chan struct{}), make(chan struct{})
+	source := &fakeSource{latest: 100, progressSeen: seen, progressContinue: proceed}
+	repository := newMemoryRepository()
+	manager := New(source, repository, Config{QueueSize: 10})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = manager.Run(ctx) }()
+
+	address := "0x0000000000000000000000000000000000000001"
+	job, err := manager.Enqueue(context.Background(), Request{Chain: "ethereum", Address: address})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-seen:
+	case <-time.After(time.Second):
+		t.Fatal("sync did not start")
+	}
+	if err := manager.Stop(context.Background(), job.ID.Hex()); err != nil {
+		t.Fatal(err)
+	}
+	metadata, _, err := repository.FindAddress(context.Background(), "ethereum", address)
+	if err != nil || metadata.SyncStatus != "failed" || metadata.SyncError != "stopped by user" {
+		t.Fatalf("metadata=%+v err=%v", metadata, err)
+	}
+	close(proceed)
 }
 
 func TestManagerHandlesOmittedEmptyActionCountsAfterPersistence(t *testing.T) {
@@ -553,6 +661,85 @@ func TestManagerResumesFailedActionFromPersistedCheckpoint(t *testing.T) {
 	job = waitForJob(t, manager, job.ID.Hex())
 	if job.Status != "succeeded" || len(source.ranges) == 0 || source.ranges[0] != [2]int64{11, 20} {
 		t.Fatalf("job=%+v ranges=%v", job, source.ranges)
+	}
+}
+
+func TestManagerResumesStoppedActionFromPersistedCheckpoint(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	source := &recordingSource{fakeSource: fakeSource{latest: 20}}
+	repository := newMemoryRepository()
+	repository.jobs[primitive.NewObjectID()] = store.SyncJob{Chain: "ethereum", Address: seed, StartBlock: 1, Status: "stopped", CreatedAt: time.Now(), Progress: store.SyncProgress{ActionCheckpoints: map[string]int64{"txlist": 10}}}
+	manager := New(source, repository, Config{QueueSize: 10})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = manager.Run(ctx) }()
+	job, err := manager.Enqueue(context.Background(), Request{Chain: "ethereum", Address: seed, StartBlock: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job = waitForJob(t, manager, job.ID.Hex())
+	if job.Status != "succeeded" || len(source.ranges) == 0 || source.ranges[0] != [2]int64{11, 20} {
+		t.Fatalf("job=%+v ranges=%v", job, source.ranges)
+	}
+}
+
+func TestManagerLimitsEachActionToRecentRecordsAndMarksPartial(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	repository := newMemoryRepository()
+	manager := New(&recentSource{}, repository, Config{QueueSize: 10, MaxRecordsPerAction: 2})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = manager.Run(ctx) }()
+	job, err := manager.Enqueue(context.Background(), Request{Chain: "ethereum", Address: seed, StartBlock: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job = waitForJob(t, manager, job.ID.Hex())
+	metadata := repository.addresses[seed]
+	if job.Status != "partial" || job.ErrorCode != "record_limit" || job.MaxRecordsPerAction != 2 {
+		t.Fatalf("job=%+v", job)
+	}
+	if fmt.Sprint(job.TruncatedActions) != fmt.Sprint([]string{"txlist", "txlistinternal", "tokentx"}) {
+		t.Fatalf("truncated actions=%v", job.TruncatedActions)
+	}
+	if len(repository.transfers) != 6 {
+		t.Fatalf("transfers=%d, want 6", len(repository.transfers))
+	}
+	for index, transfer := range repository.transfers {
+		if transfer.BlockNumber != 20-int64(index%2) {
+			t.Fatalf("transfer[%d]=%+v, want newest records", index, transfer)
+		}
+	}
+	if metadata.SyncStatus != "partial" || metadata.SyncError != "record_limit" || metadata.SyncMaxRecordsPerAction != 2 || metadata.LatestSyncedBlock != 20 {
+		t.Fatalf("metadata=%+v", metadata)
+	}
+}
+
+func TestManagerContinuesRecentLimitAcrossPageBoundaries(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	source := &recentBoundarySource{}
+	repository := newMemoryRepository()
+	manager := New(source, repository, Config{QueueSize: 10, MaxRecordsPerAction: 4})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = manager.Run(ctx) }()
+	job, err := manager.Enqueue(context.Background(), Request{Chain: "ethereum", Address: seed, StartBlock: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job = waitForJob(t, manager, job.ID.Hex())
+	if job.Status != "partial" || len(repository.transfers) != 12 {
+		t.Fatalf("job=%+v transfers=%d", job, len(repository.transfers))
+	}
+	for action, ranges := range source.ranges {
+		if fmt.Sprint(ranges) != fmt.Sprint([][2]int64{{1, 20}, {1, 18}}) {
+			t.Fatalf("%s ranges=%v", action, ranges)
+		}
+	}
+	for index, transfer := range repository.transfers {
+		if transfer.BlockNumber != 20-int64(index%4) {
+			t.Fatalf("transfer[%d]=%+v", index, transfer)
+		}
 	}
 }
 

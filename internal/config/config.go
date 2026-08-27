@@ -30,6 +30,8 @@ type Config struct {
 	SyncCacheTTLMinutes             int
 	SyncConfirmations               int
 	SyncQueueSize                   int
+	SyncMaxRecordsPerAction         int64
+	TraceExistingDataOnly           bool
 	EthereumSyncStartBlock          int64
 	BaseSyncStartBlock              int64
 	EthereumRPCURL                  string
@@ -68,6 +70,8 @@ func Load() Config {
 		SyncCacheTTLMinutes:             nonNegativeIntValue("SYNC_CACHE_TTL_MINUTES", 15),
 		SyncConfirmations:               nonNegativeIntValue("SYNC_CONFIRMATIONS", 12),
 		SyncQueueSize:                   intValue("SYNC_QUEUE_SIZE", 100),
+		SyncMaxRecordsPerAction:         nonNegativeInt64Value("SYNC_MAX_RECORDS_PER_ACTION", 0),
+		TraceExistingDataOnly:           boolValue("TRACE_EXISTING_DATA_ONLY", false),
 		EthereumSyncStartBlock:          int64Value("ETHEREUM_SYNC_START_BLOCK", 21525891),
 		BaseSyncStartBlock:              int64Value("BASE_SYNC_START_BLOCK", 24450127),
 		EthereumRPCURL:                  os.Getenv("ETHEREUM_RPC_URL"),

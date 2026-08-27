@@ -44,6 +44,10 @@ Mongo 数据卷默认保留；`down` 不会清空已同步事实。
 3. 展示任务状态、传播方向、跳数、置信度、路径和截断信息；
 4. 强调关联结果是版本化推断，不是归属定论。
 
+### 仅使用现有数据
+
+设置 `TRACE_EXISTING_DATA_ONLY=true` 后，Trace 不创建地址同步任务，不调用地址识别或交易分析上游，只使用 Mongo 中已有事实生成图；结果固定标记为 `dataStatus=partial`。此模式不注册 `POST /api/v1/sync`，设为 `false` 后恢复按需同步。
+
 ### 场景 C：多链与桥接
 
 1. 展示 Ethereum/Base 节点身份隔离；

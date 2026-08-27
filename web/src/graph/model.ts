@@ -1,4 +1,4 @@
-import type { BridgeEdge, NodeRef, RiskAssociation, TraceResult } from "../api/types";
+import type { BridgeEdge, ConversionEvidence, NodeRef, RiskAssociation, TraceResult } from "../api/types";
 import { displayDecimals } from "../lib/format";
 
 export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
@@ -6,14 +6,16 @@ export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 export interface GraphNodeModel {
   id: string; chain: string; address: string; hop: number; terminal: boolean; seed: boolean;
   risk: "high" | "suspected" | "normal"; hotWallet: boolean; labelTypes: string[]; inferenceConfidence?: number;
+	addressType?: "unknown" | "eoa" | "contract"; protocol?: string; roles?: string[];
 }
 
 export interface GraphEdgeModel {
-  id: string; source: string; target: string; chain: string; asset: string; assetSymbol: string;
+  id: string; source: string; target: string; chain: string; assetType?: string; asset: string; assetSymbol: string;
   sourceType: string; kind: string; count: number; totalAmount: string; decimals?: number;
   firstBlock?: number; firstTime?: string; latestBlock?: number; latestTime?: string;
   flow?: "inbound" | "outbound" | "return";
   conversionStatus?: "complete" | "partial"; conversionScanned?: number; bridge?: BridgeEdge;
+	conversionEvidence?: ConversionEvidence[];
 }
 
 export interface GraphModel { nodes: GraphNodeModel[]; edges: GraphEdgeModel[] }
@@ -70,6 +72,7 @@ export function buildGraphModel(result: TraceResult, seed: NodeRef, associations
       risk: isRiskSource || association?.level === "strong" ? "high" : association ? "suspected" : "normal",
       hotWallet: labels.some((label) => label.type === "suspected_hot_wallet"), labelTypes: labels.map((label) => label.type),
       inferenceConfidence: association?.confidence,
+	  addressType: node.addressType, protocol: node.protocol, roles: node.roles ?? [],
     };
   });
   const nodeHops = new Map(nodes.map((node) => [node.id, node.hop]));
@@ -86,11 +89,12 @@ export function buildGraphModel(result: TraceResult, seed: NodeRef, associations
     const source = nodeID(edge.chain, edge.from); const target = nodeID(edge.chain, edge.to);
     grouped.set(key, {
       id: key, source, target, chain: edge.chain,
-      asset: edge.asset, assetSymbol: edge.symbol || edge.asset, sourceType: "aggregate", kind: edge.kind,
+      assetType: edge.assetType, asset: edge.asset, assetSymbol: edge.symbol || edge.asset, sourceType: "aggregate", kind: edge.kind,
       count: edge.transferCount, totalAmount: edge.totalAmount, flow: flow(source, target),
       decimals: displayDecimals(edge.assetType, edge.asset, edge.decimals, edge.tokenMetadataComplete),
       firstBlock: edge.firstBlock, firstTime: edge.firstTime, latestBlock: edge.latestBlock, latestTime: edge.latestTime,
       conversionStatus: edge.conversionStatus, conversionScanned: edge.conversionScanned,
+	  conversionEvidence: edge.conversionEvidence,
     });
   });
   for (const bridge of result.bridgeEdges ?? []) {
@@ -99,7 +103,7 @@ export function buildGraphModel(result: TraceResult, seed: NodeRef, associations
     const source = nodeID(link.sourceChain, link.sourceAddress); const target = nodeID(link.targetChain, link.targetAddress);
     grouped.set(key, {
       id: key, source, target, chain: `${link.sourceChain}->${link.targetChain}`,
-      asset: link.sourceAsset, assetSymbol: link.sourceAsset, sourceType: "bridge", kind: "bridge", count: 1,
+      assetType: "bridge", asset: link.sourceAsset, assetSymbol: link.sourceAsset, sourceType: "bridge", kind: "bridge", count: 1,
       totalAmount: link.sourceAmount, decimals: displayDecimals(undefined, link.sourceAsset, undefined, undefined), flow: flow(source, target), bridge,
     });
   }

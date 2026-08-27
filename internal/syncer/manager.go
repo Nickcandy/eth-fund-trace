@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +30,7 @@ type Repository interface {
 	FindAddress(context.Context, string, string) (store.Address, bool, error)
 	SetAddressSyncing(context.Context, string, int64, string) error
 	CompleteAddressSync(context.Context, string, string, int64, int64, int64, int64, time.Time) error
+	CompleteAddressPartial(context.Context, string, string, int64, int64, time.Time) error
 	FailAddressSync(context.Context, string, string, string) error
 	BulkUpsertTransfers(context.Context, []store.Transfer) (int64, error)
 	UpsertDiscoveredAddresses(context.Context, string, int64, []string, time.Time) error
@@ -38,7 +40,7 @@ type Repository interface {
 	FindLatestSyncJob(context.Context, string, string) (store.SyncJob, error)
 	SaveSyncJob(context.Context, store.SyncJob) error
 	FailInterruptedJobs(context.Context, time.Time) error
-	FindSyncCheckpoints(context.Context, string, string, int64, int64) (map[string]int64, error)
+	FindSyncCheckpoints(context.Context, string, string, int64, int64, int64) (map[string]int64, error)
 }
 
 type Request struct {
@@ -55,6 +57,7 @@ type Config struct {
 	QueueSize              int
 	InternalLookbackBlocks int64
 	HistoryLookbackBlocks  int64
+	MaxRecordsPerAction    int64
 	StartBlocks            map[string]int64
 	Clock                  func() time.Time
 	AfterAddressSynced     func(context.Context, string, string) error
@@ -97,6 +100,9 @@ func NewMulti(sources map[string]Source, repository Repository, config Config) *
 	if config.HistoryLookbackBlocks < 0 {
 		config.HistoryLookbackBlocks = 0
 	}
+	if config.MaxRecordsPerAction < 0 {
+		config.MaxRecordsPerAction = 0
+	}
 	return &Manager{sources: sources, repository: repository, config: config, queue: make(chan queuedJob, config.QueueSize), active: make(map[string]primitive.ObjectID), cancels: make(map[string]context.CancelFunc)}
 }
 
@@ -121,9 +127,9 @@ func (m *Manager) Enqueue(ctx context.Context, request Request) (store.SyncJob, 
 		ID: primitive.NewObjectID(), Chain: request.Chain, ChainID: chain.ID, Address: request.Address,
 		StartBlock: request.StartBlock, NeighborLimit: request.NeighborLimit, Status: "queued",
 		CreatedAt: m.config.Clock().UTC(), TotalAddresses: 1, ActionCounts: make(map[string]int64),
-		InternalLookbackBlocks: m.config.InternalLookbackBlocks,
+		InternalLookbackBlocks: m.config.InternalLookbackBlocks, MaxRecordsPerAction: m.config.MaxRecordsPerAction,
 	}
-	checkpoints, err := m.repository.FindSyncCheckpoints(ctx, request.Chain, request.Address, request.StartBlock, m.config.InternalLookbackBlocks)
+	checkpoints, err := m.repository.FindSyncCheckpoints(ctx, request.Chain, request.Address, request.StartBlock, m.config.InternalLookbackBlocks, m.config.MaxRecordsPerAction)
 	if err != nil {
 		m.mu.Unlock()
 		return store.SyncJob{}, err
@@ -170,6 +176,9 @@ func (m *Manager) Stop(ctx context.Context, id string) error {
 		if err := m.repository.SaveSyncJob(ctx, job); err != nil {
 			return err
 		}
+		if err := m.repository.FailAddressSync(ctx, job.Chain, job.Address, job.Error); err != nil {
+			return fmt.Errorf("mark stopped address failed: %w", err)
+		}
 		m.cancelMu.Lock()
 		if cancel := m.cancels[id]; cancel != nil {
 			cancel()
@@ -203,9 +212,10 @@ func (m *Manager) Run(ctx context.Context) error {
 }
 
 type addressResult struct {
-	cached       bool
-	fetched      int64
-	actionCounts map[string]int64
+	cached           bool
+	fetched          int64
+	actionCounts     map[string]int64
+	truncatedActions []string
 }
 
 type progressReporter func(func(*store.SyncProgress))
@@ -280,7 +290,7 @@ func (m *Manager) process(ctx context.Context, queued queuedJob) {
 	for _, neighbor := range neighbors {
 		request := queued.request
 		request.Address, request.NeighborLimit = neighbor, 0
-		checkpoints, checkpointErr := m.repository.FindSyncCheckpoints(ctx, request.Chain, request.Address, request.StartBlock, m.config.InternalLookbackBlocks)
+		checkpoints, checkpointErr := m.repository.FindSyncCheckpoints(ctx, request.Chain, request.Address, request.StartBlock, m.config.InternalLookbackBlocks, m.config.MaxRecordsPerAction)
 		if checkpointErr != nil {
 			m.finishFailed(ctx, &job, checkpointErr)
 			return
@@ -303,8 +313,12 @@ func (m *Manager) process(ctx context.Context, queued queuedJob) {
 		m.saveProgress(ctx, job)
 	}
 	job.Status = "succeeded"
-	if len(job.FailedNeighbors) > 0 {
+	if len(job.FailedNeighbors) > 0 || len(job.TruncatedActions) > 0 {
 		job.Status = "partial"
+	}
+	if len(job.TruncatedActions) > 0 {
+		job.ErrorCode = "record_limit"
+		job.Error = "record limit reached: " + strings.Join(job.TruncatedActions, ",")
 	}
 	m.finish(ctx, &job)
 }
@@ -328,7 +342,9 @@ func (m *Manager) syncAddress(ctx context.Context, source Source, chainID int64,
 		haveInternalFrom, haveInternalTo = address.EarliestSyncedBlock, address.LatestSyncedBlock
 	}
 	internalCached := exists && haveInternalFrom <= cacheInternalFrom && haveInternalTo >= address.LatestSyncedBlock
-	if !m.config.DisableCache && exists && address.SyncStatus == "synced" && cacheHistoryFrom >= address.EarliestSyncedBlock && internalCached && now.Sub(address.LastSyncedAt) < m.config.CacheTTL {
+	fullCache := address.SyncStatus == "synced" && cacheHistoryFrom >= address.EarliestSyncedBlock && internalCached
+	partialCache := address.SyncStatus == "partial" && m.config.MaxRecordsPerAction > 0 && address.SyncMaxRecordsPerAction == m.config.MaxRecordsPerAction
+	if !m.config.DisableCache && exists && (fullCache || partialCache) && now.Sub(address.LastSyncedAt) < m.config.CacheTTL {
 		if m.config.AfterAddressSynced != nil {
 			if err := m.config.AfterAddressSynced(ctx, request.Chain, request.Address); err != nil {
 				return addressResult{}, err
@@ -372,6 +388,10 @@ func (m *Manager) syncAddress(ctx context.Context, source Source, chainID int64,
 		intervals = append(intervals, [2]int64{historyFrom, safeHead})
 	}
 	internalIntervals := coverageIntervals(internalFrom, safeHead, haveInternalFrom, haveInternalTo)
+	if m.config.MaxRecordsPerAction > 0 {
+		intervals = [][2]int64{{historyFrom, safeHead}}
+		internalIntervals = [][2]int64{{internalFrom, safeHead}}
+	}
 
 	result := addressResult{actionCounts: make(map[string]int64)}
 	discovered := make(map[string]struct{})
@@ -391,6 +411,28 @@ func (m *Manager) syncAddress(ctx context.Context, source Source, chainID int64,
 			actionIntervals = internalIntervals
 		}
 		for _, interval := range actionIntervals {
+			if m.config.MaxRecordsPerAction > 0 {
+				end := interval[1]
+				if checkpoint, found := checkpoints[action.name]; found {
+					end = min(end, checkpoint)
+				}
+				if end < interval[0] {
+					continue
+				}
+				count, truncated, fetchErr := m.fetchRecentRange(ctx, action.call, action.name, request.Chain, chainID, request.Address, interval[0], end, m.config.MaxRecordsPerAction, discovered, report)
+				if fetchErr != nil {
+					if err := m.repository.FailAddressSync(ctx, request.Chain, request.Address, fetchErr.Error()); err != nil {
+						slog.Error("failed to persist address sync failure", "address", request.Address, "error", err)
+					}
+					return addressResult{}, fetchErr
+				}
+				result.fetched += count
+				result.actionCounts[action.name] += count
+				if truncated {
+					result.truncatedActions = append(result.truncatedActions, action.name)
+				}
+				continue
+			}
 			start := interval[0]
 			if checkpoint, found := checkpoints[action.name]; found && checkpoint >= start {
 				start = checkpoint + 1
@@ -417,8 +459,14 @@ func (m *Manager) syncAddress(ctx context.Context, source Source, chainID int64,
 	if err := m.repository.UpsertDiscoveredAddresses(ctx, request.Chain, chainID, addresses, now); err != nil {
 		return addressResult{}, err
 	}
-	if err := m.repository.CompleteAddressSync(ctx, request.Chain, request.Address, earliest, latest, internalFrom, safeHead, now); err != nil {
-		return addressResult{}, err
+	if len(result.truncatedActions) > 0 {
+		if err := m.repository.CompleteAddressPartial(ctx, request.Chain, request.Address, safeHead, m.config.MaxRecordsPerAction, now); err != nil {
+			return addressResult{}, err
+		}
+	} else {
+		if err := m.repository.CompleteAddressSync(ctx, request.Chain, request.Address, earliest, latest, internalFrom, safeHead, now); err != nil {
+			return addressResult{}, err
+		}
 	}
 	if m.config.AfterAddressSynced != nil {
 		if err := m.config.AfterAddressSynced(ctx, request.Chain, request.Address); err != nil {
@@ -535,6 +583,69 @@ func (m *Manager) fetchRange(ctx context.Context, call func(context.Context, str
 	return written, err
 }
 
+func (m *Manager) fetchRecentRange(ctx context.Context, call func(context.Context, string, int64, int64) ([]store.Transfer, error), actionName, chain string, chainID int64, address string, start, end, limit int64, discovered map[string]struct{}, report progressReporter) (int64, bool, error) {
+	if limit <= 0 || end < start {
+		return 0, false, nil
+	}
+	transfers, err := call(ctx, address, start, end)
+	if err != nil && !errors.Is(err, etherscan.ErrPageLimit) {
+		return 0, false, err
+	}
+	if !errors.Is(err, etherscan.ErrPageLimit) {
+		truncated := int64(len(transfers)) > limit
+		if truncated {
+			transfers = transfers[:limit]
+		}
+		written, writeErr := m.persistTransfers(ctx, transfers, chain, chainID, discovered, report)
+		if writeErr == nil {
+			report(func(progress *store.SyncProgress) {
+				if progress.ActionCheckpoints == nil {
+					progress.ActionCheckpoints = map[string]int64{}
+				}
+				progress.ActionCheckpoints[actionName] = start - 1
+			})
+		}
+		return written, truncated, writeErr
+	}
+
+	var limitErr *etherscan.PageLimitError
+	if !errors.As(err, &limitErr) {
+		return 0, false, err
+	}
+	boundary := limitErr.LastBlock
+	if boundary <= start || boundary >= end {
+		if int64(len(transfers)) > limit {
+			transfers = transfers[:limit]
+		}
+		written, writeErr := m.persistTransfers(ctx, transfers, chain, chainID, discovered, report)
+		return written, true, writeErr
+	}
+	complete := transfers[:0]
+	for _, transfer := range transfers {
+		if transfer.BlockNumber > boundary {
+			complete = append(complete, transfer)
+		}
+	}
+	if int64(len(complete)) >= limit {
+		complete = complete[:limit]
+		written, writeErr := m.persistTransfers(ctx, complete, chain, chainID, discovered, report)
+		return written, true, writeErr
+	}
+	written, writeErr := m.persistTransfers(ctx, complete, chain, chainID, discovered, report)
+	if writeErr != nil {
+		return 0, false, writeErr
+	}
+	report(func(progress *store.SyncProgress) {
+		if progress.ActionCheckpoints == nil {
+			progress.ActionCheckpoints = map[string]int64{}
+		}
+		progress.ActionCheckpoints[actionName] = boundary
+		progress.SplitCount++
+	})
+	rest, truncated, restErr := m.fetchRecentRange(ctx, call, actionName, chain, chainID, address, start, boundary, limit-int64(len(complete)), discovered, report)
+	return written + rest, truncated, restErr
+}
+
 func (m *Manager) persistTransfers(ctx context.Context, transfers []store.Transfer, chain string, chainID int64, discovered map[string]struct{}, report progressReporter) (int64, error) {
 	for index := range transfers {
 		transfers[index].Chain, transfers[index].ChainID = chain, chainID
@@ -577,6 +688,11 @@ func (m *Manager) mergeResult(job *store.SyncJob, result addressResult) {
 	}
 	for name, count := range result.actionCounts {
 		job.ActionCounts[name] += count
+	}
+	for _, action := range result.truncatedActions {
+		if !slices.Contains(job.TruncatedActions, action) {
+			job.TruncatedActions = append(job.TruncatedActions, action)
+		}
 	}
 }
 

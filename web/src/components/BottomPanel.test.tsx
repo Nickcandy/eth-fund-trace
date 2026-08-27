@@ -29,6 +29,19 @@ describe("BottomPanel sync progress", () => {
     expect(screen.getByText("区间拆分")).toBeVisible();
   });
 
+  it("shows the configured record limit for a partial sync", async () => {
+	const user = userEvent.setup();
+	const job = {
+		jobId: "limited", chain: "ethereum", address: "0x0000000000000000000000000000000000000001",
+		status: "partial", createdAt: "2026-08-27T00:00:00Z", safeHead: 20, totalAddresses: 1,
+		completedAddresses: 1, processedAddresses: 1, cachedAddresses: 0, fetched: 300000, retryable: false,
+		maxRecordsPerAction: 100000, truncatedActions: ["txlist", "txlistinternal", "tokentx"],
+	} as SyncJob;
+	render(<BottomPanel facts={[]} onMore={() => undefined} syncJobs={[job]} bridges={[]} chain="ethereum" address={job.address} onBridge={async()=>undefined}/>);
+	await user.click(screen.getByRole("button", { name: "任务进度" }));
+	expect(screen.getByText(/每类最多 100,000 条/)).toBeVisible();
+  });
+
   it("shows stable task labels, seed context, and only the current sync step", () => {
     const trace = {
       id: "6a8c8c66e845799c12235450", seedAddress: "0x87aab7bac1308faf2a0d59da26b8379e18b26355", chain: "ethereum",

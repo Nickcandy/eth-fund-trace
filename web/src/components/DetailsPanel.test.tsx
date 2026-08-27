@@ -79,6 +79,21 @@ describe("DetailsPanel labels", () => {
     expect(screen.getByText(/时间范围/)).toBeVisible();
     expect(screen.getByText(/不代表该金额来自查询中心/)).toBeVisible();
   });
+
+  it("shows contract roles and Kyber swap evidence", () => {
+	const node: GraphNodeModel = { id: "ethereum:0x1", chain: "ethereum", address: "0x0000000000000000000000000000000000000001", hop: 1, terminal: false, seed: false, risk: "normal", hotWallet: false, labelTypes: [], addressType: "contract", protocol: "kyberswap", roles: ["kyberswap_executor"] };
+	const edge: GraphEdgeModel = {
+	  id: "swap", source: "ethereum:0x1", target: "ethereum:0x2", chain: "ethereum", asset: "ETH", assetSymbol: "ETH", sourceType: "aggregate", kind: "swap", count: 1, totalAmount: "274823886000000000000", decimals: 18,
+	  conversionEvidence: [{ txHash: "0xswap", protocol: "kyberswap", version: "rfq", status: "complete", liquidityProvider: "0x67336cec42645f55059eff241cb02ea5cc52ff86", tokenIn: "USDT", amountIn: "1000000000000", tokenOut: "ETH", amountOut: "274823886000000000000", evidence: ["internal ETH calls"] }],
+	};
+	const { rerender } = render(<DetailsPanel node={node} labels={[]} onLabel={vi.fn()} onClose={() => undefined} onFocus={() => undefined} />);
+	expect(screen.getByText("KyberSwap Executor")).toBeVisible();
+	rerender(<DetailsPanel edge={edge} labels={[]} onLabel={vi.fn()} onClose={() => undefined} onFocus={() => undefined} />);
+	expect(screen.getByText(/kyberswap.*rfq/i)).toBeVisible();
+	expect(screen.getByText("0xswap")).toBeVisible();
+	expect(screen.getByText(/0x67336cec/)).toBeVisible();
+	expect(screen.getByText("internal ETH calls")).toBeVisible();
+  });
 });
 
 function propagationResult(): PropagationResult {

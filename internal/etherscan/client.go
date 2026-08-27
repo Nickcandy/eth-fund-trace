@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -87,6 +88,16 @@ type PageProgress struct {
 
 type ProgressFunc func(PageProgress)
 
+// InternalTransaction is one flattened call returned by Etherscan for a transaction hash.
+type InternalTransaction struct {
+	From    string
+	To      string
+	Value   string
+	Type    string
+	TraceID string
+	IsError bool
+}
+
 // ProgressClient is optional so alternate chain sources can keep implementing Client.
 type ProgressClient interface {
 	ListTransactionsWithProgress(context.Context, string, int64, int64, ProgressFunc) ([]store.Transfer, error)
@@ -105,6 +116,7 @@ type Config struct {
 	Burst             int
 	MaxRetries        int
 	RetryBase         time.Duration
+	Descending        bool
 	HTTPClient        *http.Client
 	Limiter           *rate.Limiter
 }
@@ -186,6 +198,60 @@ func (c *APIClient) ListInternalTransactions(ctx context.Context, address string
 
 func (c *APIClient) ListTokenTransfers(ctx context.Context, address string, startBlock, endBlock int64) ([]store.Transfer, error) {
 	return c.list(ctx, address, startBlock, endBlock, "tokentx", nil)
+}
+
+// InternalTransactionsByHash returns all flattened internal calls for one transaction.
+func (c *APIClient) InternalTransactionsByHash(ctx context.Context, txHash string) ([]InternalTransaction, error) {
+	if txHash == "" {
+		return nil, fmt.Errorf("%w: empty transaction hash", ErrMalformedResponse)
+	}
+	endpoint, err := url.Parse(c.config.BaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid base URL", ErrMalformedResponse)
+	}
+	query := endpoint.Query()
+	query.Set("chainid", strconv.FormatInt(c.config.ChainID, 10))
+	query.Set("module", "account")
+	query.Set("action", "txlistinternal")
+	query.Set("txhash", txHash)
+	query.Set("apikey", c.config.APIKey)
+	endpoint.RawQuery = query.Encode()
+	body, err := c.get(ctx, endpoint.String())
+	if err != nil {
+		return nil, err
+	}
+	var envelope struct {
+		Status  string `json:"status"`
+		Message string `json:"message"`
+		Result  []struct {
+			From    string `json:"from"`
+			To      string `json:"to"`
+			Value   string `json:"value"`
+			Type    string `json:"type"`
+			TraceID string `json:"traceId"`
+			IsError string `json:"isError"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return nil, fmt.Errorf("%w: invalid internal transaction JSON", ErrMalformedResponse)
+	}
+	if envelope.Status != "1" {
+		if strings.Contains(strings.ToLower(envelope.Message), "no transactions") {
+			return []InternalTransaction{}, nil
+		}
+		return nil, fmt.Errorf("%w: %s", ErrAPI, envelope.Message)
+	}
+	result := make([]InternalTransaction, 0, len(envelope.Result))
+	for _, row := range envelope.Result {
+		if row.From == "" || row.To == "" || row.Value == "" {
+			return nil, fmt.Errorf("%w: incomplete internal transaction", ErrMalformedResponse)
+		}
+		if value, ok := new(big.Int).SetString(row.Value, 10); !ok || value.Sign() < 0 {
+			return nil, fmt.Errorf("%w: invalid internal transaction value", ErrMalformedResponse)
+		}
+		result = append(result, InternalTransaction{From: strings.ToLower(row.From), To: strings.ToLower(row.To), Value: row.Value, Type: row.Type, TraceID: row.TraceID, IsError: row.IsError == "1"})
+	}
+	return result, nil
 }
 
 func (c *APIClient) ListTransactionsWithProgress(ctx context.Context, address string, startBlock, endBlock int64, progress ProgressFunc) ([]store.Transfer, error) {
@@ -315,6 +381,19 @@ func (c *APIClient) Call(ctx context.Context, to, data string) (string, error) {
 	return result, nil
 }
 
+// CodeAt returns the runtime bytecode for an address at the latest block.
+func (c *APIClient) CodeAt(ctx context.Context, address string) (string, error) {
+	var result string
+	found, err := c.proxy(ctx, "eth_getCode", map[string]string{"address": address, "tag": "latest"}, &result)
+	if err != nil {
+		return "", err
+	}
+	if !found || result == "" {
+		return "", fmt.Errorf("%w: empty eth_getCode result", ErrMalformedResponse)
+	}
+	return result, nil
+}
+
 func (c *APIClient) proxy(ctx context.Context, action string, values map[string]string, target any) (bool, error) {
 	endpoint, err := url.Parse(c.config.BaseURL)
 	if err != nil {
@@ -379,7 +458,11 @@ func (c *APIClient) fetchPage(ctx context.Context, address string, startBlock, e
 	query.Set("endblock", strconv.FormatInt(endBlock, 10))
 	query.Set("page", strconv.Itoa(page))
 	query.Set("offset", strconv.Itoa(c.config.PageSize))
-	query.Set("sort", "asc")
+	sortOrder := "asc"
+	if c.config.Descending {
+		sortOrder = "desc"
+	}
+	query.Set("sort", sortOrder)
 	query.Set("apikey", c.config.APIKey)
 	endpoint.RawQuery = query.Encode()
 

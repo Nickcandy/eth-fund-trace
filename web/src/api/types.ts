@@ -34,8 +34,14 @@ export interface TraceEdge {
   tokenMetadataComplete?: boolean; totalAmount: string; transferCount: number; kind: string; depth: number; path: string[];
   firstBlock?: number; firstTime?: string; latestBlock?: number; latestTime?: string;
   conversionStatus?: "complete" | "partial"; conversionScanned?: number;
+	conversionEvidence?: ConversionEvidence[];
 }
-export interface TraceNode { chain: Chain; address: string; depth: number; terminal: boolean }
+export interface ConversionEvidence {
+	txHash: string; protocol: string; version: string; status: "complete" | "partial";
+	initiator?: string; router?: string; executor?: string; liquidityProvider?: string; recipient?: string;
+	tokenIn?: string; amountIn?: string; tokenOut?: string; amountOut?: string; evidence: string[];
+}
+export interface TraceNode { chain: Chain; address: string; depth: number; terminal: boolean; addressType?: "unknown" | "eoa" | "contract"; protocol?: string; roles?: string[] }
 export interface NodeRef { chain: Chain; address: string }
 
 export interface CrossChainLink {
@@ -173,6 +179,7 @@ export interface SyncJob {
   jobId: string; chain: Chain; address: string; status: string; createdAt: string; startedAt?: string; finishedAt?: string;
   safeHead: number; totalAddresses: number; completedAddresses: number; processedAddresses: number; cachedAddresses: number; fetched: number;
   actionCounts?: Record<string, number>; successfulNeighbors?: string[]; failedNeighbors?: Array<{ address: string; code: string; message: string; retryable: boolean }>;
+	maxRecordsPerAction?: number; truncatedActions?: string[];
   progress?: {
     currentAddress?: string; currentAction?: string; rangeStart?: number; rangeEnd?: number; currentPage?: number;
     pagesFetched: number; recordsRead: number; recordsWritten: number; splitCount: number; updatedAt?: string;
@@ -182,8 +189,9 @@ export interface SyncJob {
 
 export interface AddressMetadata {
   chain: Chain; chainId: number; address: string; isContract: boolean; isTerminal: boolean;
+	addressType: "unknown" | "eoa" | "contract"; protocol?: string; roles?: string[];
   earliestSyncedBlock: number; historySyncedToBlock: number; latestSyncedBlock: number; lastSyncedAt?: string;
-  syncStatus: string; syncError?: string;
+	  syncStatus: string; syncError?: string; syncMaxRecordsPerAction?: number;
 }
 
 export interface Label {
@@ -227,9 +235,12 @@ export interface WrapEvent {
 }
 
 export interface TransactionAnalysis {
+	analysisVersion: string;
   chain: "ethereum"; chainId: 1; txHash: string; blockNumber: number; from: string; to: string; value: string;
   input: string; succeeded: boolean; entryContract?: string; entryContractName?: string; transfers: ReceiptTransfer[];
-  swaps: SwapEvent[]; wraps: WrapEvent[]; finalOutputAddress?: string;
+	swaps: SwapEvent[]; wraps: WrapEvent[]; internalCalls: Array<{ from: string; to: string; value: string; type: string; traceId: string; isError: boolean }>;
+	conversions: Array<{ protocol: string; version: string; status: "complete" | "partial"; initiator?: string; router?: string; executor?: string; liquidityProvider?: string; recipient?: string; tokenIn?: string; amountIn?: string; tokenOut?: string; amountOut?: string; evidence: string[]; issues?: string[] }>;
+	finalOutputAddress?: string;
   quality: { status: "complete" | "partial"; ambiguousRoute: boolean; evidence: string[]; issues?: string[] };
   analyzedAt: string;
 }

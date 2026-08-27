@@ -7,19 +7,30 @@ import (
 )
 
 type Address struct {
-	Chain                string    `bson:"chain" json:"chain"`
-	ChainID              int64     `bson:"chainId" json:"chainId"`
-	Address              string    `bson:"address" json:"address"`
-	IsContract           bool      `bson:"isContract" json:"isContract"`
-	IsTerminal           bool      `bson:"isTerminal" json:"isTerminal"`
-	EarliestSyncedBlock  int64     `bson:"earliestSyncedBlock" json:"earliestSyncedBlock"`
-	HistorySyncedToBlock int64     `bson:"historySyncedToBlock" json:"historySyncedToBlock"`
-	LatestSyncedBlock    int64     `bson:"latestSyncedBlock" json:"latestSyncedBlock"`
-	InternalSyncedFrom   int64     `bson:"internalSyncedFrom,omitempty" json:"internalSyncedFrom,omitempty"`
-	InternalSyncedTo     int64     `bson:"internalSyncedTo,omitempty" json:"internalSyncedTo,omitempty"`
-	LastSyncedAt         time.Time `bson:"lastSyncedAt,omitempty" json:"lastSyncedAt,omitempty"`
-	SyncStatus           string    `bson:"syncStatus" json:"syncStatus"`
-	SyncError            string    `bson:"syncError,omitempty" json:"syncError,omitempty"`
+	Chain                   string    `bson:"chain" json:"chain"`
+	ChainID                 int64     `bson:"chainId" json:"chainId"`
+	Address                 string    `bson:"address" json:"address"`
+	AddressType             string    `bson:"addressType,omitempty" json:"addressType"`
+	IsContract              bool      `bson:"isContract" json:"isContract"`
+	Protocol                string    `bson:"protocol,omitempty" json:"protocol,omitempty"`
+	Roles                   []string  `bson:"roles,omitempty" json:"roles,omitempty"`
+	IsTerminal              bool      `bson:"isTerminal" json:"isTerminal"`
+	EarliestSyncedBlock     int64     `bson:"earliestSyncedBlock" json:"earliestSyncedBlock"`
+	HistorySyncedToBlock    int64     `bson:"historySyncedToBlock" json:"historySyncedToBlock"`
+	LatestSyncedBlock       int64     `bson:"latestSyncedBlock" json:"latestSyncedBlock"`
+	InternalSyncedFrom      int64     `bson:"internalSyncedFrom,omitempty" json:"internalSyncedFrom,omitempty"`
+	InternalSyncedTo        int64     `bson:"internalSyncedTo,omitempty" json:"internalSyncedTo,omitempty"`
+	LastSyncedAt            time.Time `bson:"lastSyncedAt,omitempty" json:"lastSyncedAt,omitempty"`
+	SyncStatus              string    `bson:"syncStatus" json:"syncStatus"`
+	SyncError               string    `bson:"syncError,omitempty" json:"syncError,omitempty"`
+	SyncMaxRecordsPerAction int64     `bson:"syncMaxRecordsPerAction,omitempty" json:"syncMaxRecordsPerAction,omitempty"`
+}
+
+// AddressIdentity describes a chain-confirmed account type and optional protocol roles.
+type AddressIdentity struct {
+	AddressType string   `bson:"addressType" json:"addressType"`
+	Protocol    string   `bson:"protocol,omitempty" json:"protocol,omitempty"`
+	Roles       []string `bson:"roles,omitempty" json:"roles,omitempty"`
 }
 
 type Transfer struct {
@@ -149,6 +160,7 @@ type SyncJob struct {
 	StartBlock             int64              `bson:"startBlock" json:"startBlock"`
 	NeighborLimit          int                `bson:"neighborLimit" json:"neighborLimit"`
 	InternalLookbackBlocks int64              `bson:"internalLookbackBlocks" json:"internalLookbackBlocks"`
+	MaxRecordsPerAction    int64              `bson:"maxRecordsPerAction,omitempty" json:"maxRecordsPerAction,omitempty"`
 	Status                 string             `bson:"status" json:"status"`
 	CreatedAt              time.Time          `bson:"createdAt" json:"createdAt"`
 	StartedAt              time.Time          `bson:"startedAt,omitempty" json:"startedAt,omitempty"`
@@ -164,6 +176,7 @@ type SyncJob struct {
 	Progress               SyncProgress       `bson:"progress,omitempty" json:"progress,omitempty"`
 	SuccessfulNeighbors    []string           `bson:"successfulNeighbors,omitempty" json:"successfulNeighbors,omitempty"`
 	FailedNeighbors        []SyncFailure      `bson:"failedNeighbors,omitempty" json:"failedNeighbors,omitempty"`
+	TruncatedActions       []string           `bson:"truncatedActions,omitempty" json:"truncatedActions,omitempty"`
 	ErrorCode              string             `bson:"errorCode,omitempty" json:"errorCode,omitempty"`
 	Error                  string             `bson:"error,omitempty" json:"error,omitempty"`
 	Retryable              bool               `bson:"retryable" json:"retryable"`
@@ -317,6 +330,7 @@ type AssetChannelResult struct {
 
 // TransactionAnalysis is a cached interpretation of a confirmed receipt.
 type TransactionAnalysis struct {
+	AnalysisVersion    string            `bson:"analysisVersion" json:"analysisVersion"`
 	Chain              string            `bson:"chain" json:"chain"`
 	ChainID            int64             `bson:"chainId" json:"chainId"`
 	TxHash             string            `bson:"txHash" json:"txHash"`
@@ -331,10 +345,40 @@ type TransactionAnalysis struct {
 	Transfers          []ReceiptTransfer `bson:"transfers" json:"transfers"`
 	Swaps              []SwapEvent       `bson:"swaps" json:"swaps"`
 	Wraps              []WrapEvent       `bson:"wraps" json:"wraps"`
+	InternalCalls      []InternalCall    `bson:"internalCalls" json:"internalCalls"`
+	Conversions        []SwapConversion  `bson:"conversions" json:"conversions"`
 	BridgeLinks        []CrossChainLink  `bson:"bridgeLinks,omitempty" json:"bridgeLinks,omitempty"`
 	FinalOutputAddress string            `bson:"finalOutputAddress,omitempty" json:"finalOutputAddress,omitempty"`
 	Quality            AnalysisQuality   `bson:"quality" json:"quality"`
 	AnalyzedAt         time.Time         `bson:"analyzedAt" json:"analyzedAt"`
+}
+
+// InternalCall is one flattened transaction-level EVM call fact.
+type InternalCall struct {
+	From    string `bson:"from" json:"from"`
+	To      string `bson:"to" json:"to"`
+	Value   string `bson:"value" json:"value"`
+	Type    string `bson:"type" json:"type"`
+	TraceID string `bson:"traceId" json:"traceId"`
+	IsError bool   `bson:"isError" json:"isError"`
+}
+
+// SwapConversion is a transaction-level semantic interpretation backed by explicit evidence.
+type SwapConversion struct {
+	Protocol          string   `bson:"protocol" json:"protocol"`
+	Version           string   `bson:"version" json:"version"`
+	Status            string   `bson:"status" json:"status"`
+	Initiator         string   `bson:"initiator,omitempty" json:"initiator,omitempty"`
+	Router            string   `bson:"router,omitempty" json:"router,omitempty"`
+	Executor          string   `bson:"executor,omitempty" json:"executor,omitempty"`
+	LiquidityProvider string   `bson:"liquidityProvider,omitempty" json:"liquidityProvider,omitempty"`
+	Recipient         string   `bson:"recipient,omitempty" json:"recipient,omitempty"`
+	TokenIn           string   `bson:"tokenIn,omitempty" json:"tokenIn,omitempty"`
+	AmountIn          string   `bson:"amountIn,omitempty" json:"amountIn,omitempty"`
+	TokenOut          string   `bson:"tokenOut,omitempty" json:"tokenOut,omitempty"`
+	AmountOut         string   `bson:"amountOut,omitempty" json:"amountOut,omitempty"`
+	Evidence          []string `bson:"evidence" json:"evidence"`
+	Issues            []string `bson:"issues,omitempty" json:"issues,omitempty"`
 }
 
 // ReceiptTransfer is an embedded ERC-20 Transfer fact and is not a graph edge.

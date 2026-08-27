@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"slices"
 	"sort"
 	"testing"
 	"time"
@@ -100,11 +101,26 @@ func TestRootAssetsAreScopedByChain(t *testing.T) {
 
 type fakeRepository struct {
 	addresses    map[string]store.Address
+	identities   map[string]store.AddressIdentity
 	transfers    []store.Transfer
 	labels       map[string][]store.Label
 	calls        []store.TransferQuery
 	summaryCalls []store.CounterpartyQuery
 	bridges      map[string][]store.CrossChainLink
+}
+
+type addressInspectorStub struct {
+	identity store.AddressIdentity
+}
+
+func (s addressInspectorStub) InspectAddress(context.Context, string, string) (store.AddressIdentity, error) {
+	return s.identity, nil
+}
+
+type failingAddressInspector struct{}
+
+func (failingAddressInspector) InspectAddress(context.Context, string, string) (store.AddressIdentity, error) {
+	return store.AddressIdentity{}, errors.New("unexpected upstream address inspection")
 }
 
 func (r *fakeRepository) TopCounterparties(_ context.Context, q store.CounterpartyQuery) ([]store.CounterpartySummary, error) {
@@ -205,6 +221,14 @@ func (r *fakeRepository) FindAddress(_ context.Context, _, address string) (stor
 	v, ok := r.addresses[address]
 	return v, ok, nil
 }
+
+func (r *fakeRepository) SetAddressIdentity(_ context.Context, _, address string, identity store.AddressIdentity) error {
+	if r.identities == nil {
+		r.identities = make(map[string]store.AddressIdentity)
+	}
+	r.identities[address] = identity
+	return nil
+}
 func (r *fakeRepository) QueryTransfers(_ context.Context, q store.TransferQuery) ([]store.Transfer, error) {
 	r.calls = append(r.calls, q)
 	result := make([]store.Transfer, 0, len(r.transfers))
@@ -266,6 +290,113 @@ func TestTraceRejectsInvalidAndUnsyncedQueries(t *testing.T) {
 	}
 	if _, err := New(r).Trace(context.Background(), Query{Address: seed}); !errors.Is(err, ErrAddressNotSynced) {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestTraceUsesRecordLimitedAddressAsPartialData(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	r := &fakeRepository{addresses: map[string]store.Address{
+		seed: {SyncStatus: "partial", SyncError: "record_limit", SyncMaxRecordsPerAction: 100_000, LatestSyncedBlock: 100},
+	}, labels: map[string][]store.Label{}}
+
+	result, err := New(r).WithRequiredStartBlocks(map[string]int64{"ethereum": 50}).Trace(context.Background(), Query{Address: seed, Direction: "out", Depth: 1, TopN: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.DataStatus != "partial" || result.DataThroughBlock != 100 {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestTraceExistingDataOnlySkipsCoverageAndAddressInspection(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	neighbor := "0x0000000000000000000000000000000000000002"
+	r := &fakeRepository{
+		addresses: map[string]store.Address{
+			seed:     {SyncStatus: "failed", LatestSyncedBlock: 100},
+			neighbor: {SyncStatus: "discovered", AddressType: "unknown"},
+		},
+		transfers: []store.Transfer{{Chain: "ethereum", TxHash: "0x1", BlockNumber: 90, From: seed, To: neighbor, AssetType: "eth", Asset: "ETH", Amount: "1"}},
+		labels:    map[string][]store.Label{},
+	}
+
+	result, err := New(r).
+		WithRequiredStartBlocks(map[string]int64{"ethereum": 50}).
+		WithAddressInspector(failingAddressInspector{}).
+		WithExistingDataOnly(true).
+		Trace(context.Background(), Query{Address: seed, Direction: "out", Depth: 2, TopN: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.DataStatus != "partial" || len(result.Edges) != 1 || len(result.Nodes) != 2 {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestTraceRequiresDependencyHistoryCoverage(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	dependency := "0x0000000000000000000000000000000000000002"
+	r := &fakeRepository{
+		addresses: map[string]store.Address{
+			seed:       {SyncStatus: "synced", EarliestSyncedBlock: 50, InternalSyncedFrom: 50, InternalSyncedTo: 100, LatestSyncedBlock: 100},
+			dependency: {SyncStatus: "synced", EarliestSyncedBlock: 90, InternalSyncedFrom: 90, InternalSyncedTo: 100, LatestSyncedBlock: 100},
+		},
+		transfers: []store.Transfer{{Chain: "ethereum", TxHash: "0x1", BlockNumber: 95, From: seed, To: dependency, AssetType: "eth", Asset: "ETH", Amount: "1"}},
+		labels:    map[string][]store.Label{},
+	}
+
+	_, err := New(r).WithRequiredStartBlocks(map[string]int64{"ethereum": 50}).Trace(context.Background(), Query{Address: seed, Direction: "out", Depth: 2, TopN: 10})
+	var unsynced AddressNotSyncedError
+	if !errors.As(err, &unsynced) || unsynced.Address != dependency {
+		t.Fatalf("error = %v, want dependency %s to require history sync", err, dependency)
+	}
+}
+
+func TestTraceRequiresDependencyCurrentCoverage(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	dependency := "0x0000000000000000000000000000000000000002"
+	r := &fakeRepository{
+		addresses: map[string]store.Address{
+			seed:       {SyncStatus: "synced", EarliestSyncedBlock: 50, InternalSyncedFrom: 50, InternalSyncedTo: 100, LatestSyncedBlock: 100},
+			dependency: {SyncStatus: "synced", EarliestSyncedBlock: 50, InternalSyncedFrom: 50, InternalSyncedTo: 90, LatestSyncedBlock: 90},
+		},
+		transfers: []store.Transfer{{Chain: "ethereum", TxHash: "0x1", BlockNumber: 80, From: seed, To: dependency, AssetType: "eth", Asset: "ETH", Amount: "1"}},
+		labels:    map[string][]store.Label{},
+	}
+
+	_, err := New(r).WithRequiredStartBlocks(map[string]int64{"ethereum": 50}).Trace(context.Background(), Query{Address: seed, Direction: "out", Depth: 2, TopN: 10})
+	var unsynced AddressNotSyncedError
+	if !errors.As(err, &unsynced) || unsynced.Address != dependency {
+		t.Fatalf("error = %v, want dependency %s to require current sync", err, dependency)
+	}
+}
+
+func TestTraceInspectsContractBeforeRequiringDependencyHistory(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	executor := "0x6e4141d33021b52c91c28608403db4a0ffb50ec6"
+	r := &fakeRepository{
+		addresses: map[string]store.Address{
+			seed: {SyncStatus: "synced", AddressType: "eoa", EarliestSyncedBlock: 50, InternalSyncedFrom: 50, InternalSyncedTo: 100, LatestSyncedBlock: 100},
+		},
+		transfers: []store.Transfer{{Chain: "ethereum", TxHash: "0x1", BlockNumber: 95, From: seed, To: executor, AssetType: "eth", Asset: "ETH", Amount: "1"}},
+		labels:    map[string][]store.Label{},
+	}
+	inspector := addressInspectorStub{identity: store.AddressIdentity{AddressType: "contract", Protocol: "kyberswap", Roles: []string{"kyberswap_executor"}}}
+	analyzer := transactionAnalyzerStub{analysis: store.TransactionAnalysis{Chain: "ethereum", TxHash: "0x1", To: executor, Succeeded: true, Quality: store.AnalysisQuality{Status: "partial"}}}
+
+	result, err := New(r).
+		WithRequiredStartBlocks(map[string]int64{"ethereum": 50}).
+		WithAddressInspector(inspector).
+		WithTransactionAnalyzer(analyzer).
+		Trace(context.Background(), Query{Address: seed, Direction: "out", Depth: 2, TopN: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Nodes) != 2 || result.Nodes[1].Address != executor || result.Nodes[1].AddressType != "contract" || result.Nodes[1].Protocol != "kyberswap" || !slices.Equal(result.Nodes[1].Roles, []string{"kyberswap_executor"}) {
+		t.Fatalf("nodes=%+v", result.Nodes)
+	}
+	if got := r.identities[executor]; got.AddressType != "contract" {
+		t.Fatalf("persisted identity=%+v", got)
 	}
 }
 
@@ -422,6 +553,37 @@ func TestTraceSwitchesAssetOnlyForVerifiedContractConversion(t *testing.T) {
 	conversion := result.Edges[1]
 	if conversion.Kind != "swap" || conversion.Asset != token || conversion.From != router || conversion.To != recipient || conversion.TotalAmount != "250" {
 		t.Fatalf("conversion=%+v", conversion)
+	}
+}
+
+func TestTraceBuildsKyberSwapEdgeWithBoundedEvidence(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	executor := "0x6e4141d33021b52c91c28608403db4a0ffb50ec6"
+	recipient := "0x0000000000000000000000000000000000000003"
+	provider := "0x67336cec42645f55059eff241cb02ea5cc52ff86"
+	usdt := "0xdac17f958d2ee523a2206206994597c13d831ec7"
+	r := &fakeRepository{addresses: map[string]store.Address{
+		seed:      {SyncStatus: "synced", AddressType: "eoa"},
+		executor:  {AddressType: "contract", IsContract: true, Protocol: "kyberswap", Roles: []string{"kyberswap_executor"}},
+		recipient: {SyncStatus: "synced", AddressType: "eoa"},
+	}, labels: map[string][]store.Label{}, transfers: []store.Transfer{
+		{Chain: "ethereum", TxHash: "0xswap", BlockNumber: 10, From: seed, To: executor, AssetType: "erc20", Asset: usdt, TokenValue: "1000000000000"},
+	}}
+	analyzer := transactionAnalyzerStub{analysis: store.TransactionAnalysis{
+		Chain: "ethereum", TxHash: "0xswap", From: seed, To: executor, Succeeded: true, FinalOutputAddress: recipient,
+		Conversions: []store.SwapConversion{{Protocol: "kyberswap", Version: "rfq", Status: "complete", Initiator: seed, Router: "0xrouter", Executor: executor, LiquidityProvider: provider, Recipient: recipient, TokenIn: usdt, AmountIn: "1000000000000", TokenOut: "ETH", AmountOut: "274823886000000000000", Evidence: []string{"receipt transfers", "internal ETH calls"}}},
+		Quality:     store.AnalysisQuality{Status: "complete"},
+	}}
+
+	result, err := New(r).WithTransactionAnalyzer(analyzer).Trace(context.Background(), Query{Address: seed, Direction: "out", Depth: 2, TopN: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Edges) != 2 || result.Edges[1].Kind != "swap" || result.Edges[1].Asset != "ETH" || result.Edges[1].TotalAmount != "274823886000000000000" {
+		t.Fatalf("edges=%+v", result.Edges)
+	}
+	if len(result.Edges[1].ConversionEvidence) != 1 || result.Edges[1].ConversionEvidence[0].TxHash != "0xswap" || result.Edges[1].ConversionEvidence[0].Protocol != "kyberswap" || result.Edges[1].ConversionEvidence[0].LiquidityProvider != provider {
+		t.Fatalf("evidence=%+v", result.Edges[1].ConversionEvidence)
 	}
 }
 

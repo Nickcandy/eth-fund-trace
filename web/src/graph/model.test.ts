@@ -18,7 +18,7 @@ function result(): TraceResult {
       { chain: "ethereum", from: seed, to: downstream, assetType: "erc20", asset: "0x0000000000000000000000000000000000000010", symbol: "USDC", decimals: 6, tokenMetadataComplete: true, totalAmount: "500", transferCount: 2, kind: "transfer", depth: 1, path: [seed, downstream] },
     ],
     bridgeEdges: [], crossChainPaths: [], paths: [], dataThroughBlock: 3, dataThroughBlocks: { ethereum: 3 }, dataStatus: "synced",
-    labels: [], risk: { score: 0, level: "no_conclusion", evidence: [], inferredLabels: [], ruleVersion: "risk-v1", propagationVersion: "propagation-v1" }, ruleVersion: "trace-v5",
+	labels: [], risk: { score: 0, level: "no_conclusion", evidence: [], inferredLabels: [], ruleVersion: "risk-v1", propagationVersion: "propagation-v1" }, ruleVersion: "trace-v6",
   };
 }
 
@@ -41,6 +41,16 @@ describe("buildGraphModel", () => {
     const edge = model.edges.find((candidate) => candidate.asset === value.edges[1].asset);
 
     expect(edge).toMatchObject({ decimals: 6, assetSymbol: "USDC" });
+  });
+
+  it("preserves protocol roles and conversion evidence", () => {
+	const value = result();
+	value.nodes[1] = { ...value.nodes[1], addressType: "contract", protocol: "kyberswap", roles: ["kyberswap_executor"] };
+	value.edges[0] = { ...value.edges[0], kind: "swap", conversionEvidence: [{ txHash: "0xswap", protocol: "kyberswap", version: "rfq", status: "complete", liquidityProvider: downstream, tokenIn: "USDT", amountIn: "1000000", tokenOut: "ETH", amountOut: "1", evidence: ["internal ETH calls"] }] };
+
+	const model = buildGraphModel(value, { chain: "ethereum", address: seed });
+	expect(model.nodes.find((node) => node.address === upstream)).toMatchObject({ addressType: "contract", protocol: "kyberswap", roles: ["kyberswap_executor"] });
+	expect(model.edges[0].conversionEvidence?.[0]).toMatchObject({ txHash: "0xswap", liquidityProvider: downstream });
   });
 
   it("keeps the same address on another chain distinct from the seed", () => {
