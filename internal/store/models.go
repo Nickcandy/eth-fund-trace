@@ -398,27 +398,30 @@ type AssetChannelResult struct {
 
 // TransactionAnalysis is a cached interpretation of a confirmed receipt.
 type TransactionAnalysis struct {
-	AnalysisVersion    string            `bson:"analysisVersion" json:"analysisVersion"`
-	Chain              string            `bson:"chain" json:"chain"`
-	ChainID            int64             `bson:"chainId" json:"chainId"`
-	TxHash             string            `bson:"txHash" json:"txHash"`
-	BlockNumber        int64             `bson:"blockNumber" json:"blockNumber"`
-	From               string            `bson:"from" json:"from"`
-	To                 string            `bson:"to" json:"to"`
-	Value              string            `bson:"value" json:"value"`
-	Input              string            `bson:"input" json:"input"`
-	Succeeded          bool              `bson:"succeeded" json:"succeeded"`
-	EntryContract      string            `bson:"entryContract,omitempty" json:"entryContract,omitempty"`
-	EntryContractName  string            `bson:"entryContractName,omitempty" json:"entryContractName,omitempty"`
-	Transfers          []ReceiptTransfer `bson:"transfers" json:"transfers"`
-	Swaps              []SwapEvent       `bson:"swaps" json:"swaps"`
-	Wraps              []WrapEvent       `bson:"wraps" json:"wraps"`
-	InternalCalls      []InternalCall    `bson:"internalCalls" json:"internalCalls"`
-	Conversions        []SwapConversion  `bson:"conversions" json:"conversions"`
-	BridgeLinks        []CrossChainLink  `bson:"bridgeLinks,omitempty" json:"bridgeLinks,omitempty"`
-	FinalOutputAddress string            `bson:"finalOutputAddress,omitempty" json:"finalOutputAddress,omitempty"`
-	Quality            AnalysisQuality   `bson:"quality" json:"quality"`
-	AnalyzedAt         time.Time         `bson:"analyzedAt" json:"analyzedAt"`
+	AnalysisVersion     string            `bson:"analysisVersion" json:"analysisVersion"`
+	Chain               string            `bson:"chain" json:"chain"`
+	ChainID             int64             `bson:"chainId" json:"chainId"`
+	TxHash              string            `bson:"txHash" json:"txHash"`
+	BlockNumber         int64             `bson:"blockNumber" json:"blockNumber"`
+	From                string            `bson:"from" json:"from"`
+	To                  string            `bson:"to" json:"to"`
+	Value               string            `bson:"value" json:"value"`
+	Input               string            `bson:"input" json:"input"`
+	Succeeded           bool              `bson:"succeeded" json:"succeeded"`
+	EntryContract       string            `bson:"entryContract,omitempty" json:"entryContract,omitempty"`
+	EntryContractName   string            `bson:"entryContractName,omitempty" json:"entryContractName,omitempty"`
+	Transfers           []ReceiptTransfer `bson:"transfers" json:"transfers"`
+	Swaps               []SwapEvent       `bson:"swaps" json:"swaps"`
+	Wraps               []WrapEvent       `bson:"wraps" json:"wraps"`
+	InternalCalls       []InternalCall    `bson:"internalCalls" json:"internalCalls"`
+	Conversions         []SwapConversion  `bson:"conversions" json:"conversions"`
+	ProtocolAction      string            `bson:"protocolAction,omitempty" json:"protocolAction,omitempty"`
+	ProtocolMemo        string            `bson:"protocolMemo,omitempty" json:"protocolMemo,omitempty"`
+	ProtocolDestination string            `bson:"protocolDestination,omitempty" json:"protocolDestination,omitempty"`
+	BridgeLinks         []CrossChainLink  `bson:"bridgeLinks,omitempty" json:"bridgeLinks,omitempty"`
+	FinalOutputAddress  string            `bson:"finalOutputAddress,omitempty" json:"finalOutputAddress,omitempty"`
+	Quality             AnalysisQuality   `bson:"quality" json:"quality"`
+	AnalyzedAt          time.Time         `bson:"analyzedAt" json:"analyzedAt"`
 }
 
 // InternalCall is one flattened transaction-level EVM call fact.

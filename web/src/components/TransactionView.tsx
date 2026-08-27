@@ -18,6 +18,7 @@ export function TransactionView({ analysis, onTrace }: Props) {
       <Fact label="发起地址" value={analysis.from} href={explorer("address", analysis.from)} />
       <Fact label="入口合约" value={analysis.to} href={explorer("address", analysis.to)} detail={analysis.entryContractName} />
       <Fact label="区块 / 状态" value={`${analysis.blockNumber.toLocaleString()} / ${analysis.succeeded ? "成功" : "失败"}`} />
+      {analysis.protocolAction && <Fact label="协议动作" value={analysis.protocolAction === "vault_migration" ? "THORChain Vault 迁移" : analysis.protocolAction === "protocol_outbound" ? "THORChain 协议出站" : analysis.protocolAction === "cross_chain_swap" ? "THORChain 跨链兑换" : analysis.protocolAction} detail={analysis.protocolMemo} />}
     </div>
     <div className="analysis-grid">
       <section><h3><GitBranch size={15}/> Swap 路径</h3>
@@ -36,6 +37,7 @@ export function TransactionView({ analysis, onTrace }: Props) {
         </div>)}
       </section>
       <aside><h3><RefreshCw size={15}/> WETH 包装事件</h3>
+        {analysis.protocolDestination && <div className="wrap-row"><strong>THORChain 目标地址</strong><a href={explorer("address", analysis.protocolDestination)} target="_blank" rel="noreferrer"><code>{short(analysis.protocolDestination)}</code></a><span>{analysis.protocolMemo}</span></div>}
         {analysis.wraps.length === 0 ? <p className="empty-copy">本交易没有 WETH 包装或解包事件。</p> : analysis.wraps.map(wrap => <div className="wrap-row" key={`${wrap.type}-${wrap.logIndex}`}><strong>{wrap.type === "deposit" ? "包装 ETH" : "解包 WETH"}</strong><code title={wrap.amount}>{formatChainAmount(wrap.amount,18)} ETH</code><span>{short(wrap.account)} · log #{wrap.logIndex}</span></div>)}
         <h3>质量说明</h3><p className="quality-copy">{analysis.quality.ambiguousRoute ? "存在多 Pool 或无法唯一连接的路线，仅展示逐段事实。" : "逐段 Swap 可连接为明确输出路线。"}</p>
         {analysis.quality.issues?.map(issue => <p className="quality-issue" key={issue}>{issue}</p>)}

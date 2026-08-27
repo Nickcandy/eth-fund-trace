@@ -1,19 +1,19 @@
 import {
   Background, BackgroundVariant, BaseEdge, Controls, EdgeLabelRenderer, MarkerType, Panel, ReactFlow, ReactFlowProvider,
-  getSmoothStepPath, useReactFlow, type Edge, type EdgeProps,
+  getSmoothStepPath, useReactFlow, useUpdateNodeInternals, type Edge, type EdgeProps,
 } from "@xyflow/react";
 import { CircleDollarSign, Download, Eye, EyeOff, FileJson, GitBranch, Maximize2, RotateCcw } from "lucide-react";
 import { toPng } from "html-to-image";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatAssetAmount, GRAPH_AMOUNT_FRACTION_DIGITS, shortAddress } from "../lib/format";
-import { layoutGraph } from "../graph/layout";
+import { layoutGraph, NODE_HEIGHT, NODE_WIDTH } from "../graph/layout";
 import type { GraphEdgeModel, GraphModel } from "../graph/model";
 import { FundNode, type FundFlowNode } from "./FundNode";
 
 interface Props {
   model: GraphModel;
   onSelectNode: (id: string) => void; onSelectEdge: (edge: GraphEdgeModel) => void;
-  onFocusAddress: (chain: string, address: string) => void; onRelayout: () => void;
+  onFocusAddress: (chain: string, address: string) => void; onRelayout: () => void; onExpand?: (id: string) => void;
 }
 
 interface InteractiveEdgeData extends Record<string, unknown> {
@@ -46,35 +46,40 @@ function download(name: string, href: string) {
   const anchor = document.createElement("a"); anchor.download = name; anchor.href = href; anchor.click();
 }
 
-function Canvas({ model, onSelectNode, onSelectEdge, onFocusAddress, onRelayout }: Props) {
+function Canvas({ model, onSelectNode, onSelectEdge, onFocusAddress, onRelayout, onExpand }: Props) {
   const [positions, setPositions] = useState(new Map<string, { x: number; y: number }>());
   const [visibleDepth, setVisibleDepth] = useState(5);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [showLowConfidence, setShowLowConfidence] = useState(true);
   const [assetFilter, setAssetFilter] = useState<AssetFilter>("all");
   const [showEdgeLabels, setShowEdgeLabels] = useState(() => labelsVisibleByDefault(model.edges.length));
   const [selectedEdgeID, setSelectedEdgeID] = useState<string>();
   const wrapper = useRef<HTMLDivElement>(null);
   const flow = useReactFlow();
+  const updateNodeInternals = useUpdateNodeInternals();
   useEffect(() => { let active = true; layoutGraph(model).then((value) => { if (active) setPositions(value); }); return () => { active = false; }; }, [model]);
   useEffect(() => { setShowEdgeLabels(labelsVisibleByDefault(model.edges.length)); setSelectedEdgeID(undefined); }, [model]);
   useEffect(() => { if (positions.size) window.setTimeout(() => flow.fitView({ padding: 0.18, duration: 350 }), 20); }, [flow, positions]);
+  useEffect(() => { if (positions.size) window.setTimeout(() => updateNodeInternals([...positions.keys()]), 40); }, [positions, updateNodeInternals]);
 
   const filteredModelEdges = useMemo(() => model.edges.filter((edge) => matchesAssetFilter(edge, assetFilter)), [assetFilter, model.edges]);
   const nodes = useMemo(() => {
-    const connected = new Set(filteredModelEdges.flatMap((edge) => [edge.source, edge.target]));
-    return model.nodes.filter((node) => (node.seed || connected.has(node.id)) && Math.abs(node.hop) <= visibleDepth).map((node): FundFlowNode => ({
-    id: node.id, type: "fund", position: positions.get(node.id) ?? { x: node.hop * 320, y: node.chain === "base" ? 180 : 0 },
+    const revealed = new Set(model.nodes.filter((node) => node.seed).map((node) => node.id));
+    for (const edge of filteredModelEdges) if (expanded.has(edge.source) || expanded.has(edge.target)) { revealed.add(edge.source); revealed.add(edge.target); }
+    return model.nodes.filter((node) => revealed.has(node.id) && Math.abs(node.hop) <= visibleDepth).map((node): FundFlowNode => ({
+    id: node.id, type: "fund", initialWidth: NODE_WIDTH, initialHeight: NODE_HEIGHT, position: positions.get(node.id) ?? { x: node.hop * 320, y: node.chain === "base" ? 180 : 0 },
     data: {
       ...node,
       risk: !showLowConfidence && (node.inferenceConfidence ?? 1) < 0.7 && node.risk === "suspected" ? "normal" : node.risk,
       labelTypes: !showLowConfidence && (node.inferenceConfidence ?? 1) < 0.7 ? [] : node.labelTypes,
       onFocus: onFocusAddress,
+      onExpand: () => { setExpanded((current) => { const next = new Set(current); next.has(node.id) ? next.delete(node.id) : next.add(node.id); return next; }); onExpand?.(node.id); },
+      canExpand: filteredModelEdges.some((edge) => edge.source === node.id || edge.target === node.id), expanded: expanded.has(node.id),
     },
     }));
-  }, [filteredModelEdges, model.nodes, onFocusAddress, positions, showLowConfidence, visibleDepth]);
+  }, [expanded, filteredModelEdges, model.nodes, onExpand, onFocusAddress, positions, showLowConfidence, visibleDepth]);
   const nodeIDs = useMemo(() => new Set(nodes.map((node) => node.id)), [nodes]);
   const seedIDs = useMemo(() => new Set(model.nodes.filter((node) => node.seed).map((node) => node.id)), [model.nodes]);
-  const nodeHops = useMemo(() => new Map(model.nodes.map((node) => [node.id, node.hop])), [model.nodes]);
   const edgeLookup = useMemo(() => new Map(filteredModelEdges.map((edge) => [edge.id, edge])), [filteredModelEdges]);
   const edges = useMemo(() => filteredModelEdges.filter((edge) => nodeIDs.has(edge.source) && nodeIDs.has(edge.target)).map((edge): InteractiveEdge => {
     const bridge = edge.kind === "bridge";
@@ -83,17 +88,15 @@ function Canvas({ model, onSelectNode, onSelectEdge, onFocusAddress, onRelayout 
     const amount = formatAssetAmount(edge.totalAmount, edge.decimals, shortAddress(edge.assetSymbol, 5), GRAPH_AMOUNT_FRACTION_DIGITS);
     const directionLabel = flowDirection === "inbound" ? "流入" : flowDirection === "outbound" ? "流出" : "逆向";
     const prefix = bridge ? `${edge.chain} · Bridge · ` : `${directionLabel} · ${edge.kind === "mint" ? "铸造 · " : edge.kind === "burn" ? "销毁 · " : ""}${edge.count} 笔 · `;
-    const sourceHop = nodeHops.get(edge.source) ?? 0; const targetHop = nodeHops.get(edge.target) ?? 0;
-    const leftToRight = targetHop >= sourceHop;
     return {
       id: edge.id, source: edge.source, target: edge.target, type: "interactive", animated: bridge,
-      sourceHandle: leftToRight ? "source-right" : "source-left", targetHandle: leftToRight ? "target-left" : "target-right",
+      sourceHandle: "source-right", targetHandle: "target-left",
       selected: selectedEdgeID === edge.id,
       data: { label: `${prefix}${amount}`, flow: flowDirection, showLabel: edgeLabelVisible(showEdgeLabels, selectedEdgeID === edge.id, seedIDs.has(edge.source) || seedIDs.has(edge.target)), onSelect: () => { setSelectedEdgeID(edge.id); onSelectEdge(edge); } },
       style: { stroke, strokeWidth: bridge ? 3 : 2, strokeDasharray: bridge ? "8 6" : undefined },
       markerEnd: { type: MarkerType.ArrowClosed, color: stroke, width: 16, height: 16 },
     };
-  }), [filteredModelEdges, nodeHops, nodeIDs, onSelectEdge, seedIDs, selectedEdgeID, showEdgeLabels]);
+  }), [filteredModelEdges, nodeIDs, onSelectEdge, seedIDs, selectedEdgeID, showEdgeLabels]);
   const exportPNG = async () => { if (wrapper.current) download("fund-trace.png", await toPng(wrapper.current, { backgroundColor: "#101317", pixelRatio: 2 })); };
   const exportJSON = () => download("fund-trace.json", URL.createObjectURL(new Blob([JSON.stringify(model, null, 2)], { type: "application/json" })));
   return (

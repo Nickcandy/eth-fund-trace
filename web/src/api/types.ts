@@ -244,6 +244,8 @@ export interface TransactionAnalysis {
 	swaps: SwapEvent[]; wraps: WrapEvent[]; internalCalls: Array<{ from: string; to: string; value: string; type: string; traceId: string; isError: boolean }>;
 	conversions: Array<{ protocol: string; version: string; status: "complete" | "partial"; initiator?: string; router?: string; executor?: string; liquidityProvider?: string; recipient?: string; tokenIn?: string; amountIn?: string; tokenOut?: string; amountOut?: string; evidence: string[]; issues?: string[] }>;
 	finalOutputAddress?: string;
+	protocolAction?: "vault_migration" | "protocol_outbound" | "cross_chain_swap" | "refund" | "protocol_internal";
+	protocolMemo?: string; protocolDestination?: string;
   quality: { status: "complete" | "partial"; ambiguousRoute: boolean; evidence: string[]; issues?: string[] };
   analyzedAt: string;
 }

@@ -6,7 +6,8 @@ export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 export interface GraphNodeModel {
   id: string; chain: string; address: string; hop: number; terminal: boolean; seed: boolean;
   risk: "high" | "suspected" | "normal"; hotWallet: boolean; labelTypes: string[]; inferenceConfidence?: number;
-	addressType?: "unknown" | "eoa" | "contract"; protocol?: string; roles?: string[];
+  addressType?: "unknown" | "eoa" | "contract"; protocol?: string; roles?: string[];
+  stopReason?: string; category?: "seed" | "high_frequency" | "contract" | "hot_wallet" | "terminal" | "address";
 }
 
 export interface GraphEdgeModel {
@@ -72,7 +73,9 @@ export function buildGraphModel(result: TraceResult, seed: NodeRef, associations
       risk: isRiskSource || association?.level === "strong" ? "high" : association ? "suspected" : "normal",
       hotWallet: labels.some((label) => label.type === "suspected_hot_wallet"), labelTypes: labels.map((label) => label.type),
       inferenceConfidence: association?.confidence,
-	  addressType: node.addressType, protocol: node.protocol, roles: node.roles ?? [],
+      addressType: node.addressType, protocol: node.protocol, roles: node.roles ?? [],
+      stopReason: node.stopReason,
+      category: node.stopReason === "high_frequency" ? "high_frequency" : node.addressType === "contract" ? "contract" : labels.some((label) => label.type === "suspected_hot_wallet") ? "hot_wallet" : node.terminal ? "terminal" : nodeID(node.chain, node.address) === nodeID(seed.chain, seed.address) ? "seed" : "address",
     };
   });
   const nodeHops = new Map(nodes.map((node) => [node.id, node.hop]));

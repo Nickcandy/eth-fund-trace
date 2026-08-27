@@ -2,6 +2,7 @@ package transactionanalysis
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
@@ -16,13 +17,14 @@ import (
 
 const (
 	// AnalysisVersion invalidates cached analyses when semantic rules change.
-	AnalysisVersion   = "transaction-analysis-v2"
+	AnalysisVersion   = "transaction-analysis-v3"
 	EthereumV3Factory = "0x1f98431c8ad98523631ae4a59f267346ea31f984"
 	EthereumWETH      = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
 	// KyberSwapRouter is the Ethereum MetaAggregation Router supported by the RFQ adapter.
 	KyberSwapRouter = "0x6131b5fae19ea4f9d964eac0408e4408b66337b5"
 	// KyberSwapExecutor is the Ethereum Executor supported by the RFQ adapter.
 	KyberSwapExecutor = "0x6e4141d33021b52c91c28608403db4a0ffb50ec6"
+	THORChainRouter   = "0xd37bbe5744d730a1d98d8dc97c42f0ca46ad7146"
 	transferTopic     = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 	depositTopic      = "0xe1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c"
 	withdrawalTopic   = "0x7fcf532c15f0a6db0bd6d0e038bea71d30d808c7d98cb3bf7268a95bf5081b65"
@@ -44,11 +46,13 @@ var officialContracts = map[string]string{
 	EthereumV3Factory: "Uniswap V3 Factory",
 	KyberSwapRouter:   "KyberSwap MetaAggregation Router",
 	KyberSwapExecutor: "KyberSwap Executor",
+	THORChainRouter:   "THORChain Router v4",
 }
 
 var contractIdentities = map[string]store.AddressIdentity{
 	KyberSwapRouter:   {AddressType: "contract", Protocol: "kyberswap", Roles: []string{"kyberswap_router"}},
 	KyberSwapExecutor: {AddressType: "contract", Protocol: "kyberswap", Roles: []string{"kyberswap_executor"}},
+	THORChainRouter:   {AddressType: "contract", Protocol: "thorchain", Roles: []string{"router"}},
 	EthereumV3Factory: {AddressType: "contract", Protocol: "uniswap", Roles: []string{"factory"}},
 	EthereumWETH:      {AddressType: "contract", Protocol: "weth", Roles: []string{"wrapped_native_token"}},
 }
@@ -178,7 +182,10 @@ func (s *Service) Analyze(ctx context.Context, chain, txHash string) (store.Tran
 	} else {
 		s.parseLogs(ctx, receipt.Logs, &analysis)
 	}
-	if analysis.To == KyberSwapRouter {
+	parseTHORChainCall(&analysis)
+	if analysis.To == THORChainRouter {
+		// THORChain actions are decoded from the Router calldata; Uniswap route inference does not apply.
+	} else if analysis.To == KyberSwapRouter {
 		s.finalizeKyberRFQ(&analysis, internalErr)
 	} else {
 		s.finalizeRoute(&analysis)
@@ -188,6 +195,47 @@ func (s *Service) Analyze(ctx context.Context, chain, txHash string) (store.Tran
 		return store.TransactionAnalysis{}, fmt.Errorf("save transaction analysis: %w", err)
 	}
 	return analysis, nil
+}
+
+func parseTHORChainCall(analysis *store.TransactionAnalysis) {
+	if analysis.To != THORChainRouter || len(analysis.Input) < 10 || !strings.EqualFold(analysis.Input[2:10], "574da717") {
+		return
+	}
+	raw, err := hex.DecodeString(strings.TrimPrefix(analysis.Input[10:], "0x"))
+	if err != nil || len(raw) < 128 {
+		return
+	}
+	word := func(offset int) []byte { return raw[offset : offset+32] }
+	destination := "0x" + hex.EncodeToString(word(0)[12:])
+	offset := new(big.Int).SetBytes(word(96)).Int64()
+	if offset < 0 || offset+32 > int64(len(raw)) {
+		return
+	}
+	length := new(big.Int).SetBytes(raw[offset : offset+32]).Int64()
+	start := offset + 32
+	if length < 0 || start+length > int64(len(raw)) {
+		return
+	}
+	memoBytes, err := hex.DecodeString(hex.EncodeToString(raw[start : start+length]))
+	if err != nil {
+		return
+	}
+	analysis.ProtocolMemo = string(memoBytes)
+	analysis.ProtocolDestination = destination
+	parts := strings.SplitN(analysis.ProtocolMemo, ":", 2)
+	action := strings.ToUpper(parts[0])
+	switch action {
+	case "MIGRATE":
+		analysis.ProtocolAction = "vault_migration"
+	case "OUT":
+		analysis.ProtocolAction = "protocol_outbound"
+	case "SWAP":
+		analysis.ProtocolAction = "cross_chain_swap"
+	case "REFUND":
+		analysis.ProtocolAction = "refund"
+	default:
+		analysis.ProtocolAction = "protocol_internal"
+	}
 }
 
 func (s *Service) finalizeKyberRFQ(analysis *store.TransactionAnalysis, internalErr error) {
