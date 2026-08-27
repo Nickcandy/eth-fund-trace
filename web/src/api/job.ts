@@ -24,3 +24,21 @@ export function mergeSyncJobs(linked: SyncJob[], recovered?: SyncJob): SyncJob[]
   if (index < 0) return [...linked, recovered];
   return linked.map((job, jobIndex) => jobIndex === index ? recovered : job);
 }
+
+export function collapseSyncJobsByAddress(jobs: SyncJob[]): SyncJob[] {
+  const collapsed: SyncJob[] = [];
+  const indexes = new Map<string, number>();
+
+  for (const job of jobs) {
+    const address = (job.progress?.currentAddress || job.address).toLowerCase();
+    const existingIndex = indexes.get(address);
+    if (existingIndex === undefined) {
+      indexes.set(address, collapsed.length);
+      collapsed.push(job);
+    } else {
+      collapsed[existingIndex] = job;
+    }
+  }
+
+  return collapsed;
+}

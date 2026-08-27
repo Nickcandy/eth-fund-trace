@@ -88,4 +88,20 @@ describe("BottomPanel sync progress", () => {
     expect(screen.getAllByText(neighbor).length).toBeGreaterThan(0);
     expect(screen.getByText("内部 ETH · 累计 6 页 / 6,000 条")).toBeVisible();
   });
+
+  it("counts unique neighbor addresses and keeps the latest job for each address", () => {
+    const seed = "0x87aab7bac1308faf2a0d59da26b8379e18b26355";
+    const neighbor = "0xd2674da94285660c9b2353131bef2d8211369a4b";
+    const trace = { id: "trace", seedAddress: seed, chain: "ethereum", direction: "both", depth: 3, asset: "all", status: "waiting_sync", createdAt: "2026-08-24T18:24:38Z", currentDepth: 0, visitedNodes: 0, edgeCount: 0, dataThroughBlock: 0, ruleVersion: "trace-v1", retryable: false } as TraceJob;
+    const staleSeed = { jobId: "seed-old", address: seed, status: "running", completedAddresses: 0, processedAddresses: 0 } as SyncJob;
+    const latestSeed = { jobId: "seed-new", address: seed.toUpperCase(), status: "succeeded", completedAddresses: 1, processedAddresses: 1, fetched: 12 } as SyncJob;
+    const activeNeighbor = { jobId: "neighbor", address: neighbor, status: "running", completedAddresses: 0, processedAddresses: 0 } as SyncJob;
+
+    render(<BottomPanel facts={[]} onMore={() => undefined} traceJob={trace} syncJobs={[staleSeed, latestSeed, activeNeighbor]} bridges={[]} chain="ethereum" address={seed} onBridge={async()=>undefined}/>);
+
+    expect(screen.getByText("1 个邻居")).toBeVisible();
+    expect(screen.getByText("1 / 2 已处理")).toBeVisible();
+    expect(screen.getAllByText("种子")).toHaveLength(1);
+    expect(screen.getAllByText("邻居")).toHaveLength(1);
+  });
 });

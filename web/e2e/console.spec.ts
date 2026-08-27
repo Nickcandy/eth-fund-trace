@@ -138,6 +138,43 @@ test("keeps partial trace results visible with a warning", async ({ page }) => {
   await expect(page.locator(".fund-node")).toHaveCount(4);
 });
 
+test("keeps the sync queue visible while a newly discovered neighbor loads", async ({ page }) => {
+  const queueTraceID = "queue-trace";
+  const seedSyncID = "seed-sync";
+  const neighborSyncID = "neighbor-sync";
+  let tracePolls = 0;
+
+  await page.route("**/api/v1/**", async route => {
+    const url = new URL(route.request().url());
+    const json = (body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+    if (url.pathname === "/api/v1/trace") return json({ traceJobId: queueTraceID, status: "queued" }, 202);
+    if (url.pathname === `/api/v1/trace-jobs/${queueTraceID}`) {
+      tracePolls++;
+      return json({ id: queueTraceID, chain: "ethereum", seedAddress: seed, direction: "both", depth: 3, asset: "all", status: "waiting_sync", createdAt: "2026-08-27T00:00:00Z", currentDepth: 0, visitedNodes: 0, edgeCount: 0, dataThroughBlock: 0, ruleVersion: "trace-v1", retryable: false, syncJobIds: tracePolls < 2 ? [seedSyncID] : [seedSyncID, neighborSyncID] });
+    }
+    if (url.pathname === `/api/v1/sync-jobs/${seedSyncID}`) return json({ jobId: seedSyncID, chain: "ethereum", address: seed, status: "succeeded", completedAddresses: 1, processedAddresses: 1, fetched: 12 });
+    if (url.pathname === `/api/v1/sync-jobs/${neighborSyncID}`) {
+      await new Promise(resolve => setTimeout(resolve, 600));
+      return json({ jobId: neighborSyncID, chain: "ethereum", address: downstream, status: "running", completedAddresses: 0, processedAddresses: 0 });
+    }
+    return route.fallback();
+  });
+
+  await page.getByLabel("分析地址").fill(seed);
+  await page.getByRole("button", { name: "开始分析" }).click();
+  await expect(page.locator(".neighbor-queue")).toBeVisible();
+  await page.evaluate(() => {
+    const state = { disappeared: false };
+    (window as typeof window & { syncQueueObservation?: typeof state }).syncQueueObservation = state;
+    new MutationObserver(() => {
+      if (!document.querySelector(".neighbor-queue")) state.disappeared = true;
+    }).observe(document.body, { childList: true, subtree: true });
+  });
+
+  await expect(page.getByText("1 个邻居")).toBeVisible({ timeout: 5_000 });
+  expect(await page.evaluate(() => (window as typeof window & { syncQueueObservation?: { disappeared: boolean } }).syncQueueObservation?.disappeared)).toBe(false);
+});
+
 test("analyzes a V3 transaction and continues with the output address", async ({ page }) => {
   await page.getByRole("button", { name: "交易哈希" }).click();
   await page.getByLabel("交易哈希").fill(transactionAnalysis.txHash);
