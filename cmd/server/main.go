@@ -88,10 +88,8 @@ func run(parent context.Context) error {
 	}
 	syncManager := syncer.NewMulti(etherscanClients, appStore, syncer.Config{
 		CacheTTL: time.Duration(cfg.SyncCacheTTLMinutes) * time.Minute, DisableCache: cfg.SyncCacheTTLMinutes == 0, Confirmations: int64(cfg.SyncConfirmations), QueueSize: cfg.SyncQueueSize,
-		InternalLookbackBlocks: cfg.EtherscanInternalLookbackBlocks,
-		HistoryLookbackBlocks:  cfg.EtherscanLookbackBlocks,
-		MaxRecordsPerAction:    cfg.SyncMaxRecordsPerAction,
-		StartBlocks:            map[string]int64{"ethereum": cfg.EthereumSyncStartBlock, "base": cfg.BaseSyncStartBlock},
+		MaxRecordsPerAction: cfg.SyncMaxRecordsPerAction,
+		StartBlocks:         map[string]int64{"ethereum": cfg.EthereumSyncStartBlock, "base": cfg.BaseSyncStartBlock},
 		AfterAddressSynced: func(ctx context.Context, chain, address string) error {
 			_, err := addressProfiler.Get(ctx, chain, address)
 			return err

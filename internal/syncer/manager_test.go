@@ -210,7 +210,7 @@ type memoryRepository struct {
 	omitEmptyActionCounts bool
 }
 
-func (r *memoryRepository) FindSyncCheckpoints(_ context.Context, chain, address string, startBlock, internalLookbackBlocks, maxRecordsPerAction int64) (map[string]int64, error) {
+func (r *memoryRepository) FindSyncCheckpoints(_ context.Context, chain, address string, startBlock, maxRecordsPerAction int64) (map[string]int64, error) {
 	var latest store.SyncJob
 	for _, job := range r.jobs {
 		if job.Chain == chain && job.Address == address && job.StartBlock == startBlock && job.CreatedAt.After(latest.CreatedAt) {
@@ -225,9 +225,7 @@ func (r *memoryRepository) FindSyncCheckpoints(_ context.Context, chain, address
 		return result, nil
 	}
 	for k, v := range latest.Progress.ActionCheckpoints {
-		if k != "txlistinternal" || latest.InternalLookbackBlocks == internalLookbackBlocks {
-			result[k] = v
-		}
+		result[k] = v
 	}
 	return result, nil
 }
@@ -569,60 +567,7 @@ func TestManagerRespectsExplicitEndBlock(t *testing.T) {
 	}
 }
 
-func TestManagerLimitsOnlyInternalTransactionLookback(t *testing.T) {
-	seed := "0x0000000000000000000000000000000000000001"
-	source := &recordingSource{fakeSource: fakeSource{latest: 1_000_000}}
-	repository := newMemoryRepository()
-	manager := New(source, repository, Config{QueueSize: 10, InternalLookbackBlocks: 100_000})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = manager.Run(ctx) }()
-
-	job, err := manager.Enqueue(context.Background(), Request{Chain: "ethereum", Address: seed, StartBlock: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	job = waitForJob(t, manager, job.ID.Hex())
-	if job.Status != "succeeded" {
-		t.Fatalf("job=%+v", job)
-	}
-	if got := source.actionRanges["txlist"]; fmt.Sprint(got) != fmt.Sprint([][2]int64{{1, 1_000_000}}) {
-		t.Fatalf("txlist ranges=%v", got)
-	}
-	if got := source.actionRanges["txlistinternal"]; fmt.Sprint(got) != fmt.Sprint([][2]int64{{900_001, 1_000_000}}) {
-		t.Fatalf("txlistinternal ranges=%v", got)
-	}
-	if got := source.actionRanges["tokentx"]; fmt.Sprint(got) != fmt.Sprint([][2]int64{{1, 1_000_000}}) {
-		t.Fatalf("tokentx ranges=%v", got)
-	}
-}
-
-func TestManagerAppliesHistoryLookbackToAllEtherscanActions(t *testing.T) {
-	seed := "0x0000000000000000000000000000000000000001"
-	source := &recordingSource{fakeSource: fakeSource{latest: 1_000_000}}
-	repository := newMemoryRepository()
-	manager := New(source, repository, Config{QueueSize: 10, HistoryLookbackBlocks: 100_000, InternalLookbackBlocks: 100_000})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = manager.Run(ctx) }()
-
-	job, err := manager.Enqueue(context.Background(), Request{Chain: "ethereum", Address: seed, StartBlock: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	job = waitForJob(t, manager, job.ID.Hex())
-	if job.Status != "succeeded" {
-		t.Fatalf("job=%+v", job)
-	}
-	want := [][2]int64{{900_001, 1_000_000}}
-	for _, action := range []string{"txlist", "txlistinternal", "tokentx"} {
-		if got := source.actionRanges[action]; fmt.Sprint(got) != fmt.Sprint(want) {
-			t.Fatalf("%s ranges=%v, want %v", action, got, want)
-		}
-	}
-}
-
-func TestManagerBackfillsInternalHistoryWhenLookbackExpands(t *testing.T) {
+func TestManagerBackfillsInternalHistoryFromConfiguredStart(t *testing.T) {
 	seed := "0x0000000000000000000000000000000000000001"
 	source := &recordingSource{fakeSource: fakeSource{latest: 1_000_000}}
 	repository := newMemoryRepository()
@@ -632,7 +577,7 @@ func TestManagerBackfillsInternalHistoryWhenLookbackExpands(t *testing.T) {
 		InternalSyncedFrom: 900_001, InternalSyncedTo: 1_000_000,
 		LastSyncedAt: time.Now(),
 	}
-	manager := New(source, repository, Config{QueueSize: 10, InternalLookbackBlocks: 0})
+	manager := New(source, repository, Config{QueueSize: 10})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() { _ = manager.Run(ctx) }()

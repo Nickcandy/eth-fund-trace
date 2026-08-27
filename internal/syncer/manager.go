@@ -42,7 +42,7 @@ type Repository interface {
 	FindLatestSyncJob(context.Context, string, string) (store.SyncJob, error)
 	SaveSyncJob(context.Context, store.SyncJob) error
 	FailInterruptedJobs(context.Context, time.Time) error
-	FindSyncCheckpoints(context.Context, string, string, int64, int64, int64) (map[string]int64, error)
+	FindSyncCheckpoints(context.Context, string, string, int64, int64) (map[string]int64, error)
 }
 
 type Request struct {
@@ -54,17 +54,15 @@ type Request struct {
 }
 
 type Config struct {
-	CacheTTL               time.Duration
-	DisableCache           bool
-	Confirmations          int64
-	QueueSize              int
-	InternalLookbackBlocks int64
-	HistoryLookbackBlocks  int64
-	MaxRecordsPerAction    int64
-	StartBlocks            map[string]int64
-	Clock                  func() time.Time
-	AfterAddressSynced     func(context.Context, string, string) error
-	OnTransfersPersisted   func(context.Context, string, []store.Transfer)
+	CacheTTL             time.Duration
+	DisableCache         bool
+	Confirmations        int64
+	QueueSize            int
+	MaxRecordsPerAction  int64
+	StartBlocks          map[string]int64
+	Clock                func() time.Time
+	AfterAddressSynced   func(context.Context, string, string) error
+	OnTransfersPersisted func(context.Context, string, []store.Transfer)
 }
 
 type queuedJob struct {
@@ -100,9 +98,6 @@ func NewMulti(sources map[string]Source, repository Repository, config Config) *
 	if config.Clock == nil {
 		config.Clock = time.Now
 	}
-	if config.HistoryLookbackBlocks < 0 {
-		config.HistoryLookbackBlocks = 0
-	}
 	if config.MaxRecordsPerAction < 0 {
 		config.MaxRecordsPerAction = 0
 	}
@@ -130,9 +125,9 @@ func (m *Manager) Enqueue(ctx context.Context, request Request) (store.SyncJob, 
 		ID: primitive.NewObjectID(), Chain: request.Chain, ChainID: chain.ID, Address: request.Address,
 		StartBlock: request.StartBlock, EndBlock: request.EndBlock, NeighborLimit: request.NeighborLimit, Status: "queued",
 		CreatedAt: m.config.Clock().UTC(), TotalAddresses: 1, ActionCounts: make(map[string]int64),
-		InternalLookbackBlocks: m.config.InternalLookbackBlocks, MaxRecordsPerAction: m.config.MaxRecordsPerAction,
+		MaxRecordsPerAction: m.config.MaxRecordsPerAction,
 	}
-	checkpoints, err := m.repository.FindSyncCheckpoints(ctx, request.Chain, request.Address, request.StartBlock, m.config.InternalLookbackBlocks, m.config.MaxRecordsPerAction)
+	checkpoints, err := m.repository.FindSyncCheckpoints(ctx, request.Chain, request.Address, request.StartBlock, m.config.MaxRecordsPerAction)
 	if err != nil {
 		m.mu.Unlock()
 		return store.SyncJob{}, err
@@ -293,7 +288,7 @@ func (m *Manager) process(ctx context.Context, queued queuedJob) {
 	for _, neighbor := range neighbors {
 		request := queued.request
 		request.Address, request.NeighborLimit = neighbor, 0
-		checkpoints, checkpointErr := m.repository.FindSyncCheckpoints(ctx, request.Chain, request.Address, request.StartBlock, m.config.InternalLookbackBlocks, m.config.MaxRecordsPerAction)
+		checkpoints, checkpointErr := m.repository.FindSyncCheckpoints(ctx, request.Chain, request.Address, request.StartBlock, m.config.MaxRecordsPerAction)
 		if checkpointErr != nil {
 			m.finishFailed(ctx, &job, checkpointErr)
 			return
@@ -338,14 +333,6 @@ func (m *Manager) syncAddress(ctx context.Context, source Source, chainID int64,
 	if err != nil {
 		return addressResult{}, err
 	}
-	cacheInternalFrom := request.StartBlock
-	cacheHistoryFrom := request.StartBlock
-	if m.config.HistoryLookbackBlocks > 0 {
-		cacheHistoryFrom = max(cacheHistoryFrom, address.LatestSyncedBlock-m.config.HistoryLookbackBlocks+1)
-	}
-	if exists && m.config.InternalLookbackBlocks > 0 {
-		cacheInternalFrom = max(cacheInternalFrom, address.LatestSyncedBlock-m.config.InternalLookbackBlocks+1)
-	}
 	haveNormalFrom, haveNormalTo := address.NormalSyncedFrom, address.NormalSyncedTo
 	haveInternalFrom, haveInternalTo := address.InternalSyncedFrom, address.InternalSyncedTo
 	haveTokenFrom, haveTokenTo := address.TokenSyncedFrom, address.TokenSyncedTo
@@ -360,9 +347,9 @@ func (m *Manager) syncAddress(ctx context.Context, source Source, chainID int64,
 			haveTokenFrom, haveTokenTo = address.EarliestSyncedBlock, address.LatestSyncedBlock
 		}
 	}
-	normalCached := coverageContains(haveNormalFrom, haveNormalTo, cacheHistoryFrom, address.LatestSyncedBlock)
-	internalCached := exists && haveInternalFrom <= cacheInternalFrom && haveInternalTo >= address.LatestSyncedBlock
-	tokenCached := coverageContains(haveTokenFrom, haveTokenTo, cacheHistoryFrom, address.LatestSyncedBlock)
+	normalCached := coverageContains(haveNormalFrom, haveNormalTo, request.StartBlock, address.LatestSyncedBlock)
+	internalCached := coverageContains(haveInternalFrom, haveInternalTo, request.StartBlock, address.LatestSyncedBlock)
+	tokenCached := coverageContains(haveTokenFrom, haveTokenTo, request.StartBlock, address.LatestSyncedBlock)
 	fullCache := address.SyncStatus == "synced" && normalCached && internalCached && tokenCached
 	partialCache := address.SyncStatus == "partial" && m.config.MaxRecordsPerAction > 0 && address.SyncMaxRecordsPerAction == m.config.MaxRecordsPerAction
 	if !m.config.DisableCache && exists && (fullCache || partialCache) && now.Sub(address.LastSyncedAt) < m.config.CacheTTL {
@@ -384,13 +371,7 @@ func (m *Manager) syncAddress(ctx context.Context, source Source, chainID int64,
 		return addressResult{}, fmt.Errorf("%w: start block exceeds safe head", ErrInvalidRequest)
 	}
 	historyFrom := request.StartBlock
-	if m.config.HistoryLookbackBlocks > 0 {
-		historyFrom = max(historyFrom, safeHead-m.config.HistoryLookbackBlocks+1)
-	}
 	internalFrom := historyFrom
-	if m.config.InternalLookbackBlocks > 0 {
-		internalFrom = max(internalFrom, safeHead-m.config.InternalLookbackBlocks+1)
-	}
 	if err := m.repository.SetAddressSyncing(ctx, request.Chain, chainID, request.Address); err != nil {
 		return addressResult{}, err
 	}
