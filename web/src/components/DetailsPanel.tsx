@@ -28,7 +28,7 @@ export function DetailsPanel({ node, edge, address, profile, labels, labelsLoadi
   </aside>;
 }
 function Metric({ label, value }: { label: string; value: string | number }) { return <div><span>{label}</span><strong>{value}</strong></div>; }
-function roleName(role: string) { if (role === "kyberswap_router") return "KyberSwap Router"; if (role === "kyberswap_executor") return "KyberSwap Executor"; if (role === "pool") return "流动性池"; return role; }
+function roleName(role: string) { if (role === "kyberswap_router") return "KyberSwap Router"; if (role === "kyberswap_executor") return "KyberSwap Executor"; if (role === "pool") return "流动性池"; if (role === "woo_x_wallet") return "WOO X 钱包"; if (role === "woo_x_vault") return "WOO X 金库"; if (role === "woo_x_staking_cold") return "WOO X Staking 冷钱包"; if (role === "woo_x_team") return "WOO X 团队钱包"; if (role === "woo_x_treasury") return "WOO X Treasury"; if (role === "woo_x_deployer") return "WOO X Deployer"; return role; }
 function edgeEndpoint(value: string) { return shortAddress(value.slice(value.indexOf(":") + 1), 12); }
 function edgeFlowLabel(flow?: GraphEdgeModel["flow"]) { return flow === "inbound" ? "资金流入查询中心" : flow === "outbound" ? "资金从查询中心流出" : "逆向或同层转账"; }
 function formatEdgeTime(value: string) { const date = new Date(value); return Number.isNaN(date.getTime()) ? "时间未知" : date.toLocaleString("zh-CN", { dateStyle: "medium", timeStyle: "short" }); }

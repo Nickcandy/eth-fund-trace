@@ -39,5 +39,11 @@ function roleLabel(role: string) {
 	if (role === "kyberswap_router") return "KyberSwap Router";
 	if (role === "kyberswap_executor") return "KyberSwap Executor";
 	if (role === "pool") return "流动性池";
+	if (role === "woo_x_wallet") return "WOO X 钱包";
+	if (role === "woo_x_vault") return "WOO X 金库";
+	if (role === "woo_x_staking_cold") return "WOO X Staking 冷钱包";
+	if (role === "woo_x_team") return "WOO X 团队钱包";
+	if (role === "woo_x_treasury") return "WOO X Treasury";
+	if (role === "woo_x_deployer") return "WOO X Deployer";
 	return role;
 }

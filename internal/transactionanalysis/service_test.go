@@ -128,6 +128,30 @@ func TestInspectAddressClassifiesKyberExecutorAndEOA(t *testing.T) {
 	}
 }
 
+func TestInspectAddressClassifiesWOOXWalletsBeforeBytecodeLookup(t *testing.T) {
+	service := New(&sourceStub{code: "0x60016000"}, newRepoStub(), time.Now)
+	identity, err := service.InspectAddress(context.Background(), "ethereum", "0x03DD167D62E1dfC223FfD7b37fC8bF45Fb973478")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.AddressType != "eoa" || identity.Protocol != "woo_x" || !slices.Contains(identity.Roles, "woo_x_wallet") {
+		t.Fatalf("identity=%+v", identity)
+	}
+
+	identity, err = service.InspectAddress(context.Background(), "ethereum", "0x1326a1f39746726fdcfe88d83effe5451606ae85")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.AddressType != "contract" || identity.Protocol != "woo_x" || !slices.Contains(identity.Roles, "woo_x_vault") {
+		t.Fatalf("vault identity=%+v", identity)
+	}
+
+	identity, err = service.InspectAddress(context.Background(), "ethereum", testUser)
+	if err != nil || identity.Protocol != "" || identity.AddressType != "contract" {
+		t.Fatalf("unknown identity=%+v err=%v", identity, err)
+	}
+}
+
 func TestInspectAddressClassifiesVerifiedPool(t *testing.T) {
 	repo := newRepoStub()
 	repo.pools["ethereum"+testPool] = store.PoolMetadata{Chain: "ethereum", Pool: testPool, Verified: true}

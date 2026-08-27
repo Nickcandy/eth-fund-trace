@@ -57,6 +57,29 @@ var contractIdentities = map[string]store.AddressIdentity{
 	EthereumWETH:      {AddressType: "contract", Protocol: "weth", Roles: []string{"wrapped_native_token"}},
 }
 
+// wooXIdentities contains the Ethereum addresses publicly labelled for WOO X.
+// The list is based on the public EVM CEX address registry (2025-01-07,
+// https://gist.github.com/xfwil/07dadf39ae559829132952734ca524f3), with role
+// names preserving the distinction between operational wallets and vaults.
+var wooXIdentities = map[string]store.AddressIdentity{
+	"0x03dd167d62e1dfc223ffd7b37fc8bf45fb973478": {AddressType: "eoa", Protocol: "woo_x", Roles: []string{"woo_x_wallet"}},
+	"0x63dfe4e34a3bfc00eb0220786238a7c6cef8ffc4": {AddressType: "eoa", Protocol: "woo_x", Roles: []string{"woo_x_wallet"}},
+	"0xe505bf08c03cc0fa4e0fdfa2487e2c11085b3fd9": {AddressType: "eoa", Protocol: "woo_x", Roles: []string{"woo_x_wallet"}},
+	"0xea319fd75766f5180018f8e760f51c3d3c457496": {AddressType: "contract", Protocol: "woo_x", Roles: []string{"woo_x_wallet"}},
+	"0x1e6dce7ce381774286abb8c9aac461bb7b1c4b05": {AddressType: "eoa", Protocol: "woo_x", Roles: []string{"woo_x_wallet"}},
+	"0xeef97691d3307b4e61522170f648ee2df1312fee": {AddressType: "eoa", Protocol: "woo_x", Roles: []string{"woo_x_wallet"}},
+	"0x594203e46e0b41b1edb54a551e7784c194d1335b": {AddressType: "eoa", Protocol: "woo_x", Roles: []string{"woo_x_wallet"}},
+	"0x607e062e3986a16283047beaed1a7dc3e220ff0e": {AddressType: "eoa", Protocol: "woo_x", Roles: []string{"woo_x_wallet"}},
+	"0x0d83f81bc9f1e8252f87a4109bbf0d90171c81df": {AddressType: "contract", Protocol: "woo_x", Roles: []string{"woo_x_wallet", "woo_x_staking_cold"}},
+	"0x1326a1f39746726fdcfe88d83effe5451606ae85": {AddressType: "contract", Protocol: "woo_x", Roles: []string{"woo_x_wallet", "woo_x_vault"}},
+	"0xf0b8660476ea1af0f363de8816e3e7cd1c8f1fde": {AddressType: "contract", Protocol: "woo_x", Roles: []string{"woo_x_wallet", "woo_x_vault"}},
+	"0xe2933566f172d08f8c90144fed5ae28e9d54b1ec": {AddressType: "eoa", Protocol: "woo_x", Roles: []string{"woo_x_wallet", "woo_x_team"}},
+	"0x15271e572267def474366bb683719cc59489efbe": {AddressType: "eoa", Protocol: "woo_x", Roles: []string{"woo_x_wallet", "woo_x_treasury"}},
+	"0xd7d8bcae65537cb5079a4fb249b9fbb4526e4084": {AddressType: "eoa", Protocol: "woo_x", Roles: []string{"woo_x_wallet", "woo_x_treasury"}},
+	"0xfa2d1f15557170f6c4a4c5249e77f534184cdb79": {AddressType: "contract", Protocol: "woo_x", Roles: []string{"woo_x_wallet", "woo_x_treasury"}},
+	"0xe64eb20471491956338eedc0f98242bc3ad0c91b": {AddressType: "eoa", Protocol: "woo_x", Roles: []string{"woo_x_wallet", "woo_x_deployer"}},
+}
+
 // Source provides transaction facts and read-only contract calls.
 type Source interface {
 	TransactionByHash(context.Context, string) (etherscan.RPCTransaction, error)
@@ -72,6 +95,9 @@ func (s *Service) InspectAddress(ctx context.Context, chain, address string) (st
 		return store.AddressIdentity{}, ErrUnsupportedChain
 	}
 	address = strings.ToLower(strings.TrimSpace(address))
+	if identity, ok := wooXIdentities[address]; ok {
+		return identity, nil
+	}
 	code, err := s.source.CodeAt(ctx, address)
 	if err != nil {
 		return store.AddressIdentity{}, fmt.Errorf("fetch address bytecode: %w", err)
