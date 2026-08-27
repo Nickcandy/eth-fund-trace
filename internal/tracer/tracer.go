@@ -175,17 +175,16 @@ func (g *Graph) WithExistingDataOnly(enabled bool) *Graph {
 	return g
 }
 
-func (g *Graph) addressCovered(chain string, address store.Address, through int64) bool {
+func (g *Graph) addressCovered(address store.Address, from, through int64) bool {
 	if g.existingDataOnly {
 		return true
 	}
-	if address.SyncStatus != "synced" {
+	if address.SyncStatus != "synced" || through < from {
 		return false
 	}
-	start := g.requiredStartBlocks[chain]
-	return address.NormalSyncedFrom <= start && address.NormalSyncedTo >= through &&
-		address.InternalSyncedFrom <= start && address.InternalSyncedTo >= through &&
-		address.TokenSyncedFrom <= start && address.TokenSyncedTo >= through
+	return address.NormalSyncedFrom <= from && address.NormalSyncedTo >= through &&
+		address.InternalSyncedFrom <= from && address.InternalSyncedTo >= through &&
+		address.TokenSyncedFrom <= from && address.TokenSyncedTo >= through
 }
 
 func addressIdentity(address store.Address) store.AddressIdentity {
@@ -227,7 +226,7 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 	if err != nil {
 		return Result{}, err
 	}
-	if !found || !g.addressCovered(q.Chain, metadata, metadata.LatestSyncedBlock) {
+	if !found || !g.addressCovered(metadata, g.requiredStartBlocks[q.Chain], metadata.LatestSyncedBlock) {
 		return Result{}, AddressNotSyncedError{Chain: q.Chain, Address: seed}
 	}
 	dataStatus := "synced"
@@ -341,7 +340,13 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 					otherMetadata.Roles = identity.Roles
 				}
 				contract := identity.AddressType == "contract"
-				if !contract && (!otherFound || !g.addressCovered(q.Chain, otherMetadata, metadata.LatestSyncedBlock)) {
+				requiredFrom, requiredThrough := g.requiredStartBlocks[q.Chain], metadata.LatestSyncedBlock
+				if state.Direction == "out" {
+					requiredFrom = summary.Representative.BlockNumber
+				} else {
+					requiredThrough = summary.Representative.BlockNumber
+				}
+				if !contract && (!otherFound || !g.addressCovered(otherMetadata, requiredFrom, requiredThrough)) {
 					dependency := AddressNotSyncedError{Chain: q.Chain, Address: other}
 					if state.Direction == "out" {
 						dependency.StartBlock = summary.Representative.BlockNumber

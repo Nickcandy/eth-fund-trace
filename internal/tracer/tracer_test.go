@@ -151,6 +151,11 @@ func (s transactionAnalyzerStub) SupportsContract(address string) bool {
 func (r *fakeRepository) FindAddress(_ context.Context, _, address string) (store.Address, bool, error) {
 	v, ok := r.addresses[address]
 	if ok && v.SyncStatus == "synced" && v.NormalSyncedTo == 0 && v.InternalSyncedTo == 0 && v.TokenSyncedTo == 0 {
+		for _, transfer := range r.transfers {
+			if transfer.BlockNumber > v.LatestSyncedBlock {
+				v.LatestSyncedBlock = transfer.BlockNumber
+			}
+		}
 		v.NormalSyncedFrom, v.InternalSyncedFrom, v.TokenSyncedFrom = v.EarliestSyncedBlock, v.EarliestSyncedBlock, v.EarliestSyncedBlock
 		v.NormalSyncedTo, v.InternalSyncedTo, v.TokenSyncedTo = v.LatestSyncedBlock, v.LatestSyncedBlock, v.LatestSyncedBlock
 	}
@@ -268,22 +273,39 @@ func TestTraceExistingDataOnlySkipsCoverageAndAddressInspection(t *testing.T) {
 	}
 }
 
-func TestTraceRequiresDependencyHistoryCoverage(t *testing.T) {
+func TestTraceAcceptsDownstreamDependencyCoverageFromAnchor(t *testing.T) {
 	seed := "0x0000000000000000000000000000000000000001"
 	dependency := "0x0000000000000000000000000000000000000002"
 	r := &fakeRepository{
 		addresses: map[string]store.Address{
 			seed:       completeAddress(50, 100),
-			dependency: {SyncStatus: "synced", NormalSyncedFrom: 90, NormalSyncedTo: 100, InternalSyncedFrom: 50, InternalSyncedTo: 100, TokenSyncedFrom: 50, TokenSyncedTo: 100, LatestSyncedBlock: 100},
+			dependency: completeAddress(95, 100),
 		},
 		transfers: []store.Transfer{{Chain: "ethereum", TxHash: "0x1", BlockNumber: 95, From: seed, To: dependency, AssetType: "eth", Asset: "ETH", Amount: "1000000000000000000"}},
 		labels:    map[string][]store.Label{},
 	}
 
-	_, err := New(r).WithRequiredStartBlocks(map[string]int64{"ethereum": 50}).Trace(context.Background(), Query{Address: seed, Direction: "out", Depth: 2})
-	var unsynced AddressNotSyncedError
-	if !errors.As(err, &unsynced) || unsynced.Address != dependency {
-		t.Fatalf("error = %v, want dependency %s to require history sync", err, dependency)
+	result, err := New(r).WithRequiredStartBlocks(map[string]int64{"ethereum": 50}).Trace(context.Background(), Query{Address: seed, Direction: "out", Depth: 2})
+	if err != nil || len(result.Edges) != 1 {
+		t.Fatalf("result=%+v error=%v, want bounded downstream coverage accepted", result, err)
+	}
+}
+
+func TestTraceAcceptsUpstreamDependencyCoverageThroughAnchor(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	dependency := "0x0000000000000000000000000000000000000002"
+	r := &fakeRepository{
+		addresses: map[string]store.Address{
+			seed:       completeAddress(50, 100),
+			dependency: completeAddress(50, 80),
+		},
+		transfers: []store.Transfer{{Chain: "ethereum", TxHash: "0x1", BlockNumber: 80, From: dependency, To: seed, AssetType: "eth", Asset: "ETH", Amount: "1000000000000000000"}},
+		labels:    map[string][]store.Label{},
+	}
+
+	result, err := New(r).WithRequiredStartBlocks(map[string]int64{"ethereum": 50}).Trace(context.Background(), Query{Address: seed, Direction: "in", Depth: 2})
+	if err != nil || len(result.Edges) != 1 {
+		t.Fatalf("result=%+v error=%v, want bounded upstream coverage accepted", result, err)
 	}
 }
 
@@ -646,7 +668,7 @@ func TestBridgeTargetRespectsBranchDirection(t *testing.T) {
 func TestAddressCoveredRequiresEveryActionRange(t *testing.T) {
 	graph := New(&fakeRepository{}).WithRequiredStartBlocks(map[string]int64{"ethereum": 50})
 	complete := completeAddress(50, 100)
-	if !graph.addressCovered("ethereum", complete, 100) {
+	if !graph.addressCovered(complete, 50, 100) {
 		t.Fatal("complete action coverage was rejected")
 	}
 	for _, missing := range []string{"normal", "internal", "token"} {
@@ -659,7 +681,7 @@ func TestAddressCoveredRequiresEveryActionRange(t *testing.T) {
 		case "token":
 			address.TokenSyncedFrom = 51
 		}
-		if graph.addressCovered("ethereum", address, 100) {
+		if graph.addressCovered(address, 50, 100) {
 			t.Fatalf("missing %s coverage was accepted", missing)
 		}
 	}
