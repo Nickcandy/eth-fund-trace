@@ -311,6 +311,9 @@ func (s *Store) FindSyncCheckpoints(ctx context.Context, chain, address string, 
 	if job.Status != "failed" && job.Status != "stopped" {
 		return map[string]int64{}, nil
 	}
+	if job.CoverageVersion != SyncCoverageVersion {
+		return map[string]int64{}, nil
+	}
 	if job.MaxRecordsPerAction != maxRecordsPerAction {
 		return map[string]int64{}, nil
 	}

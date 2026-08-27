@@ -123,7 +123,8 @@ func (m *Manager) Enqueue(ctx context.Context, request Request) (store.SyncJob, 
 	}
 	job := store.SyncJob{
 		ID: primitive.NewObjectID(), Chain: request.Chain, ChainID: chain.ID, Address: request.Address,
-		StartBlock: request.StartBlock, EndBlock: request.EndBlock, NeighborLimit: request.NeighborLimit, Status: "queued",
+		StartBlock: request.StartBlock, EndBlock: request.EndBlock, NeighborLimit: request.NeighborLimit,
+		CoverageVersion: store.SyncCoverageVersion, Status: "queued",
 		CreatedAt: m.config.Clock().UTC(), TotalAddresses: 1, ActionCounts: make(map[string]int64),
 		MaxRecordsPerAction: m.config.MaxRecordsPerAction,
 	}
@@ -370,19 +371,18 @@ func (m *Manager) syncAddress(ctx context.Context, source Source, chainID int64,
 	if request.StartBlock > safeHead {
 		return addressResult{}, fmt.Errorf("%w: start block exceeds safe head", ErrInvalidRequest)
 	}
-	historyFrom := request.StartBlock
-	internalFrom := historyFrom
+	syncFrom := request.StartBlock
 	if err := m.repository.SetAddressSyncing(ctx, request.Chain, chainID, request.Address); err != nil {
 		return addressResult{}, err
 	}
 
-	normalIntervals := coverageIntervals(historyFrom, safeHead, haveNormalFrom, haveNormalTo)
-	internalIntervals := coverageIntervals(internalFrom, safeHead, haveInternalFrom, haveInternalTo)
-	tokenIntervals := coverageIntervals(historyFrom, safeHead, haveTokenFrom, haveTokenTo)
+	normalIntervals := coverageIntervals(syncFrom, safeHead, haveNormalFrom, haveNormalTo)
+	internalIntervals := coverageIntervals(syncFrom, safeHead, haveInternalFrom, haveInternalTo)
+	tokenIntervals := coverageIntervals(syncFrom, safeHead, haveTokenFrom, haveTokenTo)
 	if m.config.MaxRecordsPerAction > 0 {
-		normalIntervals = [][2]int64{{historyFrom, safeHead}}
-		internalIntervals = [][2]int64{{internalFrom, safeHead}}
-		tokenIntervals = [][2]int64{{historyFrom, safeHead}}
+		normalIntervals = [][2]int64{{syncFrom, safeHead}}
+		internalIntervals = [][2]int64{{syncFrom, safeHead}}
+		tokenIntervals = [][2]int64{{syncFrom, safeHead}}
 	}
 
 	result := addressResult{actionCounts: make(map[string]int64)}
@@ -481,9 +481,9 @@ func (m *Manager) syncAddress(ctx context.Context, source Source, chainID int64,
 			return addressResult{}, err
 		}
 	} else {
-		normalFrom, normalTo := mergeCoverage(historyFrom, safeHead, haveNormalFrom, haveNormalTo)
-		internalCoverageFrom, internalCoverageTo := mergeCoverage(internalFrom, safeHead, haveInternalFrom, haveInternalTo)
-		tokenFrom, tokenTo := mergeCoverage(historyFrom, safeHead, haveTokenFrom, haveTokenTo)
+		normalFrom, normalTo := mergeCoverage(syncFrom, safeHead, haveNormalFrom, haveNormalTo)
+		internalCoverageFrom, internalCoverageTo := mergeCoverage(syncFrom, safeHead, haveInternalFrom, haveInternalTo)
+		tokenFrom, tokenTo := mergeCoverage(syncFrom, safeHead, haveTokenFrom, haveTokenTo)
 		coverage := store.AddressSyncCoverage{
 			NormalFrom: normalFrom, NormalTo: normalTo,
 			InternalFrom: internalCoverageFrom, InternalTo: internalCoverageTo,

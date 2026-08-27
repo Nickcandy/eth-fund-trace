@@ -223,6 +223,7 @@ type SyncJob struct {
 	StartBlock          int64              `bson:"startBlock" json:"startBlock"`
 	EndBlock            int64              `bson:"endBlock,omitempty" json:"endBlock,omitempty"`
 	NeighborLimit       int                `bson:"neighborLimit" json:"neighborLimit"`
+	CoverageVersion     string             `bson:"coverageVersion" json:"coverageVersion"`
 	MaxRecordsPerAction int64              `bson:"maxRecordsPerAction,omitempty" json:"maxRecordsPerAction,omitempty"`
 	Status              string             `bson:"status" json:"status"`
 	CreatedAt           time.Time          `bson:"createdAt" json:"createdAt"`
@@ -244,6 +245,8 @@ type SyncJob struct {
 	Error               string             `bson:"error,omitempty" json:"error,omitempty"`
 	Retryable           bool               `bson:"retryable" json:"retryable"`
 }
+
+const SyncCoverageVersion = "chain-start-v1"
 
 type SyncProgress struct {
 	CurrentAddress    string           `bson:"currentAddress,omitempty" json:"currentAddress,omitempty"`

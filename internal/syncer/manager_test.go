@@ -221,6 +221,9 @@ func (r *memoryRepository) FindSyncCheckpoints(_ context.Context, chain, address
 	if latest.Status != "failed" && latest.Status != "stopped" {
 		return result, nil
 	}
+	if latest.CoverageVersion != store.SyncCoverageVersion {
+		return result, nil
+	}
 	if latest.MaxRecordsPerAction != maxRecordsPerAction {
 		return result, nil
 	}
@@ -695,7 +698,7 @@ func TestManagerResumesFailedActionFromPersistedCheckpoint(t *testing.T) {
 	seed := "0x0000000000000000000000000000000000000001"
 	source := &recordingSource{fakeSource: fakeSource{latest: 20}}
 	repository := newMemoryRepository()
-	repository.jobs[primitive.NewObjectID()] = store.SyncJob{Chain: "ethereum", Address: seed, StartBlock: 1, Status: "failed", CreatedAt: time.Now(), Progress: store.SyncProgress{ActionCheckpoints: map[string]int64{"txlist": 10}}}
+	repository.jobs[primitive.NewObjectID()] = store.SyncJob{Chain: "ethereum", Address: seed, StartBlock: 1, CoverageVersion: store.SyncCoverageVersion, Status: "failed", CreatedAt: time.Now(), Progress: store.SyncProgress{ActionCheckpoints: map[string]int64{"txlist": 10}}}
 	manager := New(source, repository, Config{QueueSize: 10})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -710,11 +713,34 @@ func TestManagerResumesFailedActionFromPersistedCheckpoint(t *testing.T) {
 	}
 }
 
+func TestManagerDiscardsCheckpointFromLegacyCoveragePolicy(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	source := &recordingSource{fakeSource: fakeSource{latest: 20}}
+	repository := newMemoryRepository()
+	repository.jobs[primitive.NewObjectID()] = store.SyncJob{
+		Chain: "ethereum", Address: seed, StartBlock: 1, Status: "failed", CreatedAt: time.Now(),
+		Progress: store.SyncProgress{ActionCheckpoints: map[string]int64{"txlistinternal": 10}},
+	}
+	manager := New(source, repository, Config{QueueSize: 10})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = manager.Run(ctx) }()
+
+	job, err := manager.Enqueue(context.Background(), Request{Chain: "ethereum", Address: seed, StartBlock: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job = waitForJob(t, manager, job.ID.Hex())
+	if job.Status != "succeeded" || len(source.actionRanges["txlistinternal"]) == 0 || source.actionRanges["txlistinternal"][0] != [2]int64{1, 20} {
+		t.Fatalf("job=%+v internal ranges=%v", job, source.actionRanges["txlistinternal"])
+	}
+}
+
 func TestManagerResumesStoppedActionFromPersistedCheckpoint(t *testing.T) {
 	seed := "0x0000000000000000000000000000000000000001"
 	source := &recordingSource{fakeSource: fakeSource{latest: 20}}
 	repository := newMemoryRepository()
-	repository.jobs[primitive.NewObjectID()] = store.SyncJob{Chain: "ethereum", Address: seed, StartBlock: 1, Status: "stopped", CreatedAt: time.Now(), Progress: store.SyncProgress{ActionCheckpoints: map[string]int64{"txlist": 10}}}
+	repository.jobs[primitive.NewObjectID()] = store.SyncJob{Chain: "ethereum", Address: seed, StartBlock: 1, CoverageVersion: store.SyncCoverageVersion, Status: "stopped", CreatedAt: time.Now(), Progress: store.SyncProgress{ActionCheckpoints: map[string]int64{"txlist": 10}}}
 	manager := New(source, repository, Config{QueueSize: 10})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
