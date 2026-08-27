@@ -1417,9 +1417,13 @@ func (s *Store) QueryCrossChainLinks(ctx context.Context, query BridgeLinkQuery)
 	if err != nil {
 		return nil, err
 	}
-	defer cursor.Close(ctx)
 	var result []CrossChainLink
-	return result, cursor.All(ctx, &result)
+	readErr := cursor.All(ctx, &result)
+	closeErr := cursor.Close(ctx)
+	if err := errors.Join(readErr, closeErr); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (s *Store) ListCrossChainLinks(ctx context.Context, chain, address string, limit int64) ([]CrossChainLink, error) {

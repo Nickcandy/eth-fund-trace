@@ -139,7 +139,7 @@ func (c *Client) Call(ctx context.Context, to, data string) (string, error) {
 	return result, nil
 }
 
-func (c *Client) call(ctx context.Context, method string, params []any, target any) error {
+func (c *Client) call(ctx context.Context, method string, params []any, target any) (err error) {
 	payload, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
 	if err != nil {
 		return fmt.Errorf("marshal RPC request: %w", err)
@@ -156,7 +156,11 @@ func (c *Client) call(ctx context.Context, method string, params []any, target a
 		}
 		return fmt.Errorf("%w: %s", ErrUnavailable, c.redacted)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close RPC response body: %w", closeErr))
+		}
+	}()
 	if resp.StatusCode == http.StatusTooManyRequests {
 		return fmt.Errorf("%w: %s", ErrRateLimited, c.redacted)
 	}

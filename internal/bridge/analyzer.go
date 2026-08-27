@@ -589,7 +589,7 @@ func parseSourceEvent(chain string, log etherscan.RPCLog) (store.CrossChainLink,
 }
 
 func parseTargetEvent(link store.CrossChainLink, log chainrpc.Log) (chainrpc.Log, bool, error) {
-	if len(log.Topics) == 0 || strings.ToLower(log.Address) != strings.ToLower(map[string]string{"deposit": BaseL2StandardBridge, "withdrawal": EthereumL1StandardBridge}[link.Direction]) {
+	if len(log.Topics) == 0 || !strings.EqualFold(log.Address, map[string]string{"deposit": BaseL2StandardBridge, "withdrawal": EthereumL1StandardBridge}[link.Direction]) {
 		return log, false, nil
 	}
 	if link.SourceAsset == "ETH" {
