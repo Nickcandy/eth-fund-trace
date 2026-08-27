@@ -8,7 +8,6 @@ export function validateTraceQuery(query: TraceQuery): string | undefined {
   if (!(["ethereum", "base"] as string[]).includes(query.chain)) return "不支持的网络";
   if (!(["in", "out", "both"] as string[]).includes(query.direction)) return "不支持的追踪方向";
   if (!Number.isInteger(query.depth) || query.depth < 1 || query.depth > 5) return "深度必须在 1 到 5 之间";
-  if (!Number.isInteger(query.topN) || query.topN < 1 || query.topN > 20) return "Top-N 必须在 1 到 20 之间";
   if (query.asset !== "ETH") return "追踪必须从 ETH 开始";
 }
 
@@ -18,13 +17,11 @@ export function readTraceQuery(search: string): TraceQuery {
   const directionValue = params.get("direction");
   const direction: Direction = directionValue === "in" || directionValue === "out" ? directionValue : "both";
   const depth = Number(params.get("depth") || 3);
-  const topN = Number(params.get("topN") || 10);
   return {
     chain: chain as Chain,
     address: params.get("address") ?? "",
     direction,
     depth: Number.isInteger(depth) && depth >= 1 && depth <= 5 ? depth : 3,
-    topN: Number.isInteger(topN) && topN >= 1 && topN <= 20 ? topN : 10,
     asset: "ETH",
   };
 }

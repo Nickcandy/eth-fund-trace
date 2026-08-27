@@ -86,7 +86,7 @@ func TestModelBSONFields(t *testing.T) {
 		{name: "label", model: Label{}, required: []string{"chain", "chainId", "address", "type", "source", "confidence", "observedAt"}},
 		{name: "sync job", model: SyncJob{}, required: []string{"chain", "chainId", "address", "status", "createdAt", "fetched"}},
 		{name: "address profile", model: AddressProfile{}, required: []string{"chain", "chainId", "address", "ruleVersion", "dataThroughBlock", "features", "score", "classification", "suspectedHotWallet", "computedAt"}},
-		{name: "trace job", model: TraceJob{}, required: []string{"chain", "seedAddress", "direction", "depth", "topN", "status", "ruleVersion"}},
+		{name: "trace job", model: TraceJob{}, required: []string{"chain", "seedAddress", "direction", "depth", "status", "ruleVersion"}},
 		{name: "propagation job", model: PropagationJob{}, required: []string{"chain", "targetAddress", "asset", "direction", "status", "maxHops", "maxNodes", "maxEdges", "perNodeCandidateCap", "maxPathsPerTarget", "ruleVersion", "propagationVersion"}},
 		{name: "transaction analysis", model: TransactionAnalysis{}, required: []string{"chain", "chainId", "txHash", "value", "transfers", "swaps", "wraps", "quality", "analyzedAt"}},
 		{name: "pool metadata", model: PoolMetadata{}, required: []string{"chain", "pool", "token0", "token1", "fee", "factory", "verified", "observedAt"}},

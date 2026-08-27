@@ -25,7 +25,6 @@ export function QueryBar({ value, onChange, onSubmit, busy, error, mode = "addre
       {mode === "address" && <>
         <label><span>方向</span><select aria-label="方向" value={value.direction} onChange={(event) => onChange({ ...value, direction: event.target.value as TraceQuery["direction"] })}><option value="both">双向</option><option value="in">上游</option><option value="out">下游</option></select></label>
         <label className="number-field"><span>深度</span><input aria-label="深度" type="number" min={1} max={5} value={value.depth} onChange={(event) => onChange({ ...value, depth: Number(event.target.value) })} /></label>
-        <label className="number-field"><span>Top-N</span><input aria-label="Top-N" type="number" min={1} max={20} value={value.topN} onChange={(event) => onChange({ ...value, topN: Number(event.target.value) })} /></label>
       </>}
       <button className="primary-command" type="submit" disabled={busy}><Search size={17} />{busy ? "分析中" : "开始分析"}</button>
       {error && <div className="query-error" role="alert">{error}</div>}

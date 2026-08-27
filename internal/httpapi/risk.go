@@ -22,11 +22,7 @@ func (h *RiskHandler) Get(c echo.Context) error {
 	if err != nil {
 		return writeError(c, 400, "invalid_request", "invalid depth", false)
 	}
-	topN, err := queryInt(c, "topN")
-	if err != nil {
-		return writeError(c, 400, "invalid_request", "invalid topN", false)
-	}
-	query := tracer.Query{Chain: c.QueryParam("chain"), Address: c.QueryParam("address"), Direction: c.QueryParam("direction"), Asset: c.QueryParam("asset"), Depth: depth, TopN: topN}
+	query := tracer.Query{Chain: c.QueryParam("chain"), Address: c.QueryParam("address"), Direction: c.QueryParam("direction"), Asset: c.QueryParam("asset"), Depth: depth}
 	if err := tracer.ValidateQuery(query); err != nil {
 		return writeError(c, 400, "invalid_request", err.Error(), false)
 	}

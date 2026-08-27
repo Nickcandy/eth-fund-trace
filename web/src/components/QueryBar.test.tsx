@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QueryBar } from "./QueryBar";
 
-const query = { chain: "ethereum" as const, address: "", direction: "both" as const, depth: 3, topN: 10, asset: "ETH" };
+const query = { chain: "ethereum" as const, address: "", direction: "both" as const, depth: 3, asset: "ETH" };
 afterEach(cleanup);
 
 describe("QueryBar", () => {

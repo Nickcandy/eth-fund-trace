@@ -324,7 +324,7 @@ func TestM5TransferQueryFiltersAndPaginates(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	topETH, err := s.TopCounterparties(ctx, CounterpartyQuery{Chain: "ethereum", Address: seed, Direction: "out", AssetMode: "eth", Asset: "ETH", TopN: 2})
+	topETH, err := s.TopCounterparties(ctx, CounterpartyQuery{Chain: "ethereum", Address: seed, Direction: "out", AssetMode: "eth", Asset: "ETH"})
 	if err != nil || len(topETH) != 2 || topETH[0].To != neighbor || topETH[0].TotalAmount != "103" || topETH[0].TransferCount != 2 || topETH[1].To != neighborB {
 		t.Fatalf("amount-ranked counterparties=%+v err=%v", topETH, err)
 	}
@@ -369,7 +369,7 @@ func TestM6M7TraceJobsAndLabels(t *testing.T) {
 		t.Fatalf("labels=%+v err=%v", labels, err)
 	}
 
-	job := TraceJob{Chain: "ethereum", SeedAddress: address, Direction: "both", Depth: 3, TopN: 10, Status: "running", RuleVersion: "trace-v1", CreatedAt: time.Now()}
+	job := TraceJob{Chain: "ethereum", SeedAddress: address, Direction: "both", Depth: 3, Status: "running", RuleVersion: "trace-v1", CreatedAt: time.Now()}
 	if err := s.CreateTraceJob(ctx, &job); err != nil {
 		t.Fatal(err)
 	}

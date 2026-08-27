@@ -29,8 +29,8 @@ describe("API authentication", () => {
   it("looks up the latest trace job by the complete trace query", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "trace-1" }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
-    await api.latestTraceJob({ chain: "ethereum", address: "0x0000000000000000000000000000000000000001", direction: "both", depth: 3, topN: 10, asset: "all" });
-    expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/trace-jobs/latest?chain=ethereum&address=0x0000000000000000000000000000000000000001&direction=both&depth=3&topN=10&asset=all");
+	await api.latestTraceJob({ chain: "ethereum", address: "0x0000000000000000000000000000000000000001", direction: "both", depth: 3, asset: "all" });
+	expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/trace-jobs/latest?chain=ethereum&address=0x0000000000000000000000000000000000000001&direction=both&depth=3&asset=all");
   });
 
   it("recovers an active sync through the idempotent enqueue endpoint", async () => {

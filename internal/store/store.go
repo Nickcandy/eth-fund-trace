@@ -160,15 +160,24 @@ func (s *Store) SetAddressSyncing(ctx context.Context, chain string, chainID int
 	return err
 }
 
-func (s *Store) CompleteAddressSync(ctx context.Context, chain, address string, earliest, latest, internalFrom, internalTo int64, syncedAt time.Time) error {
+func (s *Store) CompleteAddressSync(ctx context.Context, chain, address string, coverage AddressSyncCoverage, syncedAt time.Time) error {
+	earliest := max(coverage.NormalFrom, max(coverage.InternalFrom, coverage.TokenFrom))
+	latest := min(coverage.NormalTo, min(coverage.InternalTo, coverage.TokenTo))
+	if latest < earliest {
+		return fmt.Errorf("invalid address sync coverage: no common completed range")
+	}
 	_, err := s.db.Collection(AddressesCollection).UpdateOne(ctx,
 		bson.D{{Key: "chain", Value: chain}, {Key: "address", Value: address}},
 		bson.D{{Key: "$set", Value: bson.D{
 			{Key: "earliestSyncedBlock", Value: earliest},
 			{Key: "historySyncedToBlock", Value: latest},
 			{Key: "latestSyncedBlock", Value: latest},
-			{Key: "internalSyncedFrom", Value: internalFrom},
-			{Key: "internalSyncedTo", Value: internalTo},
+			{Key: "normalSyncedFrom", Value: coverage.NormalFrom},
+			{Key: "normalSyncedTo", Value: coverage.NormalTo},
+			{Key: "internalSyncedFrom", Value: coverage.InternalFrom},
+			{Key: "internalSyncedTo", Value: coverage.InternalTo},
+			{Key: "tokenSyncedFrom", Value: coverage.TokenFrom},
+			{Key: "tokenSyncedTo", Value: coverage.TokenTo},
 			{Key: "lastSyncedAt", Value: syncedAt},
 			{Key: "syncStatus", Value: "synced"},
 			{Key: "syncError", Value: ""},
@@ -177,7 +186,7 @@ func (s *Store) CompleteAddressSync(ctx context.Context, chain, address string, 
 	return err
 }
 
-func (s *Store) CompleteAddressPartial(ctx context.Context, chain, address string, latest, maxRecordsPerAction int64, syncedAt time.Time) error {
+func (s *Store) CompleteAddressPartial(ctx context.Context, chain, address string, latest, maxRecordsPerAction int64, reason string, syncedAt time.Time) error {
 	_, err := s.db.Collection(AddressesCollection).UpdateOne(ctx,
 		bson.D{{Key: "chain", Value: chain}, {Key: "address", Value: address}},
 		bson.D{{Key: "$set", Value: bson.D{
@@ -185,7 +194,7 @@ func (s *Store) CompleteAddressPartial(ctx context.Context, chain, address strin
 			{Key: "latestSyncedBlock", Value: latest},
 			{Key: "lastSyncedAt", Value: syncedAt},
 			{Key: "syncStatus", Value: "partial"},
-			{Key: "syncError", Value: "record_limit"},
+			{Key: "syncError", Value: reason},
 			{Key: "syncMaxRecordsPerAction", Value: maxRecordsPerAction},
 		}}})
 	return err
@@ -523,14 +532,13 @@ func (s *Store) GetTraceJob(ctx context.Context, id primitive.ObjectID) (TraceJo
 	return job, err
 }
 
-func (s *Store) FindLatestTraceJob(ctx context.Context, chain, seedAddress, direction string, depth, topN int, asset, ruleVersion string) (TraceJob, error) {
+func (s *Store) FindLatestTraceJob(ctx context.Context, chain, seedAddress, direction string, depth int, asset, ruleVersion string) (TraceJob, error) {
 	var job TraceJob
 	filter := bson.D{
 		{Key: "chain", Value: chain},
 		{Key: "seedAddress", Value: seedAddress},
 		{Key: "direction", Value: direction},
 		{Key: "depth", Value: depth},
-		{Key: "topN", Value: topN},
 		{Key: "asset", Value: asset},
 		{Key: "ruleVersion", Value: ruleVersion},
 	}
@@ -1079,6 +1087,16 @@ func counterpartyFilter(query CounterpartyQuery) (bson.D, string) {
 		parent, other = "to", "from"
 	}
 	filter := bson.D{{Key: "chain", Value: query.Chain}, {Key: parent, Value: query.Address}}
+	if query.FromBlock > 0 || query.ToBlock > 0 {
+		blockRange := bson.D{}
+		if query.FromBlock > 0 {
+			blockRange = append(blockRange, bson.E{Key: "$gte", Value: query.FromBlock})
+		}
+		if query.ToBlock > 0 {
+			blockRange = append(blockRange, bson.E{Key: "$lte", Value: query.ToBlock})
+		}
+		filter = append(filter, bson.E{Key: "blockNumber", Value: blockRange})
+	}
 	if query.Counterparty != "" {
 		filter = append(filter, bson.E{Key: other, Value: query.Counterparty})
 	}

@@ -17,7 +17,7 @@ import (
 type JobRepository interface {
 	CreateTraceJob(context.Context, *store.TraceJob) error
 	GetTraceJob(context.Context, primitive.ObjectID) (store.TraceJob, error)
-	FindLatestTraceJob(context.Context, string, string, string, int, int, string, string) (store.TraceJob, error)
+	FindLatestTraceJob(context.Context, string, string, string, int, string, string) (store.TraceJob, error)
 	SaveTraceJob(context.Context, store.TraceJob) error
 	FailInterruptedTraceJobs(context.Context, time.Time) error
 }
@@ -62,7 +62,7 @@ func (m *Manager) Enqueue(ctx context.Context, request Request) (store.TraceJob,
 		m.mu.Unlock()
 		return m.jobs.GetTraceJob(ctx, id)
 	}
-	job := store.TraceJob{Chain: request.Query.Chain, SeedAddress: request.Query.Address, Direction: request.Query.Direction, Depth: request.Query.Depth, TopN: request.Query.TopN, Asset: request.Query.Asset, Status: "queued", CreatedAt: m.clock().UTC(), RuleVersion: traceRuleVersion}
+	job := store.TraceJob{Chain: request.Query.Chain, SeedAddress: request.Query.Address, Direction: request.Query.Direction, Depth: request.Query.Depth, Asset: request.Query.Asset, Status: "queued", CreatedAt: m.clock().UTC(), RuleVersion: traceRuleVersion}
 	if err := m.jobs.CreateTraceJob(ctx, &job); err != nil {
 		m.mu.Unlock()
 		return store.TraceJob{}, err
@@ -119,7 +119,7 @@ func (m *Manager) LatestJob(ctx context.Context, query Query) (store.TraceJob, e
 	if err != nil {
 		return store.TraceJob{}, ErrInvalidQuery
 	}
-	return m.jobs.FindLatestTraceJob(ctx, normalized.Chain, address, normalized.Direction, normalized.Depth, normalized.TopN, normalized.Asset, traceRuleVersion)
+	return m.jobs.FindLatestTraceJob(ctx, normalized.Chain, address, normalized.Direction, normalized.Depth, normalized.Asset, traceRuleVersion)
 }
 func (m *Manager) Run(ctx context.Context) error {
 	if err := m.jobs.FailInterruptedTraceJobs(ctx, m.clock().UTC()); err != nil {
@@ -148,7 +148,7 @@ func (m *Manager) process(ctx context.Context, id primitive.ObjectID) {
 	if job.Status == "stopped" {
 		return
 	}
-	key := queryKey(Query{Chain: job.Chain, Address: job.SeedAddress, Direction: job.Direction, Depth: job.Depth, TopN: job.TopN, Asset: job.Asset})
+	key := queryKey(Query{Chain: job.Chain, Address: job.SeedAddress, Direction: job.Direction, Depth: job.Depth, Asset: job.Asset})
 	defer m.release(key)
 	job.Status = "waiting_sync"
 	job.StartedAt = m.clock().UTC()
@@ -156,7 +156,7 @@ func (m *Manager) process(ctx context.Context, id primitive.ObjectID) {
 		m.fail(ctx, &job, errors.New("failed to persist trace job"))
 		return
 	}
-	request := Query{Chain: job.Chain, Address: job.SeedAddress, Direction: job.Direction, Depth: job.Depth, TopN: job.TopN, Asset: job.Asset}
+	request := Query{Chain: job.Chain, Address: job.SeedAddress, Direction: job.Direction, Depth: job.Depth, Asset: job.Asset}
 	partialSync := false
 	if m.syncJobs != nil {
 		syncJob, syncErr := m.syncJobs.Enqueue(ctx, syncer.Request{Chain: job.Chain, Address: job.SeedAddress, NeighborLimit: 0})
@@ -178,6 +178,10 @@ func (m *Manager) process(ctx context.Context, id primitive.ObjectID) {
 			return
 		}
 		partialSync = current.Status == "partial"
+		if current.ErrorCode == "high_frequency" {
+			job.ErrorCode = current.ErrorCode
+			job.Error = current.Error
+		}
 	}
 	job.Status = "running"
 	if !m.save(ctx, &job) {
@@ -197,7 +201,7 @@ func (m *Manager) process(ctx context.Context, id primitive.ObjectID) {
 			if dependencyChain == "" {
 				dependencyChain = job.Chain
 			}
-			syncJob, syncErr := m.syncJobs.Enqueue(ctx, syncer.Request{Chain: dependencyChain, Address: unsynced.Address, NeighborLimit: 0})
+			syncJob, syncErr := m.syncJobs.Enqueue(ctx, syncer.Request{Chain: dependencyChain, Address: unsynced.Address, StartBlock: unsynced.StartBlock, EndBlock: unsynced.EndBlock, NeighborLimit: 0})
 			if syncErr != nil {
 				traceErr = syncErr
 				break
@@ -216,6 +220,10 @@ func (m *Manager) process(ctx context.Context, id primitive.ObjectID) {
 				break
 			}
 			partialSync = partialSync || current.Status == "partial"
+			if current.ErrorCode == "high_frequency" {
+				job.ErrorCode = current.ErrorCode
+				job.Error = current.Error
+			}
 			result, traceErr = m.graph.Trace(jobCtx, request)
 			continue
 		}
@@ -295,5 +303,5 @@ func (m *Manager) waitSync(ctx context.Context, id string) (store.SyncJob, error
 }
 
 func queryKey(q Query) string {
-	return strings.ToLower(q.Chain + ":" + q.Address + ":" + q.Direction + ":" + q.Asset + ":" + fmt.Sprint(q.Depth) + ":" + fmt.Sprint(q.TopN))
+	return strings.ToLower(q.Chain + ":" + q.Address + ":" + q.Direction + ":" + q.Asset + ":" + fmt.Sprint(q.Depth))
 }

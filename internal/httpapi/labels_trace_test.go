@@ -113,7 +113,7 @@ func TestTraceHandlerReturnsLatestMatchingJob(t *testing.T) {
 	id := primitive.NewObjectID()
 	h := NewTraceHandler(traceStub{job: store.TraceJob{ID: id, SeedAddress: "0x0000000000000000000000000000000000000001", Status: "running"}})
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/trace-jobs/latest?chain=ethereum&address=0x0000000000000000000000000000000000000001&direction=both&depth=3&topN=10&asset=all", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/trace-jobs/latest?chain=ethereum&address=0x0000000000000000000000000000000000000001&direction=both&depth=3&asset=all", nil)
 	res := httptest.NewRecorder()
 	if err := h.LatestJob(e.NewContext(req, res)); err != nil {
 		t.Fatal(err)

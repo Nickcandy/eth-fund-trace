@@ -23,10 +23,22 @@ var (
 	ErrAPI               = errors.New("etherscan API error")
 	ErrMalformedResponse = errors.New("malformed etherscan response")
 	ErrPageLimit         = errors.New("etherscan page limit exceeded")
+	ErrRecordLimit       = errors.New("etherscan record limit reached")
 	ErrTransient         = errors.New("transient etherscan error")
 	ErrNotFound          = errors.New("etherscan object not found")
 	ErrPending           = errors.New("etherscan receipt pending")
 )
+
+type recordLimitKey struct{}
+
+func WithRecordLimit(ctx context.Context, limit int64) context.Context {
+	return context.WithValue(ctx, recordLimitKey{}, limit)
+}
+
+func RecordLimit(ctx context.Context) int64 {
+	limit, _ := ctx.Value(recordLimitKey{}).(int64)
+	return limit
+}
 
 const maxResultWindow = 10_000
 
@@ -290,6 +302,9 @@ func (c *APIClient) list(ctx context.Context, address string, startBlock, endBlo
 			pageTransfers[i].TransactionGroup = fmt.Sprintf("%d:%s", c.config.ChainID, strings.ToLower(pageTransfers[i].TxHash))
 		}
 		transfers = append(transfers, pageTransfers...)
+		if limit := RecordLimit(ctx); limit > 0 && int64(len(transfers)) >= limit {
+			return transfers[:limit], ErrRecordLimit
+		}
 		if len(items) > 0 {
 			var boundary struct {
 				BlockNumber string `json:"blockNumber"`

@@ -236,6 +236,25 @@ func newMemoryRepository() *memoryRepository {
 	return &memoryRepository{addresses: make(map[string]store.Address), jobs: make(map[primitive.ObjectID]store.SyncJob)}
 }
 
+func TestFetchRangeHonorsRecordLimit(t *testing.T) {
+	repository := newMemoryRepository()
+	manager := &Manager{repository: repository}
+	call := func(context.Context, string, int64, int64) ([]store.Transfer, error) {
+		transfers := make([]store.Transfer, 10)
+		for i := range transfers {
+			transfers[i] = store.Transfer{TxHash: fmt.Sprintf("0x%d", i), From: "0x0000000000000000000000000000000000000001", To: "0x0000000000000000000000000000000000000002", AssetType: "eth", Asset: "ETH", Amount: "1"}
+		}
+		return transfers, nil
+	}
+	written, err := manager.fetchRange(etherscan.WithRecordLimit(context.Background(), 3), call, "txlist", "ethereum", 1, "0x0000000000000000000000000000000000000001", 0, 10, map[string]struct{}{}, func(func(*store.SyncProgress)) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if written != 3 || len(repository.transfers) != 3 {
+		t.Fatalf("written=%d transfers=%d, want hard limit 3", written, len(repository.transfers))
+	}
+}
+
 func (r *memoryRepository) FindAddress(_ context.Context, _, address string) (store.Address, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -252,23 +271,30 @@ func (r *memoryRepository) SetAddressSyncing(_ context.Context, chain string, ch
 	return nil
 }
 
-func (r *memoryRepository) CompleteAddressSync(_ context.Context, _, address string, earliest, latest, internalFrom, internalTo int64, syncedAt time.Time) error {
+func (r *memoryRepository) CompleteAddressSync(_ context.Context, _, address string, coverage store.AddressSyncCoverage, syncedAt time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	value := r.addresses[address]
+	earliest := max(coverage.NormalFrom, max(coverage.InternalFrom, coverage.TokenFrom))
+	latest := min(coverage.NormalTo, min(coverage.InternalTo, coverage.TokenTo))
+	if latest < earliest {
+		return fmt.Errorf("invalid address sync coverage")
+	}
 	value.EarliestSyncedBlock, value.LatestSyncedBlock, value.HistorySyncedToBlock = earliest, latest, latest
-	value.InternalSyncedFrom, value.InternalSyncedTo = internalFrom, internalTo
+	value.NormalSyncedFrom, value.NormalSyncedTo = coverage.NormalFrom, coverage.NormalTo
+	value.InternalSyncedFrom, value.InternalSyncedTo = coverage.InternalFrom, coverage.InternalTo
+	value.TokenSyncedFrom, value.TokenSyncedTo = coverage.TokenFrom, coverage.TokenTo
 	value.LastSyncedAt, value.SyncStatus = syncedAt, "synced"
 	r.addresses[address] = value
 	return nil
 }
 
-func (r *memoryRepository) CompleteAddressPartial(_ context.Context, _, address string, latest, maxRecordsPerAction int64, syncedAt time.Time) error {
+func (r *memoryRepository) CompleteAddressPartial(_ context.Context, _, address string, latest, maxRecordsPerAction int64, reason string, syncedAt time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	value := r.addresses[address]
 	value.LatestSyncedBlock, value.HistorySyncedToBlock = latest, latest
-	value.LastSyncedAt, value.SyncStatus, value.SyncError = syncedAt, "partial", "record_limit"
+	value.LastSyncedAt, value.SyncStatus, value.SyncError = syncedAt, "partial", reason
 	value.SyncMaxRecordsPerAction = maxRecordsPerAction
 	r.addresses[address] = value
 	return nil
@@ -518,6 +544,31 @@ func TestManagerUsesChainDefaultStartBlock(t *testing.T) {
 	}
 }
 
+func TestManagerRespectsExplicitEndBlock(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	source := &recordingSource{fakeSource: fakeSource{latest: 1_000}}
+	repository := newMemoryRepository()
+	manager := New(source, repository, Config{QueueSize: 10})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = manager.Run(ctx) }()
+
+	job, err := manager.Enqueue(context.Background(), Request{Chain: "ethereum", Address: seed, StartBlock: 100, EndBlock: 200})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job = waitForJob(t, manager, job.ID.Hex())
+	if job.Status != "succeeded" || job.EndBlock != 200 {
+		t.Fatalf("job=%+v", job)
+	}
+	want := [][2]int64{{100, 200}}
+	for _, action := range []string{"txlist", "txlistinternal", "tokentx"} {
+		if got := source.actionRanges[action]; fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Fatalf("%s ranges=%v, want %v", action, got, want)
+		}
+	}
+}
+
 func TestManagerLimitsOnlyInternalTransactionLookback(t *testing.T) {
 	seed := "0x0000000000000000000000000000000000000001"
 	source := &recordingSource{fakeSource: fakeSource{latest: 1_000_000}}
@@ -599,6 +650,56 @@ func TestManagerBackfillsInternalHistoryWhenLookbackExpands(t *testing.T) {
 	}
 	if len(source.actionRanges["txlist"]) != 0 || len(source.actionRanges["tokentx"]) != 0 {
 		t.Fatalf("full-range actions should remain cached: %v", source.actionRanges)
+	}
+}
+
+func TestManagerBackfillsEachActionFromItsOwnCoverage(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	source := &recordingSource{fakeSource: fakeSource{latest: 1_000_000}}
+	repository := newMemoryRepository()
+	repository.addresses[seed] = store.Address{
+		Chain: "ethereum", Address: seed, SyncStatus: "synced",
+		EarliestSyncedBlock: 1, LatestSyncedBlock: 1_000_000,
+		NormalSyncedFrom: 100_001, NormalSyncedTo: 1_000_000,
+		InternalSyncedFrom: 200_001, InternalSyncedTo: 1_000_000,
+		TokenSyncedFrom: 300_001, TokenSyncedTo: 1_000_000,
+		LastSyncedAt: time.Now(),
+	}
+	manager := New(source, repository, Config{QueueSize: 10})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = manager.Run(ctx) }()
+
+	job, err := manager.Enqueue(context.Background(), Request{Chain: "ethereum", Address: seed, StartBlock: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job = waitForJob(t, manager, job.ID.Hex())
+	if job.Status != "succeeded" {
+		t.Fatalf("job=%+v", job)
+	}
+	want := map[string][][2]int64{
+		"txlist":         {{1, 100_000}},
+		"txlistinternal": {{1, 200_000}},
+		"tokentx":        {{1, 300_000}},
+	}
+	for action, ranges := range want {
+		if got := source.actionRanges[action]; fmt.Sprint(got) != fmt.Sprint(ranges) {
+			t.Fatalf("%s ranges=%v, want %v", action, got, ranges)
+		}
+	}
+}
+
+func TestCoverageDoesNotMergeAcrossUnknownBlocks(t *testing.T) {
+	from, to := mergeCoverage(200, 300, 1, 100)
+	if from != 200 || to != 300 {
+		t.Fatalf("coverage=%d-%d, want 200-300", from, to)
+	}
+}
+
+func TestCoverageAcceptsRangeStartingAtGenesis(t *testing.T) {
+	if intervals := coverageIntervals(0, 100, 0, 50); fmt.Sprint(intervals) != fmt.Sprint([][2]int64{{51, 100}}) {
+		t.Fatalf("intervals=%v, want [[51 100]]", intervals)
 	}
 }
 

@@ -18,12 +18,76 @@ type Address struct {
 	EarliestSyncedBlock     int64     `bson:"earliestSyncedBlock" json:"earliestSyncedBlock"`
 	HistorySyncedToBlock    int64     `bson:"historySyncedToBlock" json:"historySyncedToBlock"`
 	LatestSyncedBlock       int64     `bson:"latestSyncedBlock" json:"latestSyncedBlock"`
+	NormalSyncedFrom        int64     `bson:"normalSyncedFrom,omitempty" json:"normalSyncedFrom,omitempty"`
+	NormalSyncedTo          int64     `bson:"normalSyncedTo,omitempty" json:"normalSyncedTo,omitempty"`
 	InternalSyncedFrom      int64     `bson:"internalSyncedFrom,omitempty" json:"internalSyncedFrom,omitempty"`
 	InternalSyncedTo        int64     `bson:"internalSyncedTo,omitempty" json:"internalSyncedTo,omitempty"`
+	TokenSyncedFrom         int64     `bson:"tokenSyncedFrom,omitempty" json:"tokenSyncedFrom,omitempty"`
+	TokenSyncedTo           int64     `bson:"tokenSyncedTo,omitempty" json:"tokenSyncedTo,omitempty"`
 	LastSyncedAt            time.Time `bson:"lastSyncedAt,omitempty" json:"lastSyncedAt,omitempty"`
 	SyncStatus              string    `bson:"syncStatus" json:"syncStatus"`
 	SyncError               string    `bson:"syncError,omitempty" json:"syncError,omitempty"`
 	SyncMaxRecordsPerAction int64     `bson:"syncMaxRecordsPerAction,omitempty" json:"syncMaxRecordsPerAction,omitempty"`
+}
+
+type AddressSyncCoverage struct {
+	NormalFrom, NormalTo     int64
+	InternalFrom, InternalTo int64
+	TokenFrom, TokenTo       int64
+}
+
+type StopReason string
+
+const (
+	StopTerminal            StopReason = "terminal"
+	StopCrossChainBridge    StopReason = "cross_chain_bridge"
+	StopUnsupportedContract StopReason = "unsupported_contract"
+	StopHighFrequency       StopReason = "high_frequency"
+	StopSmallAmount         StopReason = "small_amount"
+	StopAmbiguousConversion StopReason = "ambiguous_conversion"
+	StopMissingData         StopReason = "missing_data"
+	StopCycle               StopReason = "cycle"
+)
+
+type MoneyState struct {
+	Chain           string     `bson:"chain" json:"chain"`
+	Address         string     `bson:"address" json:"address"`
+	Direction       string     `bson:"direction" json:"direction"`
+	AssetType       string     `bson:"assetType" json:"assetType"`
+	Asset           string     `bson:"asset" json:"asset"`
+	Amount          string     `bson:"amount" json:"amount"`
+	RemainingAmount string     `bson:"remainingAmount" json:"remainingAmount"`
+	EntryTxHash     string     `bson:"entryTxHash,omitempty" json:"entryTxHash,omitempty"`
+	EntryBlock      int64      `bson:"entryBlock,omitempty" json:"entryBlock,omitempty"`
+	Path            []string   `bson:"path" json:"path"`
+	Evidence        string     `bson:"evidence" json:"evidence"`
+	Inferred        bool       `bson:"inferred" json:"inferred"`
+	StopReason      StopReason `bson:"stopReason,omitempty" json:"stopReason,omitempty"`
+}
+
+type MoneyTransfer struct {
+	Chain       string     `bson:"chain" json:"chain"`
+	From        string     `bson:"from" json:"from"`
+	To          string     `bson:"to" json:"to"`
+	Asset       string     `bson:"asset" json:"asset"`
+	Amount      string     `bson:"amount" json:"amount"`
+	TxHash      string     `bson:"txHash" json:"txHash"`
+	Kind        string     `bson:"kind" json:"kind"`
+	Evidence    string     `bson:"evidence" json:"evidence"`
+	BlockNumber int64      `bson:"blockNumber" json:"blockNumber"`
+	Inferred    bool       `bson:"inferred" json:"inferred"`
+	StopReason  StopReason `bson:"stopReason,omitempty" json:"stopReason,omitempty"`
+}
+
+type AssetLedger struct {
+	Address           string `bson:"address" json:"address"`
+	Asset             string `bson:"asset" json:"asset"`
+	OpeningAmount     string `bson:"openingAmount" json:"openingAmount"`
+	IncomingAmount    string `bson:"incomingAmount" json:"incomingAmount"`
+	OutgoingAmount    string `bson:"outgoingAmount" json:"outgoingAmount"`
+	ExplainedAmount   string `bson:"explainedAmount" json:"explainedAmount"`
+	UnexplainedAmount string `bson:"unexplainedAmount" json:"unexplainedAmount"`
+	Status            string `bson:"status" json:"status"`
 }
 
 // AddressIdentity describes a chain-confirmed account type and optional protocol roles.
@@ -134,7 +198,6 @@ type TraceJob struct {
 	SeedAddress      string             `bson:"seedAddress" json:"seedAddress"`
 	Direction        string             `bson:"direction" json:"direction"`
 	Depth            int                `bson:"depth" json:"depth"`
-	TopN             int                `bson:"topN" json:"topN"`
 	Asset            string             `bson:"asset" json:"asset"`
 	Status           string             `bson:"status" json:"status"`
 	CreatedAt        time.Time          `bson:"createdAt" json:"createdAt"`
@@ -158,6 +221,7 @@ type SyncJob struct {
 	ChainID                int64              `bson:"chainId" json:"chainId"`
 	Address                string             `bson:"address" json:"address"`
 	StartBlock             int64              `bson:"startBlock" json:"startBlock"`
+	EndBlock               int64              `bson:"endBlock,omitempty" json:"endBlock,omitempty"`
 	NeighborLimit          int                `bson:"neighborLimit" json:"neighborLimit"`
 	InternalLookbackBlocks int64              `bson:"internalLookbackBlocks" json:"internalLookbackBlocks"`
 	MaxRecordsPerAction    int64              `bson:"maxRecordsPerAction,omitempty" json:"maxRecordsPerAction,omitempty"`
@@ -268,6 +332,8 @@ type CounterpartyQuery struct {
 	Direction    string
 	AssetMode    string
 	Asset        string
+	FromBlock    int64
+	ToBlock      int64
 	TopN         int
 }
 

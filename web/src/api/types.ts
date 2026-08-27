@@ -41,7 +41,10 @@ export interface ConversionEvidence {
 	initiator?: string; router?: string; executor?: string; liquidityProvider?: string; recipient?: string;
 	tokenIn?: string; amountIn?: string; tokenOut?: string; amountOut?: string; evidence: string[];
 }
-export interface TraceNode { chain: Chain; address: string; depth: number; terminal: boolean; addressType?: "unknown" | "eoa" | "contract"; protocol?: string; roles?: string[] }
+export interface TraceNode { chain: Chain; address: string; depth: number; terminal: boolean; stopReason?: string; addressType?: "unknown" | "eoa" | "contract"; protocol?: "unknown" | string; roles?: string[] }
+export interface MoneyState { chain: Chain; address: string; direction: Direction; assetType: string; asset: string; amount: string; remainingAmount: string; entryTxHash?: string; entryBlock?: number; path: string[]; evidence?: string; inferred?: boolean; stopReason?: string }
+export interface MoneyTransfer { chain: Chain; from: string; to: string; asset: string; amount: string; txHash: string; kind: string; blockNumber: number; evidence?: string; inferred?: boolean; stopReason?: string }
+export interface AssetLedger { address: string; asset: string; openingAmount: string; incomingAmount: string; outgoingAmount: string; explainedAmount: string; unexplainedAmount: string; status: string }
 export interface NodeRef { chain: Chain; address: string }
 
 export interface CrossChainLink {
@@ -112,6 +115,7 @@ export interface TraceResult {
   labels?: InferredLabel[];
   risk: RiskResult;
   ruleVersion: string;
+  moneyStates?: MoneyState[]; moneyTransfers?: MoneyTransfer[]; ledgers?: AssetLedger[]; reconciliation?: string;
 }
 
 export interface TraceJob {
@@ -119,9 +123,8 @@ export interface TraceJob {
   chain: Chain;
   seedAddress: string;
   direction: Direction;
-  depth: number;
-  topN: number;
-  asset: string;
+	depth: number;
+	asset: string;
   status: JobStatus;
   createdAt: string;
   startedAt?: string;
@@ -217,7 +220,7 @@ export interface EdgePage { items: Transfer[]; nextCursor?: string; dataThroughB
 export interface BridgePage { items: CrossChainLink[] }
 
 export interface TraceQuery {
-  chain: Chain; address: string; direction: Direction; depth: number; topN: number; asset: string;
+	chain: Chain; address: string; direction: Direction; depth: number; asset: string;
 }
 
 export interface ReceiptTransfer {

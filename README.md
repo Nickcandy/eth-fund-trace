@@ -17,7 +17,7 @@ Etherscan V2 / Ethereum RPC / Base RPC
                     |
           +---------+----------+
           |                    |
-	  tracer trace-v6   propagation-v3
+	  tracer trace-v1   propagation-v3
           |                    |
           +---------+----------+
                     v
@@ -28,7 +28,7 @@ Etherscan V2 / Ethereum RPC / Base RPC
 
 - `syncer`：分页采集三类地址历史，保存检查点和同步进度；
 - `store`：MongoDB Adapter、事实幂等写入、索引和有界聚合查询；
-- `tracer`：`trace-v6` 异步分层追踪，先识别合约身份，再按资产和方向选择累计金额 TopN 对手方；
+- `tracer`：`trace-v1` 资金状态追踪，按具体交易、资产、金额预算和时间方向解释资金来源与去向；
 - `transactionanalysis`：基于交易、Receipt、单交易 Internal Transaction 和合约校验解释 Uniswap V3、KyberSwap RFQ 与 WETH 证据；
 - `bridge`：识别 Ethereum/Base 官方 OP Stack Bridge 并维护生命周期；
 - `profile`：生成 `hot-wallet-v1` 地址画像快照；
@@ -37,13 +37,15 @@ Etherscan V2 / Ethereum RPC / Base RPC
 
 详细职责、数据集合和运行链路见 [后端项目架构](docs/01-后端项目架构.md)。
 
+主资金追踪设计见 [资金链路追踪设计](docs/10-资金链路追踪设计.md)。中心地址全量账本、链路地址时间窗口、合约单笔交易解析和高频终止分别定义。
+
 ## 已实现能力
 
 - Ethereum/Base 地址历史同步、共享限流、重试、区间拆分、分页续跑和批量幂等写入；
 - 普通 ETH、内部 ETH、ERC-20 的统一事实模型和稳定游标分页；
-- `trace-v6` 持久化 TraceJob，上下游分别展开，TopN 按同资产的对手方累计金额排序；
+- `trace-v1` 持久化 TraceJob，上下游按具体资金事实、时间边界和剩余金额展开；
 - 根节点展示 ETH 及官方白名单 Token：Ethereum 的 DAI、USDC、USDT、WETH，Base 的 USDC、WETH；
-- 合约关系最多分析金额最大的 20 笔交易，只依据完整且无歧义的 Swap/Wrap 证据切换资产；
+- 合约只分析资金进入交易，只依据完整且无歧义的 Swap/Wrap 证据切换资产；
 - 人工/公开确定性标签、`hot-wallet-v1` 行为画像和风险解释；
 - `propagation-v3` 持久化任务：目标中心双向最多 3 跳、多源饱和聚合和结构化路径证据；分数是调查优先级，不是违法概率。
 - Ethereum/Base 官方 OP Stack Bridge 的有限解析、双链证据关联和状态同步；
@@ -71,6 +73,7 @@ Etherscan V2 / Ethereum RPC / Base RPC
 | [Demo 边界与生产化](docs/03-Demo边界与生产化.md) | 已完成、未完成、主动删减及生产级建设方案 |
 | [Demo 运行手册](docs/04-Demo运行手册.md) | 启动、状态解释、排障和测试 |
 | [架构决策记录](docs/05-架构决策记录.md) | 当前关键技术取舍 |
+| [资金链路追踪设计](docs/10-资金链路追踪设计.md) | 时间顺序、地址覆盖、合约解析、资金归因和终止规则 |
 | [OpenAPI](docs/openapi.yaml) | HTTP 接口契约 |
 
 专项资料包括 [外部数据源与链上语义研究](docs/07-外部数据源与链上语义研究.md)、[DEX 交易解析](docs/08-DEX交易解析设计.md) 和 [官方桥识别与状态同步](docs/09-官方桥识别与状态同步.md)。

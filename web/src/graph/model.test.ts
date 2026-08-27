@@ -18,7 +18,7 @@ function result(): TraceResult {
       { chain: "ethereum", from: seed, to: downstream, assetType: "erc20", asset: "0x0000000000000000000000000000000000000010", symbol: "USDC", decimals: 6, tokenMetadataComplete: true, totalAmount: "500", transferCount: 2, kind: "transfer", depth: 1, path: [seed, downstream] },
     ],
     bridgeEdges: [], crossChainPaths: [], paths: [], dataThroughBlock: 3, dataThroughBlocks: { ethereum: 3 }, dataStatus: "synced",
-	labels: [], risk: { score: 0, level: "no_conclusion", evidence: [], inferredLabels: [], ruleVersion: "risk-v1", propagationVersion: "propagation-v1" }, ruleVersion: "trace-v6",
+	labels: [], risk: { score: 0, level: "no_conclusion", evidence: [], inferredLabels: [], ruleVersion: "risk-v1", propagationVersion: "propagation-v1" }, ruleVersion: "trace-v1",
   };
 }
 

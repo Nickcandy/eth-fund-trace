@@ -26,11 +26,7 @@ func (h *TraceHandler) Enqueue(c echo.Context) error {
 	if err != nil {
 		return writeError(c, 400, "invalid_request", "invalid depth", false)
 	}
-	topN, err := queryInt(c, "topN")
-	if err != nil {
-		return writeError(c, 400, "invalid_request", "invalid topN", false)
-	}
-	query := tracer.Query{Chain: c.QueryParam("chain"), Address: c.QueryParam("address"), Direction: c.QueryParam("direction"), Depth: depth, TopN: topN, Asset: c.QueryParam("asset")}
+	query := tracer.Query{Chain: c.QueryParam("chain"), Address: c.QueryParam("address"), Direction: c.QueryParam("direction"), Depth: depth, Asset: c.QueryParam("asset")}
 	if err := tracer.ValidateQuery(query); err != nil {
 		return writeError(c, http.StatusBadRequest, "invalid_request", err.Error(), false)
 	}
@@ -80,11 +76,7 @@ func traceQuery(c echo.Context) (tracer.Query, error) {
 	if err != nil {
 		return tracer.Query{}, errors.New("invalid depth")
 	}
-	topN, err := queryInt(c, "topN")
-	if err != nil {
-		return tracer.Query{}, errors.New("invalid topN")
-	}
-	query := tracer.Query{Chain: c.QueryParam("chain"), Address: c.QueryParam("address"), Direction: c.QueryParam("direction"), Depth: depth, TopN: topN, Asset: c.QueryParam("asset")}
+	query := tracer.Query{Chain: c.QueryParam("chain"), Address: c.QueryParam("address"), Direction: c.QueryParam("direction"), Depth: depth, Asset: c.QueryParam("asset")}
 	if err := tracer.ValidateQuery(query); err != nil {
 		return tracer.Query{}, err
 	}

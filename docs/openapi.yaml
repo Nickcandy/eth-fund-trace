@@ -241,17 +241,16 @@ components:
         dataStatus: {type: string}
         labels: {type: array, items: {$ref: '#/components/schemas/InferredLabel'}}
         risk: {$ref: '#/components/schemas/Risk'}
-        ruleVersion: {type: string, example: trace-v6}
+        ruleVersion: {type: string, example: trace-v1}
     TraceJob:
       type: object
-      required: [id, chain, seedAddress, direction, depth, topN, asset, status, currentDepth, visitedNodes, edgeCount]
+      required: [id, chain, seedAddress, direction, depth, asset, status, currentDepth, visitedNodes, edgeCount]
       properties:
         id: {type: string}
         chain: {type: string, enum: [ethereum, base]}
         seedAddress: {type: string}
         direction: {type: string, enum: [in, out, both]}
         depth: {type: integer}
-        topN: {type: integer}
         asset: {type: string}
         status: {type: string, enum: [queued, waiting_sync, running, succeeded, partial, failed]}
         createdAt: {type: string, format: date-time}
@@ -453,7 +452,6 @@ paths:
         - { name: address, in: query, required: true, schema: { type: string } }
         - { name: direction, in: query, required: true, schema: { type: string, enum: [in, out, both] } }
         - { name: depth, in: query, required: true, schema: { type: integer } }
-        - { name: topN, in: query, required: true, schema: { type: integer } }
         - { name: asset, in: query, required: true, schema: { type: string } }
       responses:
         '200': { description: Latest matching trace job }
@@ -532,7 +530,6 @@ paths:
         - {name: address, in: query, required: true, schema: {type: string}}
         - {name: direction, in: query, schema: {type: string, enum: [in, out, both], default: both}}
         - {name: depth, in: query, schema: {type: integer, minimum: 1, maximum: 5, default: 3}}
-        - {name: topN, in: query, schema: {type: integer, minimum: 1, maximum: 20, default: 10}}
         - {name: asset, in: query, schema: {type: string, default: ETH, description: Trace roots include native ETH and chain-specific official ERC-20 allowlist assets}}
       responses:
         '202':
@@ -586,7 +583,6 @@ paths:
         - {$ref: '#/components/parameters/Chain'}
         - {name: address, in: query, required: true, schema: {type: string}}
         - {name: depth, in: query, schema: {type: integer, minimum: 1, maximum: 5}}
-        - {name: topN, in: query, schema: {type: integer, minimum: 1, maximum: 20}}
       responses:
         '202': {description: Asynchronous risk trace accepted, content: {application/json: {schema: {$ref: '#/components/schemas/AsyncJob'}}}}
         '400': {$ref: '#/components/responses/BadRequest'}

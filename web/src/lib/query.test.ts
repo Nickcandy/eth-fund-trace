@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readTraceJobID, readTraceQuery, validateTraceQuery, writeTraceQuery } from "./query";
 
-const valid = { chain: "ethereum" as const, address: "0x0000000000000000000000000000000000000001", direction: "both" as const, depth: 3, topN: 10, asset: "ETH" };
+const valid = { chain: "ethereum" as const, address: "0x0000000000000000000000000000000000000001", direction: "both" as const, depth: 3, asset: "ETH" };
 
 describe("trace query", () => {
   it("rejects invalid addresses and non-ETH roots", () => {
