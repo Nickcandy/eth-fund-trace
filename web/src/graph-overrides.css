@@ -1,0 +1,5 @@
+.graph-canvas .react-flow,
+.graph-canvas .react-flow__renderer,
+.graph-canvas .react-flow__viewport {
+  overflow: visible;
+}

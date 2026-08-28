@@ -2,6 +2,7 @@ import {
   Background, BackgroundVariant, BaseEdge, Controls, EdgeLabelRenderer, MarkerType, Panel, ReactFlow, ReactFlowProvider,
   getSmoothStepPath, useReactFlow, useUpdateNodeInternals, type Edge, type EdgeProps,
 } from "@xyflow/react";
+import "../graph-overrides.css";
 import { CircleDollarSign, Download, Eye, EyeOff, FileJson, GitBranch, Maximize2, RotateCcw } from "lucide-react";
 import { toPng } from "html-to-image";
 import { useEffect, useMemo, useRef, useState } from "react";
