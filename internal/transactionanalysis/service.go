@@ -17,7 +17,7 @@ import (
 
 const (
 	// AnalysisVersion invalidates cached analyses when semantic rules change.
-	AnalysisVersion   = "transaction-analysis-v3"
+	AnalysisVersion   = "transaction-analysis-v4"
 	EthereumV3Factory = "0x1f98431c8ad98523631ae4a59f267346ea31f984"
 	EthereumWETH      = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
 	// KyberSwapRouter is the Ethereum MetaAggregation Router supported by the RFQ adapter.
@@ -208,12 +208,20 @@ func (s *Service) Analyze(ctx context.Context, chain, txHash string) (store.Tran
 	} else {
 		s.parseLogs(ctx, receipt.Logs, &analysis)
 	}
-	parseTHORChainCall(&analysis)
-	if analysis.To == THORChainRouter {
-		// THORChain actions are decoded from the Router calldata; Uniswap route inference does not apply.
-	} else if analysis.To == KyberSwapRouter {
+	switch {
+	case analysis.Succeeded && analysis.To == THORChainRouter:
+		if !parseTHORChainCall(&analysis) {
+			analysis.Quality.Status = "partial"
+			analysis.Quality.Issues = append(analysis.Quality.Issues, "unsupported or malformed THORChain calldata")
+		} else if analysis.ProtocolAction == "vault_migration" && !verifiedTHORChainMigration(analysis) {
+			analysis.Quality.Status = "partial"
+			analysis.Quality.Issues = append(analysis.Quality.Issues, "THORChain vault migration transfer evidence mismatch")
+		} else if analysis.ProtocolAction == "vault_migration" {
+			analysis.Quality.Evidence = append(analysis.Quality.Evidence, "verified THORChain vault migration transfer")
+		}
+	case analysis.To == KyberSwapRouter:
 		s.finalizeKyberRFQ(&analysis, internalErr)
-	} else {
+	default:
 		s.finalizeRoute(&analysis)
 		s.appendUniswapConversion(&analysis)
 	}
@@ -223,31 +231,46 @@ func (s *Service) Analyze(ctx context.Context, chain, txHash string) (store.Tran
 	return analysis, nil
 }
 
-func parseTHORChainCall(analysis *store.TransactionAnalysis) {
-	if analysis.To != THORChainRouter || len(analysis.Input) < 10 || !strings.EqualFold(analysis.Input[2:10], "574da717") {
-		return
+func parseTHORChainCall(analysis *store.TransactionAnalysis) bool {
+	if !analysis.Succeeded || analysis.To != THORChainRouter || len(analysis.Input) < 10 || !strings.EqualFold(analysis.Input[2:10], "574da717") {
+		return false
 	}
 	raw, err := hex.DecodeString(strings.TrimPrefix(analysis.Input[10:], "0x"))
 	if err != nil || len(raw) < 128 {
-		return
+		return false
 	}
 	word := func(offset int) []byte { return raw[offset : offset+32] }
 	destination := "0x" + hex.EncodeToString(word(0)[12:])
-	offset := new(big.Int).SetBytes(word(96)).Int64()
-	if offset < 0 || offset+32 > int64(len(raw)) {
-		return
+	asset := "0x" + hex.EncodeToString(word(32)[12:])
+	amount := new(big.Int).SetBytes(word(64)).String()
+	offsetValue := new(big.Int).SetBytes(word(96))
+	if !offsetValue.IsInt64() {
+		return false
 	}
-	length := new(big.Int).SetBytes(raw[offset : offset+32]).Int64()
+	offset := offsetValue.Int64()
+	if offset < 0 || offset > int64(len(raw))-32 {
+		return false
+	}
+	lengthValue := new(big.Int).SetBytes(raw[offset : offset+32])
+	if !lengthValue.IsInt64() {
+		return false
+	}
+	length := lengthValue.Int64()
 	start := offset + 32
-	if length < 0 || start+length > int64(len(raw)) {
-		return
+	if length < 0 || length > int64(len(raw))-start {
+		return false
 	}
 	memoBytes, err := hex.DecodeString(hex.EncodeToString(raw[start : start+length]))
 	if err != nil {
-		return
+		return false
 	}
 	analysis.ProtocolMemo = string(memoBytes)
 	analysis.ProtocolDestination = destination
+	analysis.ProtocolAsset = asset
+	if asset == zeroAddress {
+		analysis.ProtocolAsset = "ETH"
+	}
+	analysis.ProtocolAmount = amount
 	parts := strings.SplitN(analysis.ProtocolMemo, ":", 2)
 	action := strings.ToUpper(parts[0])
 	switch action {
@@ -262,6 +285,22 @@ func parseTHORChainCall(analysis *store.TransactionAnalysis) {
 	default:
 		analysis.ProtocolAction = "protocol_internal"
 	}
+	return true
+}
+
+func verifiedTHORChainMigration(analysis store.TransactionAnalysis) bool {
+	if !analysis.Succeeded || analysis.To != THORChainRouter || analysis.ProtocolAction != "vault_migration" || analysis.ProtocolDestination == "" || analysis.ProtocolAmount == "" {
+		return false
+	}
+	if analysis.ProtocolAsset == "ETH" {
+		return hasInternalCall(analysis.InternalCalls, THORChainRouter, analysis.ProtocolDestination, analysis.ProtocolAmount)
+	}
+	for _, transfer := range analysis.Transfers {
+		if transfer.Token == analysis.ProtocolAsset && transfer.From == THORChainRouter && transfer.To == analysis.ProtocolDestination && transfer.Amount == analysis.ProtocolAmount {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) finalizeKyberRFQ(analysis *store.TransactionAnalysis, internalErr error) {

@@ -95,12 +95,16 @@ func (m *Manager) Enqueue(ctx context.Context, request Request) (store.Propagati
 	if !found || metadata.SyncStatus != "synced" {
 		return store.PropagationJob{}, errors.New("propagation target is not synchronized")
 	}
+	_, dataThroughBlock, covered := metadata.CommonCoverage()
+	if !covered {
+		return store.PropagationJob{}, errors.New("propagation target has no complete action coverage")
+	}
 	riskLabels, err := m.repository.ListRiskLabels(ctx, request.Chain, 100000)
 	if err != nil {
 		return store.PropagationJob{}, fmt.Errorf("list propagation risk labels: %w", err)
 	}
-	key := idempotencyKey(request, riskLabels, metadata.LatestSyncedBlock)
-	job := store.PropagationJob{IdempotencyKey: key, Chain: request.Chain, TargetAddress: address, Asset: normalizeAsset(request.Asset), Direction: request.Direction, Status: "queued", MaxHops: 3, MaxNodes: m.config.MaxNodes, MaxEdges: m.config.MaxEdges, MaxAssetChannels: m.config.MaxAssetChannels, PerNodeCandidateCap: m.config.PerNodeCandidateCap, MaxPathsPerTarget: m.config.MaxPathsPerTarget, DataThroughBlock: metadata.LatestSyncedBlock, RuleVersion: RiskRuleVersion, PropagationVersion: Version, CreatedAt: m.clock().UTC()}
+	key := idempotencyKey(request, riskLabels, dataThroughBlock)
+	job := store.PropagationJob{IdempotencyKey: key, Chain: request.Chain, TargetAddress: address, Asset: normalizeAsset(request.Asset), Direction: request.Direction, Status: "queued", MaxHops: 3, MaxNodes: m.config.MaxNodes, MaxEdges: m.config.MaxEdges, MaxAssetChannels: m.config.MaxAssetChannels, PerNodeCandidateCap: m.config.PerNodeCandidateCap, MaxPathsPerTarget: m.config.MaxPathsPerTarget, DataThroughBlock: dataThroughBlock, RuleVersion: RiskRuleVersion, PropagationVersion: Version, CreatedAt: m.clock().UTC()}
 	if err := m.repository.CreatePropagationJob(ctx, &job); err != nil {
 		if mongo.IsDuplicateKeyError(err) {
 			return m.repository.FindPropagationJobByKey(ctx, key)

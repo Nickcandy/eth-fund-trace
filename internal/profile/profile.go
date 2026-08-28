@@ -45,7 +45,11 @@ func (p *Profiler) Get(ctx context.Context, chain, address string) (store.Addres
 	if !found || (metadata.SyncStatus != "synced" && metadata.LastSyncedAt.IsZero()) {
 		return store.AddressProfile{}, ErrAddressNotSynced
 	}
-	if existing, found, err := p.repository.FindAddressProfile(ctx, chain, address, RuleVersion, metadata.LatestSyncedBlock); err != nil {
+	_, dataThroughBlock, covered := metadata.CommonCoverage()
+	if !covered {
+		return store.AddressProfile{}, ErrAddressNotSynced
+	}
+	if existing, found, err := p.repository.FindAddressProfile(ctx, chain, address, RuleVersion, dataThroughBlock); err != nil {
 		return store.AddressProfile{}, err
 	} else if found {
 		return existing, nil
@@ -54,7 +58,7 @@ func (p *Profiler) Get(ctx context.Context, chain, address string) (store.Addres
 	if err != nil {
 		return store.AddressProfile{}, err
 	}
-	result := evaluate(chain, address, metadata.LatestSyncedBlock, activity, p.clock().UTC())
+	result := evaluate(chain, address, dataThroughBlock, activity, p.clock().UTC())
 	if err := p.repository.SaveAddressProfile(ctx, result); err != nil {
 		return store.AddressProfile{}, err
 	}

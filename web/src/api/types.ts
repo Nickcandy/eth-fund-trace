@@ -32,9 +32,11 @@ export interface Transfer {
 export interface TraceEdge {
   chain: Chain; from: string; to: string; assetType: string; asset: string; symbol?: string; decimals?: number;
   tokenMetadataComplete?: boolean; totalAmount: string; transferCount: number; kind: string; depth: number; path: string[];
+	txHash?: string;
   firstBlock?: number; firstTime?: string; latestBlock?: number; latestTime?: string;
   conversionStatus?: "complete" | "partial"; conversionScanned?: number;
 	conversionEvidence?: ConversionEvidence[];
+	protocol?: string; protocolAction?: string; protocolMemo?: string;
 }
 export interface ConversionEvidence {
 	txHash: string; protocol: string; version: string; status: "complete" | "partial";
@@ -139,9 +141,13 @@ export interface TraceJob {
   errorCode?: string;
   error?: string;
   retryable: boolean;
+	rootTraceJobId?: string;
+	extensionAddress?: string;
+	extensionDirection?: "in" | "out";
 }
 
 export interface TraceAccepted { traceJobId: string; status: JobStatus }
+export interface TraceExtensionRequest { address: string; direction: "in" | "out"; depth: 1 }
 
 export interface PropagationCoverage {
   chain: Chain; address: string; direction: "in" | "out"; asset: string;
@@ -193,7 +199,8 @@ export interface SyncJob {
 export interface AddressMetadata {
   chain: Chain; chainId: number; address: string; isContract: boolean; isTerminal: boolean;
 	addressType: "unknown" | "eoa" | "contract"; protocol?: string; roles?: string[];
-  earliestSyncedBlock: number; historySyncedToBlock: number; latestSyncedBlock: number; lastSyncedAt?: string;
+	normalSyncedFrom?: number; normalSyncedTo?: number; internalSyncedFrom?: number; internalSyncedTo?: number;
+	tokenSyncedFrom?: number; tokenSyncedTo?: number; lastSyncedAt?: string;
 	  syncStatus: string; syncError?: string; syncMaxRecordsPerAction?: number;
 }
 
@@ -245,7 +252,7 @@ export interface TransactionAnalysis {
 	conversions: Array<{ protocol: string; version: string; status: "complete" | "partial"; initiator?: string; router?: string; executor?: string; liquidityProvider?: string; recipient?: string; tokenIn?: string; amountIn?: string; tokenOut?: string; amountOut?: string; evidence: string[]; issues?: string[] }>;
 	finalOutputAddress?: string;
 	protocolAction?: "vault_migration" | "protocol_outbound" | "cross_chain_swap" | "refund" | "protocol_internal";
-	protocolMemo?: string; protocolDestination?: string;
+	protocolMemo?: string; protocolDestination?: string; protocolAsset?: string; protocolAmount?: string;
   quality: { status: "complete" | "partial"; ambiguousRoute: boolean; evidence: string[]; issues?: string[] };
   analyzedAt: string;
 }

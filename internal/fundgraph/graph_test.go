@@ -30,7 +30,7 @@ func (r *graphRepository) QueryTransfers(_ context.Context, query store.Transfer
 func TestGraphReturnsStableCursorPages(t *testing.T) {
 	address := "0x0000000000000000000000000000000000000001"
 	repository := &graphRepository{
-		addresses: map[string]store.Address{address: {SyncStatus: "synced", LatestSyncedBlock: 100}},
+		addresses: map[string]store.Address{address: {SyncStatus: "synced", NormalSyncedTo: 100, InternalSyncedTo: 100, TokenSyncedTo: 100}},
 		pages: [][]store.Transfer{
 			{
 				{BlockNumber: 30, TxHash: "0xc", Source: "txlist", Asset: "ETH", From: address, To: "0x2", Amount: "3"},
@@ -65,7 +65,7 @@ func TestGraphRejectsUnsyncedAddressAndInvalidCursor(t *testing.T) {
 		t.Fatalf("error=%v, want address not synced", err)
 	}
 
-	graph = New(&graphRepository{addresses: map[string]store.Address{address: {SyncStatus: "synced"}}})
+	graph = New(&graphRepository{addresses: map[string]store.Address{address: {SyncStatus: "synced", NormalSyncedTo: 100, InternalSyncedTo: 100, TokenSyncedTo: 100}}})
 	_, err = graph.Edges(context.Background(), EdgeQuery{Addresses: []string{address}, Cursor: "bad"})
 	if !errors.Is(err, ErrInvalidQuery) {
 		t.Fatalf("error=%v, want invalid query", err)
@@ -75,7 +75,7 @@ func TestGraphRejectsUnsyncedAddressAndInvalidCursor(t *testing.T) {
 func TestGraphKeepsPreviouslySyncedDataAvailableDuringRefreshFailure(t *testing.T) {
 	address := "0x0000000000000000000000000000000000000001"
 	repository := &graphRepository{
-		addresses: map[string]store.Address{address: {SyncStatus: "failed", LatestSyncedBlock: 90, LastSyncedAt: time.Unix(1, 0)}},
+		addresses: map[string]store.Address{address: {SyncStatus: "failed", NormalSyncedTo: 90, InternalSyncedTo: 90, TokenSyncedTo: 90, LastSyncedAt: time.Unix(1, 0)}},
 		pages:     [][]store.Transfer{{}},
 	}
 	page, err := New(repository).Edges(context.Background(), EdgeQuery{Addresses: []string{address}})

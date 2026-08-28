@@ -7,27 +7,32 @@ import (
 )
 
 type Address struct {
-	Chain                   string    `bson:"chain" json:"chain"`
-	ChainID                 int64     `bson:"chainId" json:"chainId"`
-	Address                 string    `bson:"address" json:"address"`
-	AddressType             string    `bson:"addressType,omitempty" json:"addressType"`
-	IsContract              bool      `bson:"isContract" json:"isContract"`
-	Protocol                string    `bson:"protocol,omitempty" json:"protocol,omitempty"`
-	Roles                   []string  `bson:"roles,omitempty" json:"roles,omitempty"`
-	IsTerminal              bool      `bson:"isTerminal" json:"isTerminal"`
-	EarliestSyncedBlock     int64     `bson:"earliestSyncedBlock" json:"earliestSyncedBlock"`
-	HistorySyncedToBlock    int64     `bson:"historySyncedToBlock" json:"historySyncedToBlock"`
-	LatestSyncedBlock       int64     `bson:"latestSyncedBlock" json:"latestSyncedBlock"`
-	NormalSyncedFrom        int64     `bson:"normalSyncedFrom,omitempty" json:"normalSyncedFrom,omitempty"`
-	NormalSyncedTo          int64     `bson:"normalSyncedTo,omitempty" json:"normalSyncedTo,omitempty"`
-	InternalSyncedFrom      int64     `bson:"internalSyncedFrom,omitempty" json:"internalSyncedFrom,omitempty"`
-	InternalSyncedTo        int64     `bson:"internalSyncedTo,omitempty" json:"internalSyncedTo,omitempty"`
-	TokenSyncedFrom         int64     `bson:"tokenSyncedFrom,omitempty" json:"tokenSyncedFrom,omitempty"`
-	TokenSyncedTo           int64     `bson:"tokenSyncedTo,omitempty" json:"tokenSyncedTo,omitempty"`
-	LastSyncedAt            time.Time `bson:"lastSyncedAt,omitempty" json:"lastSyncedAt,omitempty"`
-	SyncStatus              string    `bson:"syncStatus" json:"syncStatus"`
-	SyncError               string    `bson:"syncError,omitempty" json:"syncError,omitempty"`
-	SyncMaxRecordsPerAction int64     `bson:"syncMaxRecordsPerAction,omitempty" json:"syncMaxRecordsPerAction,omitempty"`
+	Chain                   string           `bson:"chain" json:"chain"`
+	ChainID                 int64            `bson:"chainId" json:"chainId"`
+	Address                 string           `bson:"address" json:"address"`
+	AddressType             string           `bson:"addressType,omitempty" json:"addressType"`
+	IsContract              bool             `bson:"isContract" json:"isContract"`
+	Protocol                string           `bson:"protocol,omitempty" json:"protocol,omitempty"`
+	Roles                   []string         `bson:"roles,omitempty" json:"roles,omitempty"`
+	IsTerminal              bool             `bson:"isTerminal" json:"isTerminal"`
+	NormalSyncedFrom        int64            `bson:"normalSyncedFrom,omitempty" json:"normalSyncedFrom,omitempty"`
+	NormalSyncedTo          int64            `bson:"normalSyncedTo,omitempty" json:"normalSyncedTo,omitempty"`
+	InternalSyncedFrom      int64            `bson:"internalSyncedFrom,omitempty" json:"internalSyncedFrom,omitempty"`
+	InternalSyncedTo        int64            `bson:"internalSyncedTo,omitempty" json:"internalSyncedTo,omitempty"`
+	TokenSyncedFrom         int64            `bson:"tokenSyncedFrom,omitempty" json:"tokenSyncedFrom,omitempty"`
+	TokenSyncedTo           int64            `bson:"tokenSyncedTo,omitempty" json:"tokenSyncedTo,omitempty"`
+	LastSyncedAt            time.Time        `bson:"lastSyncedAt,omitempty" json:"lastSyncedAt,omitempty"`
+	SyncStatus              string           `bson:"syncStatus" json:"syncStatus"`
+	SyncError               string           `bson:"syncError,omitempty" json:"syncError,omitempty"`
+	SyncMaxRecordsPerAction int64            `bson:"syncMaxRecordsPerAction,omitempty" json:"syncMaxRecordsPerAction,omitempty"`
+	ActionRecordCounts      map[string]int64 `bson:"actionRecordCounts,omitempty" json:"actionRecordCounts,omitempty"`
+}
+
+// CommonCoverage returns the block range completed by every sync action.
+func (a Address) CommonCoverage() (int64, int64, bool) {
+	from := max(a.NormalSyncedFrom, max(a.InternalSyncedFrom, a.TokenSyncedFrom))
+	to := min(a.NormalSyncedTo, min(a.InternalSyncedTo, a.TokenSyncedTo))
+	return from, to, to >= from && (from != 0 || to != 0)
 }
 
 type AddressSyncCoverage struct {
@@ -193,26 +198,29 @@ type InferredRiskAssociation struct {
 }
 
 type TraceJob struct {
-	ID               primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	Chain            string             `bson:"chain" json:"chain"`
-	SeedAddress      string             `bson:"seedAddress" json:"seedAddress"`
-	Direction        string             `bson:"direction" json:"direction"`
-	Depth            int                `bson:"depth" json:"depth"`
-	Asset            string             `bson:"asset" json:"asset"`
-	Status           string             `bson:"status" json:"status"`
-	CreatedAt        time.Time          `bson:"createdAt" json:"createdAt"`
-	StartedAt        time.Time          `bson:"startedAt,omitempty" json:"startedAt,omitempty"`
-	FinishedAt       time.Time          `bson:"finishedAt,omitempty" json:"finishedAt,omitempty"`
-	CurrentDepth     int                `bson:"currentDepth" json:"currentDepth"`
-	VisitedNodes     int                `bson:"visitedNodes" json:"visitedNodes"`
-	EdgeCount        int                `bson:"edgeCount" json:"edgeCount"`
-	SyncJobIDs       []string           `bson:"syncJobIds,omitempty" json:"syncJobIds,omitempty"`
-	Result           any                `bson:"result,omitempty" json:"result,omitempty"`
-	DataThroughBlock int64              `bson:"dataThroughBlock" json:"dataThroughBlock"`
-	RuleVersion      string             `bson:"ruleVersion" json:"ruleVersion"`
-	ErrorCode        string             `bson:"errorCode,omitempty" json:"errorCode,omitempty"`
-	Error            string             `bson:"error,omitempty" json:"error,omitempty"`
-	Retryable        bool               `bson:"retryable" json:"retryable"`
+	ID                 primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Chain              string             `bson:"chain" json:"chain"`
+	SeedAddress        string             `bson:"seedAddress" json:"seedAddress"`
+	Direction          string             `bson:"direction" json:"direction"`
+	Depth              int                `bson:"depth" json:"depth"`
+	Asset              string             `bson:"asset" json:"asset"`
+	Status             string             `bson:"status" json:"status"`
+	CreatedAt          time.Time          `bson:"createdAt" json:"createdAt"`
+	StartedAt          time.Time          `bson:"startedAt,omitempty" json:"startedAt,omitempty"`
+	FinishedAt         time.Time          `bson:"finishedAt,omitempty" json:"finishedAt,omitempty"`
+	CurrentDepth       int                `bson:"currentDepth" json:"currentDepth"`
+	VisitedNodes       int                `bson:"visitedNodes" json:"visitedNodes"`
+	EdgeCount          int                `bson:"edgeCount" json:"edgeCount"`
+	SyncJobIDs         []string           `bson:"syncJobIds,omitempty" json:"syncJobIds,omitempty"`
+	Result             any                `bson:"result,omitempty" json:"result,omitempty"`
+	DataThroughBlock   int64              `bson:"dataThroughBlock" json:"dataThroughBlock"`
+	RuleVersion        string             `bson:"ruleVersion" json:"ruleVersion"`
+	ErrorCode          string             `bson:"errorCode,omitempty" json:"errorCode,omitempty"`
+	Error              string             `bson:"error,omitempty" json:"error,omitempty"`
+	Retryable          bool               `bson:"retryable" json:"retryable"`
+	RootTraceJobID     primitive.ObjectID `bson:"rootTraceJobId,omitempty" json:"rootTraceJobId,omitempty"`
+	ExtensionAddress   string             `bson:"extensionAddress,omitempty" json:"extensionAddress,omitempty"`
+	ExtensionDirection string             `bson:"extensionDirection,omitempty" json:"extensionDirection,omitempty"`
 }
 
 type SyncJob struct {
@@ -418,6 +426,8 @@ type TransactionAnalysis struct {
 	ProtocolAction      string            `bson:"protocolAction,omitempty" json:"protocolAction,omitempty"`
 	ProtocolMemo        string            `bson:"protocolMemo,omitempty" json:"protocolMemo,omitempty"`
 	ProtocolDestination string            `bson:"protocolDestination,omitempty" json:"protocolDestination,omitempty"`
+	ProtocolAsset       string            `bson:"protocolAsset,omitempty" json:"protocolAsset,omitempty"`
+	ProtocolAmount      string            `bson:"protocolAmount,omitempty" json:"protocolAmount,omitempty"`
 	BridgeLinks         []CrossChainLink  `bson:"bridgeLinks,omitempty" json:"bridgeLinks,omitempty"`
 	FinalOutputAddress  string            `bson:"finalOutputAddress,omitempty" json:"finalOutputAddress,omitempty"`
 	Quality             AnalysisQuality   `bson:"quality" json:"quality"`

@@ -18,7 +18,7 @@ func TestTraceUsesConcreteTransfersAndFiltersSmallAmounts(t *testing.T) {
 	c := "0x0000000000000000000000000000000000000004"
 	d := "0x0000000000000000000000000000000000000005"
 	r := &fakeRepository{addresses: map[string]store.Address{
-		seed: {SyncStatus: "synced"}, a: {SyncStatus: "synced"}, b: {SyncStatus: "synced"}, c: {SyncStatus: "synced"}, d: {SyncStatus: "synced"},
+		seed: completeAddress(0, 100), a: completeAddress(0, 100), b: completeAddress(0, 100), c: completeAddress(0, 100), d: completeAddress(0, 100),
 	}, labels: map[string][]store.Label{}, transfers: []store.Transfer{
 		{Chain: "ethereum", TxHash: "0xa1", BlockNumber: 10, BlockTime: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), From: seed, To: a, AssetType: "eth", Asset: "ETH", Amount: "400000000000000000"},
 		{Chain: "ethereum", TxHash: "0xa2", BlockNumber: 12, BlockTime: time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC), From: seed, To: a, AssetType: "eth", Asset: "ETH", Amount: "300000000000000000"},
@@ -47,13 +47,86 @@ func TestTraceUsesConcreteTransfersAndFiltersSmallAmounts(t *testing.T) {
 	}
 }
 
+func TestExtendBranchUsesAggregatedDownstreamAnchor(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	anchor := "0x0000000000000000000000000000000000000002"
+	next := "0x0000000000000000000000000000000000000003"
+	repository := &fakeRepository{addresses: map[string]store.Address{
+		anchor: completeAddress(0, 100), next: completeAddress(0, 100),
+	}, labels: map[string][]store.Label{}, transfers: []store.Transfer{
+		{Chain: "ethereum", TxHash: "0xnext", BlockNumber: 13, From: anchor, To: next, AssetType: "eth", Asset: "ETH", Amount: "120000000000000000"},
+	}}
+	root := Result{Nodes: []Node{{Chain: "ethereum", Address: seed}, {Chain: "ethereum", Address: anchor, Depth: 1}}, DataThroughBlock: 100, Edges: []Edge{
+		{Chain: "ethereum", From: seed, To: anchor, AssetType: "eth", Asset: "ETH", TotalAmount: "40000000000000000", FirstBlock: 10, LatestBlock: 10, Path: []string{seed, anchor}},
+		{Chain: "ethereum", From: seed, To: anchor, AssetType: "eth", Asset: "ETH", TotalAmount: "60000000000000000", FirstBlock: 12, LatestBlock: 12, Path: []string{seed, anchor}},
+	}}
+
+	result, err := New(repository).ExtendBranch(context.Background(), root, ExtensionRequest{Chain: "ethereum", Address: anchor, Direction: "out", Depth: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repository.calls) != 1 || repository.calls[0].FromBlock != 10 || repository.calls[0].ToBlock != 0 || repository.calls[0].AssetMode != "eth" {
+		t.Fatalf("queries=%+v", repository.calls)
+	}
+	if len(result.Edges) != 1 || result.Edges[0].TotalAmount != "100000000000000000" || len(result.Nodes) != 2 || result.Nodes[1].Address != next {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestExtendBranchUsesAggregatedUpstreamAnchor(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	anchor := "0x0000000000000000000000000000000000000002"
+	previous := "0x0000000000000000000000000000000000000003"
+	repository := &fakeRepository{addresses: map[string]store.Address{
+		anchor: completeAddress(0, 100), previous: completeAddress(0, 100),
+	}, labels: map[string][]store.Label{}, transfers: []store.Transfer{
+		{Chain: "ethereum", TxHash: "0xprevious", BlockNumber: 18, From: previous, To: anchor, AssetType: "eth", Asset: "ETH", Amount: "50000000000000000"},
+	}}
+	root := Result{Nodes: []Node{{Chain: "ethereum", Address: seed}, {Chain: "ethereum", Address: anchor, Depth: 1}}, DataThroughBlock: 100, Edges: []Edge{
+		{Chain: "ethereum", From: anchor, To: seed, AssetType: "eth", Asset: "ETH", TotalAmount: "50000000000000000", FirstBlock: 20, LatestBlock: 25, Path: []string{seed, anchor}},
+	}}
+
+	result, err := New(repository).ExtendBranch(context.Background(), root, ExtensionRequest{Chain: "ethereum", Address: anchor, Direction: "in", Depth: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repository.calls) != 1 || repository.calls[0].FromBlock != 0 || repository.calls[0].ToBlock != 25 {
+		t.Fatalf("queries=%+v", repository.calls)
+	}
+	if len(result.Edges) != 1 || result.Edges[0].From != previous || result.Edges[0].To != anchor {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestMergeResultsDeduplicatesRepeatedExtension(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	next := "0x0000000000000000000000000000000000000002"
+	root := Result{Nodes: []Node{{Chain: "ethereum", Address: seed}}, RuleVersion: traceRuleVersion, DataStatus: "synced"}
+	extension := Result{Nodes: []Node{{Chain: "ethereum", Address: seed}, {Chain: "ethereum", Address: next, Depth: 1}}, Edges: []Edge{{Chain: "ethereum", From: seed, To: next, AssetType: "eth", Asset: "ETH", TotalAmount: "1", FirstBlock: 10, LatestBlock: 10, Path: []string{seed, next}}}, DataStatus: "synced"}
+
+	merged := MergeResults(MergeResults(root, extension), extension)
+	if len(merged.Nodes) != 2 || len(merged.Edges) != 1 {
+		t.Fatalf("merged=%+v", merged)
+	}
+}
+
+func TestMergeResultsKeepsTHORChainVaultIdentity(t *testing.T) {
+	address := "0x0000000000000000000000000000000000000002"
+	root := Result{Nodes: []Node{{Chain: "ethereum", Address: address, AddressType: "eoa"}}}
+	extension := Result{Nodes: []Node{{Chain: "ethereum", Address: address, AddressType: "eoa", Protocol: "thorchain", Roles: []string{"thorchain_vault"}}}}
+	merged := MergeResults(root, extension)
+	if merged.Nodes[0].Protocol != "thorchain" || !slices.Contains(merged.Nodes[0].Roles, "thorchain_vault") {
+		t.Fatalf("merged node=%+v", merged.Nodes[0])
+	}
+}
+
 func TestTraceRootIncludesOfficialEthereumTokensAndRejectsSymbolSpoof(t *testing.T) {
 	seed := "0x0000000000000000000000000000000000000001"
 	ethRecipient := "0x0000000000000000000000000000000000000002"
 	usdtRecipient := "0x0000000000000000000000000000000000000003"
 	spoofRecipient := "0x0000000000000000000000000000000000000004"
 	r := &fakeRepository{addresses: map[string]store.Address{
-		seed: {SyncStatus: "synced"}, ethRecipient: {SyncStatus: "synced"}, usdtRecipient: {SyncStatus: "synced"}, spoofRecipient: {SyncStatus: "synced"},
+		seed: completeAddress(0, 100), ethRecipient: completeAddress(0, 100), usdtRecipient: completeAddress(0, 100), spoofRecipient: completeAddress(0, 100),
 	}, labels: map[string][]store.Label{}, transfers: []store.Transfer{
 		{Chain: "ethereum", TxHash: "0xeth", From: seed, To: ethRecipient, AssetType: "eth", Asset: "ETH", Symbol: "ETH", Decimals: 18, Amount: "1000000000000000000"},
 		{Chain: "ethereum", TxHash: "0xusdt", From: seed, To: usdtRecipient, AssetType: "erc20", Asset: ethereumUSDT, Symbol: "USDT", Decimals: 6, TokenMetadataComplete: true, TokenValue: "1000000000000"},
@@ -93,12 +166,13 @@ func TestRootAssetsAreScopedByChain(t *testing.T) {
 }
 
 type fakeRepository struct {
-	addresses  map[string]store.Address
-	identities map[string]store.AddressIdentity
-	transfers  []store.Transfer
-	labels     map[string][]store.Label
-	calls      []store.TransferQuery
-	bridges    map[string][]store.CrossChainLink
+	addresses      map[string]store.Address
+	identities     map[string]store.AddressIdentity
+	transfers      []store.Transfer
+	queryTransfers func(store.TransferQuery) []store.Transfer
+	labels         map[string][]store.Label
+	calls          []store.TransferQuery
+	bridges        map[string][]store.CrossChainLink
 }
 
 type addressInspectorStub struct {
@@ -113,10 +187,22 @@ type failingAddressInspector struct{}
 
 func completeAddress(from, to int64) store.Address {
 	return store.Address{
-		SyncStatus: "synced", EarliestSyncedBlock: from, LatestSyncedBlock: to,
+		SyncStatus:       "synced",
 		NormalSyncedFrom: from, NormalSyncedTo: to, InternalSyncedFrom: from,
 		InternalSyncedTo: to, TokenSyncedFrom: from, TokenSyncedTo: to,
 	}
+}
+
+func completeContractAddress(from, to int64) store.Address {
+	address := completeAddress(from, to)
+	address.IsContract, address.AddressType = true, "contract"
+	return address
+}
+
+func completeEOAAddress(from, to int64) store.Address {
+	address := completeAddress(from, to)
+	address.AddressType = "eoa"
+	return address
 }
 
 func (failingAddressInspector) InspectAddress(context.Context, string, string) (store.AddressIdentity, error) {
@@ -150,15 +236,6 @@ func (s transactionAnalyzerStub) SupportsContract(address string) bool {
 
 func (r *fakeRepository) FindAddress(_ context.Context, _, address string) (store.Address, bool, error) {
 	v, ok := r.addresses[address]
-	if ok && v.SyncStatus == "synced" && v.NormalSyncedTo == 0 && v.InternalSyncedTo == 0 && v.TokenSyncedTo == 0 {
-		for _, transfer := range r.transfers {
-			if transfer.BlockNumber > v.LatestSyncedBlock {
-				v.LatestSyncedBlock = transfer.BlockNumber
-			}
-		}
-		v.NormalSyncedFrom, v.InternalSyncedFrom, v.TokenSyncedFrom = v.EarliestSyncedBlock, v.EarliestSyncedBlock, v.EarliestSyncedBlock
-		v.NormalSyncedTo, v.InternalSyncedTo, v.TokenSyncedTo = v.LatestSyncedBlock, v.LatestSyncedBlock, v.LatestSyncedBlock
-	}
 	return v, ok, nil
 }
 
@@ -171,6 +248,9 @@ func (r *fakeRepository) SetAddressIdentity(_ context.Context, _, address string
 }
 func (r *fakeRepository) QueryTransfers(_ context.Context, q store.TransferQuery) ([]store.Transfer, error) {
 	r.calls = append(r.calls, q)
+	if r.queryTransfers != nil {
+		return r.queryTransfers(q), nil
+	}
 	result := make([]store.Transfer, 0, len(r.transfers))
 	for _, transfer := range r.transfers {
 		connected := false
@@ -215,7 +295,10 @@ func TestTraceBatchesFrontierAndPrunesTerminal(t *testing.T) {
 	seed := "0x0000000000000000000000000000000000000001"
 	terminal := "0x0000000000000000000000000000000000000002"
 	next := "0x0000000000000000000000000000000000000003"
-	r := &fakeRepository{addresses: map[string]store.Address{seed: {SyncStatus: "synced", LatestSyncedBlock: 100}, terminal: {SyncStatus: "synced", IsTerminal: true, LatestSyncedBlock: 100}, next: {SyncStatus: "synced", LatestSyncedBlock: 100}}, transfers: []store.Transfer{{TxHash: "0x1", From: seed, To: terminal, Asset: "ETH", Amount: "2000000000000000000"}, {TxHash: "0x2", From: terminal, To: next, Asset: "ETH", Amount: "1000000000000000000"}}, labels: map[string][]store.Label{}}
+	r := &fakeRepository{addresses: map[string]store.Address{seed: completeAddress(0, 100), terminal: completeAddress(0, 100), next: completeAddress(0, 100)}, transfers: []store.Transfer{{TxHash: "0x1", From: seed, To: terminal, Asset: "ETH", Amount: "2000000000000000000"}, {TxHash: "0x2", From: terminal, To: next, Asset: "ETH", Amount: "1000000000000000000"}}, labels: map[string][]store.Label{}}
+	terminalAddress := r.addresses[terminal]
+	terminalAddress.IsTerminal = true
+	r.addresses[terminal] = terminalAddress
 	result, err := New(r).Trace(context.Background(), Query{Address: seed, Depth: 3})
 	if err != nil {
 		t.Fatal(err)
@@ -239,7 +322,7 @@ func TestTraceRejectsInvalidAndUnsyncedQueries(t *testing.T) {
 func TestTraceRejectsRecordLimitedAddressAsIncomplete(t *testing.T) {
 	seed := "0x0000000000000000000000000000000000000001"
 	r := &fakeRepository{addresses: map[string]store.Address{
-		seed: {SyncStatus: "partial", SyncError: "record_limit", SyncMaxRecordsPerAction: 100_000, LatestSyncedBlock: 100},
+		seed: {SyncStatus: "partial", SyncError: "record_limit", SyncMaxRecordsPerAction: 100_000},
 	}, labels: map[string][]store.Label{}}
 
 	_, err := New(r).WithRequiredStartBlocks(map[string]int64{"ethereum": 50}).Trace(context.Background(), Query{Address: seed, Direction: "out", Depth: 1})
@@ -248,12 +331,51 @@ func TestTraceRejectsRecordLimitedAddressAsIncomplete(t *testing.T) {
 	}
 }
 
+func TestTraceMarksHighFrequencySeedTerminal(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	r := &fakeRepository{addresses: map[string]store.Address{
+		seed: {SyncStatus: "partial", SyncError: "high_frequency", SyncMaxRecordsPerAction: 50_000},
+	}, labels: map[string][]store.Label{}}
+
+	result, err := New(r).WithRequiredStartBlocks(map[string]int64{"ethereum": 50}).Trace(context.Background(), Query{Address: seed, Direction: "out", Depth: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.DataStatus != "partial" || len(result.Nodes) != 1 || !result.Nodes[0].Terminal || result.Nodes[0].StopReason != "high_frequency" {
+		t.Fatalf("result=%+v", result)
+	}
+	if len(r.calls) != 0 {
+		t.Fatalf("transfer queries=%d, want 0", len(r.calls))
+	}
+}
+
+func TestTraceStopsExpansionAtFiftyThousandTransfers(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	queriedLimit := int64(0)
+	r := &fakeRepository{
+		addresses: map[string]store.Address{seed: completeAddress(0, 100)},
+		labels:    map[string][]store.Label{},
+		queryTransfers: func(query store.TransferQuery) []store.Transfer {
+			queriedLimit = query.Limit
+			return make([]store.Transfer, 50_000)
+		},
+	}
+
+	result, err := New(r).Trace(context.Background(), Query{Address: seed, Direction: "out", Depth: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queriedLimit != 50_000 || result.DataStatus != "partial" || len(result.Nodes) != 1 || !result.Nodes[0].Terminal || result.Nodes[0].StopReason != "high_frequency" {
+		t.Fatalf("limit=%d result=%+v", queriedLimit, result)
+	}
+}
+
 func TestTraceExistingDataOnlySkipsCoverageAndAddressInspection(t *testing.T) {
 	seed := "0x0000000000000000000000000000000000000001"
 	neighbor := "0x0000000000000000000000000000000000000002"
 	r := &fakeRepository{
 		addresses: map[string]store.Address{
-			seed:     {SyncStatus: "failed", LatestSyncedBlock: 100},
+			seed:     {SyncStatus: "failed"},
 			neighbor: {SyncStatus: "discovered", AddressType: "unknown"},
 		},
 		transfers: []store.Transfer{{Chain: "ethereum", TxHash: "0x1", BlockNumber: 90, From: seed, To: neighbor, AssetType: "eth", Asset: "ETH", Amount: "1000000000000000000"}},
@@ -315,7 +437,7 @@ func TestTraceRequiresDependencyCurrentCoverage(t *testing.T) {
 	r := &fakeRepository{
 		addresses: map[string]store.Address{
 			seed:       completeAddress(50, 100),
-			dependency: {SyncStatus: "synced", NormalSyncedFrom: 50, NormalSyncedTo: 90, InternalSyncedFrom: 50, InternalSyncedTo: 90, TokenSyncedFrom: 50, TokenSyncedTo: 90, LatestSyncedBlock: 90},
+			dependency: {SyncStatus: "synced", NormalSyncedFrom: 50, NormalSyncedTo: 90, InternalSyncedFrom: 50, InternalSyncedTo: 90, TokenSyncedFrom: 50, TokenSyncedTo: 90},
 		},
 		transfers: []store.Transfer{{Chain: "ethereum", TxHash: "0x1", BlockNumber: 80, From: seed, To: dependency, AssetType: "eth", Asset: "ETH", Amount: "1000000000000000000"}},
 		labels:    map[string][]store.Label{},
@@ -363,7 +485,7 @@ func TestTraceStopsAtConfirmedBridge(t *testing.T) {
 	target := "0x0000000000000000000000000000000000000003"
 	next := "0x0000000000000000000000000000000000000003"
 	link := store.CrossChainLink{SourceChain: "ethereum", SourceAddress: bridge, SourceTxHash: "0xsource", TargetChain: "base", TargetAddress: target, TargetTxHash: "0xtarget", Status: "confirmed"}
-	r := &fakeRepository{addresses: map[string]store.Address{seed: {SyncStatus: "synced", LatestSyncedBlock: 100}, bridge: {SyncStatus: "synced", LatestSyncedBlock: 100}, target: {SyncStatus: "synced", LatestSyncedBlock: 200}, next: {SyncStatus: "synced", LatestSyncedBlock: 200}}, transfers: []store.Transfer{{Chain: "ethereum", TxHash: "0xsource", BlockNumber: 90, From: seed, To: bridge, Asset: "ETH", Amount: "1000000000000000000"}, {Chain: "base", TxHash: "0xbase", From: target, To: next, Asset: "ETH", Amount: "1000000000000000000"}}, labels: map[string][]store.Label{}, bridges: map[string][]store.CrossChainLink{"ethereum:" + bridge: {link}}}
+	r := &fakeRepository{addresses: map[string]store.Address{seed: completeAddress(0, 100), bridge: completeAddress(0, 100), target: completeAddress(0, 200), next: completeAddress(0, 200)}, transfers: []store.Transfer{{Chain: "ethereum", TxHash: "0xsource", BlockNumber: 90, From: seed, To: bridge, Asset: "ETH", Amount: "1000000000000000000"}, {Chain: "base", TxHash: "0xbase", From: target, To: next, Asset: "ETH", Amount: "1000000000000000000"}}, labels: map[string][]store.Label{}, bridges: map[string][]store.CrossChainLink{"ethereum:" + bridge: {link}}}
 	result, err := New(r).Trace(context.Background(), Query{Chain: "ethereum", Address: seed, Direction: "out", Depth: 2})
 	if err != nil {
 		t.Fatal(err)
@@ -379,7 +501,7 @@ func TestTraceStopsAtConfirmedBridge(t *testing.T) {
 func TestTraceRootExcludesTokenMint(t *testing.T) {
 	seed := "0x0000000000000000000000000000000000000001"
 	zero := "0x0000000000000000000000000000000000000000"
-	r := &fakeRepository{addresses: map[string]store.Address{seed: {SyncStatus: "synced"}}, transfers: []store.Transfer{{Chain: "ethereum", TxHash: "0xmint", From: zero, To: seed, AssetType: "erc20", Asset: "0x0000000000000000000000000000000000000010", TokenValue: "1"}}, labels: map[string][]store.Label{}}
+	r := &fakeRepository{addresses: map[string]store.Address{seed: completeAddress(0, 100)}, transfers: []store.Transfer{{Chain: "ethereum", TxHash: "0xmint", From: zero, To: seed, AssetType: "erc20", Asset: "0x0000000000000000000000000000000000000010", TokenValue: "1"}}, labels: map[string][]store.Label{}}
 	result, err := New(r).Trace(context.Background(), Query{Address: seed, Direction: "in", Depth: 2})
 	if err != nil || len(result.Edges) != 0 || len(result.Nodes) != 1 {
 		t.Fatalf("result=%+v err=%v", result, err)
@@ -396,7 +518,7 @@ func TestTraceBothKeepsUpstreamAndDownstreamBranchesDirectional(t *testing.T) {
 	downstreamSibling := "0x0000000000000000000000000000000000000007"
 	addresses := map[string]store.Address{}
 	for _, address := range []string{seed, upstream, upstreamParent, upstreamSibling, downstream, downstreamChild, downstreamSibling} {
-		addresses[address] = store.Address{SyncStatus: "synced", LatestSyncedBlock: 100}
+		addresses[address] = completeAddress(0, 100)
 	}
 	r := &fakeRepository{addresses: addresses, labels: map[string][]store.Label{}, transfers: []store.Transfer{
 		{Chain: "ethereum", TxHash: "0x01", BlockNumber: 10, From: upstream, To: seed, Asset: "ETH", Amount: "1000000000000000000"},
@@ -432,7 +554,7 @@ func TestTraceUsesMonotonicBlockWindows(t *testing.T) {
 	earlyChild := "0x0000000000000000000000000000000000000007"
 	addresses := map[string]store.Address{}
 	for _, address := range []string{seed, upstream, validParent, lateParent, downstream, validChild, earlyChild} {
-		addresses[address] = store.Address{SyncStatus: "synced", LatestSyncedBlock: 100}
+		addresses[address] = completeAddress(0, 100)
 	}
 	r := &fakeRepository{addresses: addresses, labels: map[string][]store.Label{}, transfers: []store.Transfer{
 		{TxHash: "0xin", BlockNumber: 10, From: upstream, To: seed, Asset: "ETH", Amount: "1000000000000000000"},
@@ -463,7 +585,7 @@ func TestTraceBothExpandsSameAddressInBothDirections(t *testing.T) {
 	child := "0x0000000000000000000000000000000000000004"
 	addresses := map[string]store.Address{}
 	for _, address := range []string{seed, shared, parent, child} {
-		addresses[address] = store.Address{SyncStatus: "synced"}
+		addresses[address] = completeAddress(0, 100)
 	}
 	r := &fakeRepository{addresses: addresses, labels: map[string][]store.Label{}, transfers: []store.Transfer{
 		{TxHash: "0x1", BlockNumber: 4, From: shared, To: seed, Asset: "ETH", Amount: "1000000000000000000"},
@@ -490,10 +612,10 @@ func TestTraceRootKeepsConcreteTransfers(t *testing.T) {
 	small := "0x0000000000000000000000000000000000000003"
 	spam := "0x0000000000000000000000000000000000000004"
 	r := &fakeRepository{addresses: map[string]store.Address{
-		seed:  {SyncStatus: "synced"},
-		large: {SyncStatus: "synced"},
-		small: {SyncStatus: "synced"},
-		spam:  {SyncStatus: "synced"},
+		seed:  completeAddress(0, 100),
+		large: completeAddress(0, 100),
+		small: completeAddress(0, 100),
+		spam:  completeAddress(0, 100),
 	}, labels: map[string][]store.Label{}, transfers: []store.Transfer{
 		{TxHash: "0xnew", BlockNumber: 3, From: seed, To: small, AssetType: "eth", Asset: "ETH", Amount: "2000000000000000000"},
 		{TxHash: "0xold", BlockNumber: 1, From: seed, To: large, AssetType: "eth", Asset: "ETH", Amount: "100000000000000000000"},
@@ -518,9 +640,9 @@ func TestTraceSwitchesAssetOnlyForVerifiedContractConversion(t *testing.T) {
 	recipient := "0x0000000000000000000000000000000000000003"
 	token := ethereumUSDT
 	r := &fakeRepository{addresses: map[string]store.Address{
-		seed:      {SyncStatus: "synced"},
-		router:    {SyncStatus: "synced", IsContract: true},
-		recipient: {SyncStatus: "synced"},
+		seed:      completeAddress(0, 100),
+		router:    completeContractAddress(0, 100),
+		recipient: completeAddress(0, 100),
 	}, labels: map[string][]store.Label{}, transfers: []store.Transfer{
 		{Chain: "ethereum", TxHash: "0xswap", BlockNumber: 10, From: seed, To: router, AssetType: "eth", Asset: "ETH", Amount: "10000000000000000000"},
 	}}
@@ -552,9 +674,9 @@ func TestTraceBuildsKyberSwapEdgeWithBoundedEvidence(t *testing.T) {
 	provider := "0x67336cec42645f55059eff241cb02ea5cc52ff86"
 	usdt := "0xdac17f958d2ee523a2206206994597c13d831ec7"
 	r := &fakeRepository{addresses: map[string]store.Address{
-		seed:      {SyncStatus: "synced", AddressType: "eoa"},
+		seed:      completeEOAAddress(0, 100),
 		executor:  {AddressType: "contract", IsContract: true, Protocol: "kyberswap", Roles: []string{"kyberswap_executor"}},
-		recipient: {SyncStatus: "synced", AddressType: "eoa"},
+		recipient: completeEOAAddress(0, 100),
 	}, labels: map[string][]store.Label{}, transfers: []store.Transfer{
 		{Chain: "ethereum", TxHash: "0xswap", BlockNumber: 10, From: seed, To: executor, AssetType: "erc20", Asset: usdt, TokenValue: "1000000000000"},
 	}}
@@ -576,12 +698,61 @@ func TestTraceBuildsKyberSwapEdgeWithBoundedEvidence(t *testing.T) {
 	}
 }
 
+func TestTraceContinuesThroughVerifiedTHORChainVaultMigration(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	router := "0xd37bbe5744d730a1d98d8dc97c42f0ca46ad7146"
+	vault := "0x0000000000000000000000000000000000000003"
+	next := "0x0000000000000000000000000000000000000004"
+	amount := "375820107740000000000"
+	r := &fakeRepository{addresses: map[string]store.Address{
+		seed: completeEOAAddress(0, 100), router: completeContractAddress(0, 100), vault: completeEOAAddress(0, 100), next: completeEOAAddress(0, 100),
+	}, labels: map[string][]store.Label{}, transfers: []store.Transfer{
+		{Chain: "ethereum", TxHash: "0xmigrate", BlockNumber: 10, From: seed, To: router, AssetType: "eth", Asset: "ETH", Amount: amount},
+		{Chain: "ethereum", TxHash: "0xnext", BlockNumber: 11, From: vault, To: next, AssetType: "eth", Asset: "ETH", Amount: "100000000000000000000"},
+	}}
+	analyzer := transactionAnalyzerStub{analysis: store.TransactionAnalysis{
+		Chain: "ethereum", TxHash: "0xmigrate", BlockNumber: 10, From: seed, To: router, Succeeded: true,
+		ProtocolAction: "vault_migration", ProtocolMemo: "MIGRATE:22985236", ProtocolDestination: vault, ProtocolAsset: "ETH", ProtocolAmount: amount,
+		InternalCalls: []store.InternalCall{{From: router, To: vault, Value: amount}}, Quality: store.AnalysisQuality{Status: "complete"},
+	}}
+
+	result, err := New(r).WithTransactionAnalyzer(analyzer).Trace(context.Background(), Query{Address: seed, Direction: "out", Depth: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Edges) != 3 || result.Edges[1].Kind != "thorchain_vault_migration" || result.Edges[1].Protocol != "thorchain" || result.Edges[1].ProtocolMemo != "MIGRATE:22985236" || result.Edges[2].To != next {
+		t.Fatalf("edges=%+v", result.Edges)
+	}
+	for _, node := range result.Nodes {
+		if node.Address == vault && (node.Protocol != "thorchain" || !slices.Contains(node.Roles, "thorchain_vault")) {
+			t.Fatalf("vault node=%+v", node)
+		}
+	}
+}
+
+func TestTraceRejectsUnverifiedTHORChainVaultMigration(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	router := "0xd37bbe5744d730a1d98d8dc97c42f0ca46ad7146"
+	vault := "0x0000000000000000000000000000000000000003"
+	amount := "1000000000000000000"
+	r := &fakeRepository{addresses: map[string]store.Address{seed: completeEOAAddress(0, 100), router: completeContractAddress(0, 100), vault: completeEOAAddress(0, 100)}, labels: map[string][]store.Label{}, transfers: []store.Transfer{{Chain: "ethereum", TxHash: "0xmigrate", BlockNumber: 10, From: seed, To: router, AssetType: "eth", Asset: "ETH", Amount: amount}}}
+	analyzer := transactionAnalyzerStub{analysis: store.TransactionAnalysis{Chain: "ethereum", TxHash: "0xmigrate", BlockNumber: 10, From: seed, To: router, Succeeded: true, ProtocolAction: "vault_migration", ProtocolDestination: vault, ProtocolAsset: "ETH", ProtocolAmount: amount, Quality: store.AnalysisQuality{Status: "complete"}}}
+
+	result, err := New(r).WithTransactionAnalyzer(analyzer).Trace(context.Background(), Query{Address: seed, Direction: "out", Depth: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Edges) != 1 || len(result.Nodes) != 2 || !result.Nodes[1].Terminal || result.Nodes[1].StopReason != "ambiguous_conversion" {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
 func TestTraceAnalyzesEachAnchoredContractTransaction(t *testing.T) {
 	seed := "0x0000000000000000000000000000000000000001"
 	router := "0x0000000000000000000000000000000000000002"
 	recipient := "0x0000000000000000000000000000000000000003"
 	token := ethereumUSDT
-	r := &fakeRepository{addresses: map[string]store.Address{seed: {SyncStatus: "synced"}, router: {SyncStatus: "synced", IsContract: true}, recipient: {SyncStatus: "synced"}}, labels: map[string][]store.Label{}}
+	r := &fakeRepository{addresses: map[string]store.Address{seed: completeAddress(0, 100), router: completeContractAddress(0, 100), recipient: completeAddress(0, 100)}, labels: map[string][]store.Label{}}
 	analyzer := &transactionAnalyzerMap{contract: router, analyses: make(map[string]store.TransactionAnalysis)}
 	for i := 1; i <= 2; i++ {
 		hash := fmt.Sprintf("0x%02d", i)
@@ -608,7 +779,7 @@ func TestTraceStopsAtUnsupportedContract(t *testing.T) {
 	seed := "0x0000000000000000000000000000000000000001"
 	contract := "0x0000000000000000000000000000000000000002"
 	r := &fakeRepository{addresses: map[string]store.Address{
-		seed:     {SyncStatus: "synced", AddressType: "eoa"},
+		seed:     completeEOAAddress(0, 100),
 		contract: {AddressType: "contract", IsContract: true},
 	}, labels: map[string][]store.Label{}, transfers: []store.Transfer{
 		{Chain: "ethereum", TxHash: "0xcall", BlockNumber: 10, From: seed, To: contract, AssetType: "eth", Asset: "ETH", Amount: "10000000000000000000"},
@@ -631,8 +802,8 @@ func TestTraceDoesNotSwitchAssetForUnverifiedContractConversion(t *testing.T) {
 	router := "0x0000000000000000000000000000000000000002"
 	token := "0x0000000000000000000000000000000000000010"
 	r := &fakeRepository{addresses: map[string]store.Address{
-		seed:   {SyncStatus: "synced"},
-		router: {SyncStatus: "synced", IsContract: true},
+		seed:   completeAddress(0, 100),
+		router: completeContractAddress(0, 100),
 	}, labels: map[string][]store.Label{}, transfers: []store.Transfer{
 		{Chain: "ethereum", TxHash: "0xswap", BlockNumber: 10, From: seed, To: router, AssetType: "eth", Asset: "ETH", Amount: "10000000000000000000"},
 	}}
@@ -709,7 +880,7 @@ func TestTraceDownstreamCannotExpandBeyondEnteringAmount(t *testing.T) {
 	first := "0x0000000000000000000000000000000000000003"
 	second := "0x0000000000000000000000000000000000000004"
 	r := &fakeRepository{addresses: map[string]store.Address{
-		seed: {SyncStatus: "synced"}, middle: {SyncStatus: "synced"}, first: {SyncStatus: "synced"}, second: {SyncStatus: "synced"},
+		seed: completeAddress(0, 100), middle: completeAddress(0, 100), first: completeAddress(0, 100), second: completeAddress(0, 100),
 	}, labels: map[string][]store.Label{}, transfers: []store.Transfer{
 		{Chain: "ethereum", TxHash: "0xin", BlockNumber: 1, From: seed, To: middle, AssetType: "eth", Asset: "ETH", Amount: "1000000000000000000"},
 		{Chain: "ethereum", TxHash: "0xfirst", BlockNumber: 2, From: middle, To: first, AssetType: "eth", Asset: "ETH", Amount: "600000000000000000"},

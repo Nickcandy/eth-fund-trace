@@ -85,7 +85,7 @@ docker stats --no-stream eth-fund-trace-app-1 eth-fund-trace-mongo-1
 ```text
 sync_jobs.status/progress/errorCode
 trace_jobs.status/syncJobIds/errorCode
-addresses.syncStatus/latestSyncedBlock
+addresses.syncStatus/normalSyncedTo/internalSyncedTo/tokenSyncedTo
 ```
 
 常见判断：

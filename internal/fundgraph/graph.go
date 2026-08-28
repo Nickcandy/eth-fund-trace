@@ -138,8 +138,12 @@ func (g *Graph) normalize(ctx context.Context, query EdgeQuery) (store.TransferQ
 		if metadata.SyncStatus != "synced" {
 			dataStatus = "stale"
 		}
-		if dataThrough < 0 || metadata.LatestSyncedBlock < dataThrough {
-			dataThrough = metadata.LatestSyncedBlock
+		_, coveredThrough, covered := metadata.CommonCoverage()
+		if !covered {
+			return store.TransferQuery{}, 0, "", ErrAddressNotSynced
+		}
+		if dataThrough < 0 || coveredThrough < dataThrough {
+			dataThrough = coveredThrough
 		}
 		seen[address] = struct{}{}
 		addresses = append(addresses, address)

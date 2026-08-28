@@ -15,6 +15,10 @@ type profileRepository struct {
 	found    bool
 }
 
+func syncedAddress(to int64) store.Address {
+	return store.Address{Chain: "ethereum", Address: "0x1", SyncStatus: "synced", NormalSyncedTo: to, InternalSyncedTo: to, TokenSyncedTo: to}
+}
+
 func (r *profileRepository) FindAddress(context.Context, string, string) (store.Address, bool, error) {
 	return r.address, r.address.SyncStatus != "", nil
 }
@@ -48,7 +52,7 @@ func TestProfilerClassifiesHotWalletSignals(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			repository := &profileRepository{
-				address:  store.Address{Chain: "ethereum", Address: "0x1", SyncStatus: "synced", LatestSyncedBlock: 100},
+				address:  syncedAddress(100),
 				activity: store.AddressActivity{LatestTransferAt: time.Unix(1_700_000_000, 0), Features: tt.features},
 			}
 			profiler := New(repository, func() time.Time { return time.Unix(1_700_000_100, 0) })
@@ -65,7 +69,7 @@ func TestProfilerClassifiesHotWalletSignals(t *testing.T) {
 
 func TestProfilerReusesVersionedSnapshot(t *testing.T) {
 	existing := store.AddressProfile{Chain: "ethereum", Address: "0x1", RuleVersion: RuleVersion, DataThroughBlock: 100, Score: 77}
-	repository := &profileRepository{address: store.Address{SyncStatus: "synced", LatestSyncedBlock: 100}, saved: existing, found: true}
+	repository := &profileRepository{address: syncedAddress(100), saved: existing, found: true}
 	result, err := New(repository, time.Now).Get(context.Background(), "ethereum", "0x1")
 	if err != nil {
 		t.Fatal(err)
@@ -87,7 +91,7 @@ func TestProfilerScoresBehaviorThresholdsWithAnyOppositeActivity(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			repository := &profileRepository{
-				address: store.Address{SyncStatus: "synced", LatestSyncedBlock: 100},
+				address: syncedAddress(100),
 				activity: store.AddressActivity{LatestTransferAt: time.Unix(1_700_000_000, 0), Features: store.ProfileFeatures{
 					WindowTransfers: 10, Incoming: 9, Outgoing: 1, UniqueSenders: tt.senders,
 				}},
@@ -127,7 +131,7 @@ func TestProfilerAppliesEveryScoreThreshold(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			repository := &profileRepository{
-				address:  store.Address{SyncStatus: "synced", LatestSyncedBlock: 100},
+				address:  syncedAddress(100),
 				activity: store.AddressActivity{LatestTransferAt: time.Unix(1_700_000_000, 0), Features: tt.features},
 			}
 			result, err := New(repository, time.Now).Get(context.Background(), "ethereum", "0x1")
@@ -143,7 +147,7 @@ func TestProfilerAppliesEveryScoreThreshold(t *testing.T) {
 
 func TestProfilerUsesPreviouslySyncedDataAfterRefreshFailure(t *testing.T) {
 	repository := &profileRepository{
-		address:  store.Address{SyncStatus: "failed", LatestSyncedBlock: 90, LastSyncedAt: time.Unix(1, 0)},
+		address:  store.Address{SyncStatus: "failed", NormalSyncedTo: 90, InternalSyncedTo: 90, TokenSyncedTo: 90, LastSyncedAt: time.Unix(1, 0)},
 		activity: store.AddressActivity{Features: store.ProfileFeatures{WindowTransfers: 9}},
 	}
 	result, err := New(repository, time.Now).Get(context.Background(), "ethereum", "0x1")

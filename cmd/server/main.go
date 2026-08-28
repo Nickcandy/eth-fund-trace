@@ -150,6 +150,8 @@ func run(parent context.Context) error {
 	e.GET("/api/v1/trace", traceHandler.Enqueue)
 	e.GET("/api/v1/trace-jobs/latest", traceHandler.LatestJob)
 	e.POST("/api/v1/trace-jobs/:id/stop", traceHandler.Stop)
+	e.POST("/api/v1/trace-jobs/:id/extensions", traceHandler.EnqueueExtension)
+	e.GET("/api/v1/trace-jobs/:id/extensions/latest", traceHandler.LatestExtension)
 	e.GET("/api/v1/trace-jobs/:id", traceHandler.Job)
 	e.GET("/api/v1/risk", httpapi.NewRiskHandler(traceManager).Get)
 	propagationManager := propagation.NewManager(propagation.NewEngine(appStore), appStore)

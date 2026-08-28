@@ -167,9 +167,13 @@ func (e *Engine) Run(ctx context.Context, chain, targetAddress, direction, asset
 	if !found || metadata.SyncStatus != "synced" {
 		return result, fmt.Errorf("propagation target is not synchronized")
 	}
+	_, coveredThrough, covered := metadata.CommonCoverage()
+	if !covered {
+		return result, fmt.Errorf("propagation target has no complete action coverage")
+	}
 	result.DataThroughBlock = dataThroughBlock
-	if result.DataThroughBlock <= 0 || result.DataThroughBlock > metadata.LatestSyncedBlock {
-		result.DataThroughBlock = metadata.LatestSyncedBlock
+	if result.DataThroughBlock <= 0 || result.DataThroughBlock > coveredThrough {
+		result.DataThroughBlock = coveredThrough
 	}
 	if config.MaxHops <= 0 || config.MaxHops > 3 {
 		config.MaxHops = 3

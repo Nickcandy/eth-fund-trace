@@ -398,6 +398,22 @@ func TestClientReportsEachFetchedPage(t *testing.T) {
 	}
 }
 
+func TestClientReportsPageThatReachesRecordLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"1","message":"OK","result":[{"blockNumber":"7","timeStamp":"1","hash":"0xhash","from":"0xfrom","to":"0xto","value":"1"}]}`))
+	}))
+	defer server.Close()
+	client := NewClient(Config{BaseURL: server.URL, PageSize: 1, MaxPages: 3, HTTPClient: server.Client()})
+	var pages []PageProgress
+	_, err := client.ListTransactionsWithProgress(WithRecordLimit(context.Background(), 1), "0xseed", 5, 9, func(page PageProgress) { pages = append(pages, page) })
+	if !errors.Is(err, ErrRecordLimit) {
+		t.Fatalf("error=%v, want record limit", err)
+	}
+	if len(pages) != 1 || pages[0].Items != 1 {
+		t.Fatalf("pages=%+v, want limiting page reported", pages)
+	}
+}
+
 func TestClientSortsDescendingWhenConfigured(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("sort") != "desc" {

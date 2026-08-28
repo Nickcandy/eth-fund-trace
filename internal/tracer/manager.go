@@ -2,6 +2,7 @@ package tracer
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -18,6 +19,7 @@ type JobRepository interface {
 	CreateTraceJob(context.Context, *store.TraceJob) error
 	GetTraceJob(context.Context, primitive.ObjectID) (store.TraceJob, error)
 	FindLatestTraceJob(context.Context, string, string, string, int, string, string) (store.TraceJob, error)
+	FindLatestTraceExtension(context.Context, primitive.ObjectID) (store.TraceJob, error)
 	SaveTraceJob(context.Context, store.TraceJob) error
 	FailInterruptedTraceJobs(context.Context, time.Time) error
 }
@@ -40,6 +42,7 @@ type Manager struct {
 }
 
 var ErrQueueFull = errors.New("trace queue is full")
+var ErrExtensionActive = errors.New("trace extension already running")
 
 func NewManager(graph *Graph, jobs JobRepository, syncJobs SyncJobs) *Manager {
 	return &Manager{graph: graph, jobs: jobs, syncJobs: syncJobs, queue: make(chan primitive.ObjectID, 100), active: make(map[string]primitive.ObjectID), clock: time.Now, cancels: make(map[string]context.CancelFunc)}
@@ -76,6 +79,60 @@ func (m *Manager) Enqueue(ctx context.Context, request Request) (store.TraceJob,
 		m.release(key)
 		return store.TraceJob{}, ErrQueueFull
 	}
+}
+
+func (m *Manager) EnqueueExtension(ctx context.Context, rootID string, request ExtensionRequest) (store.TraceJob, error) {
+	parsed, err := primitive.ObjectIDFromHex(rootID)
+	if err != nil {
+		return store.TraceJob{}, ErrInvalidExtension
+	}
+	root, err := m.jobs.GetTraceJob(ctx, parsed)
+	if err != nil {
+		return store.TraceJob{}, err
+	}
+	if !root.RootTraceJobID.IsZero() || root.Status != "succeeded" && root.Status != "partial" {
+		return store.TraceJob{}, ErrInvalidExtension
+	}
+	request.Chain = root.Chain
+	if err := ValidateExtension(request); err != nil {
+		return store.TraceJob{}, err
+	}
+	rootResult, err := decodeResult(root.Result)
+	if err != nil || len(extensionAnchors(rootResult, request)) == 0 {
+		return store.TraceJob{}, ErrInvalidExtension
+	}
+	key := "extension:" + rootID
+	m.mu.Lock()
+	if _, active := m.active[key]; active {
+		m.mu.Unlock()
+		return store.TraceJob{}, ErrExtensionActive
+	}
+	job := store.TraceJob{
+		Chain: root.Chain, SeedAddress: root.SeedAddress, Direction: request.Direction, Depth: 1, Asset: root.Asset,
+		Status: "queued", CreatedAt: m.clock().UTC(), RuleVersion: traceRuleVersion, RootTraceJobID: parsed,
+		ExtensionAddress: strings.ToLower(request.Address), ExtensionDirection: request.Direction,
+	}
+	if err := m.jobs.CreateTraceJob(ctx, &job); err != nil {
+		m.mu.Unlock()
+		return store.TraceJob{}, err
+	}
+	m.active[key] = job.ID
+	m.mu.Unlock()
+	select {
+	case m.queue <- job.ID:
+		return job, nil
+	default:
+		m.release(key)
+		return store.TraceJob{}, ErrQueueFull
+	}
+}
+
+func (m *Manager) LatestExtension(ctx context.Context, rootID string) (store.TraceJob, error) {
+	parsed, err := primitive.ObjectIDFromHex(rootID)
+	if err != nil {
+		return store.TraceJob{}, err
+	}
+	return m.jobs.FindLatestTraceExtension(ctx, parsed)
 }
 func (m *Manager) Job(ctx context.Context, id string) (store.TraceJob, error) {
 	parsed, err := primitive.ObjectIDFromHex(id)
@@ -146,6 +203,13 @@ func (m *Manager) process(ctx context.Context, id primitive.ObjectID) {
 		return
 	}
 	if job.Status == "stopped" {
+		if !job.RootTraceJobID.IsZero() {
+			m.release("extension:" + job.RootTraceJobID.Hex())
+		}
+		return
+	}
+	if !job.RootTraceJobID.IsZero() {
+		m.processExtension(jobCtx, &job)
 		return
 	}
 	key := queryKey(Query{Chain: job.Chain, Address: job.SeedAddress, Direction: job.Direction, Depth: job.Depth, Asset: job.Asset})
@@ -158,7 +222,21 @@ func (m *Manager) process(ctx context.Context, id primitive.ObjectID) {
 	}
 	request := Query{Chain: job.Chain, Address: job.SeedAddress, Direction: job.Direction, Depth: job.Depth, Asset: job.Asset}
 	partialSync := false
+	seedHighFrequency := false
 	if m.syncJobs != nil {
+		metadata, found, metadataErr := m.graph.repository.FindAddress(jobCtx, job.Chain, job.SeedAddress)
+		if metadataErr != nil {
+			m.fail(ctx, &job, metadataErr)
+			return
+		}
+		seedHighFrequency = found && isHighFrequencyAddress(metadata)
+		if seedHighFrequency {
+			partialSync = true
+			job.ErrorCode = "high_frequency"
+			job.Error = "high_frequency"
+		}
+	}
+	if m.syncJobs != nil && !seedHighFrequency {
 		syncJob, syncErr := m.syncJobs.Enqueue(ctx, syncer.Request{Chain: job.Chain, Address: job.SeedAddress, NeighborLimit: 0})
 		if syncErr != nil {
 			m.fail(ctx, &job, syncErr)
@@ -247,6 +325,137 @@ func (m *Manager) process(ctx context.Context, id primitive.ObjectID) {
 		m.fail(ctx, &job, errors.New("failed to persist trace job"))
 		return
 	}
+}
+
+func (m *Manager) processExtension(ctx context.Context, job *store.TraceJob) {
+	key := "extension:" + job.RootTraceJobID.Hex()
+	defer m.release(key)
+	root, err := m.jobs.GetTraceJob(ctx, job.RootTraceJobID)
+	if err != nil {
+		m.fail(ctx, job, err)
+		return
+	}
+	rootResult, err := decodeResult(root.Result)
+	if err != nil {
+		m.fail(ctx, job, err)
+		return
+	}
+	request := ExtensionRequest{Chain: job.Chain, Address: job.ExtensionAddress, Direction: job.ExtensionDirection, Depth: 1}
+	anchors := extensionAnchors(rootResult, request)
+	job.Status, job.StartedAt = "waiting_sync", m.clock().UTC()
+	if !m.save(ctx, job) {
+		m.fail(ctx, job, errors.New("failed to persist trace extension"))
+		return
+	}
+	if m.syncJobs != nil {
+		startBlock, endBlock := extensionSyncBounds(anchors)
+		syncJob, syncErr := m.syncJobs.Enqueue(ctx, syncer.Request{Chain: job.Chain, Address: job.ExtensionAddress, StartBlock: startBlock, EndBlock: endBlock, NeighborLimit: 0})
+		if syncErr != nil {
+			m.fail(ctx, job, syncErr)
+			return
+		}
+		job.SyncJobIDs = append(job.SyncJobIDs, syncJob.ID.Hex())
+		if !m.save(ctx, job) {
+			m.fail(ctx, job, errors.New("failed to persist trace extension"))
+			return
+		}
+		if _, syncErr = m.waitSync(ctx, syncJob.ID.Hex()); syncErr != nil {
+			if !errors.Is(syncErr, context.Canceled) {
+				m.fail(ctx, job, syncErr)
+			}
+			return
+		}
+	}
+	job.Status = "running"
+	if !m.save(ctx, job) {
+		m.fail(ctx, job, errors.New("failed to persist trace extension"))
+		return
+	}
+	extension, traceErr := m.graph.ExtendBranch(ctx, rootResult, request)
+	for traceErr != nil {
+		var unsynced AddressNotSyncedError
+		if !errors.As(traceErr, &unsynced) || m.syncJobs == nil {
+			break
+		}
+		job.Status = "waiting_sync"
+		if !m.save(ctx, job) {
+			m.fail(ctx, job, errors.New("failed to persist trace extension"))
+			return
+		}
+		syncJob, syncErr := m.syncJobs.Enqueue(ctx, syncer.Request{Chain: unsynced.Chain, Address: unsynced.Address, StartBlock: unsynced.StartBlock, EndBlock: unsynced.EndBlock, NeighborLimit: 0})
+		if syncErr != nil {
+			traceErr = syncErr
+			break
+		}
+		job.SyncJobIDs = append(job.SyncJobIDs, syncJob.ID.Hex())
+		if !m.save(ctx, job) {
+			m.fail(ctx, job, errors.New("failed to persist trace extension"))
+			return
+		}
+		if _, syncErr = m.waitSync(ctx, syncJob.ID.Hex()); syncErr != nil {
+			traceErr = syncErr
+			break
+		}
+		job.Status = "running"
+		extension, traceErr = m.graph.ExtendBranch(ctx, rootResult, request)
+	}
+	if traceErr != nil {
+		m.fail(ctx, job, traceErr)
+		return
+	}
+	root, err = m.jobs.GetTraceJob(ctx, job.RootTraceJobID)
+	if err != nil {
+		m.fail(ctx, job, err)
+		return
+	}
+	rootResult, err = decodeResult(root.Result)
+	if err != nil {
+		m.fail(ctx, job, err)
+		return
+	}
+	merged := MergeResults(rootResult, extension)
+	root.Result, root.VisitedNodes, root.EdgeCount = merged, len(merged.Nodes), len(merged.Edges)
+	if merged.DataStatus == "partial" {
+		root.Status = "partial"
+	}
+	if err := m.jobs.SaveTraceJob(ctx, root); err != nil {
+		m.fail(ctx, job, err)
+		return
+	}
+	job.Status, job.Result, job.CurrentDepth = "succeeded", extension, 1
+	if extension.DataStatus == "partial" {
+		job.Status = "partial"
+	}
+	job.VisitedNodes, job.EdgeCount, job.FinishedAt = len(extension.Nodes), len(extension.Edges), m.clock().UTC()
+	if !m.save(ctx, job) {
+		m.fail(ctx, job, errors.New("failed to persist trace extension"))
+	}
+}
+
+func extensionSyncBounds(anchors []extensionAnchor) (int64, int64) {
+	var start, end int64
+	for _, anchor := range anchors {
+		if anchor.FromBlock > 0 && (start == 0 || anchor.FromBlock < start) {
+			start = anchor.FromBlock
+		}
+		if anchor.ToBlock > end {
+			end = anchor.ToBlock
+		}
+	}
+	return start, end
+}
+
+func decodeResult(value any) (Result, error) {
+	if result, ok := value.(Result); ok {
+		return result, nil
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return Result{}, err
+	}
+	var result Result
+	err = json.Unmarshal(data, &result)
+	return result, err
 }
 func (m *Manager) fail(ctx context.Context, job *store.TraceJob, err error) {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {

@@ -302,6 +302,9 @@ func (c *APIClient) list(ctx context.Context, address string, startBlock, endBlo
 			pageTransfers[i].TransactionGroup = fmt.Sprintf("%d:%s", c.config.ChainID, strings.ToLower(pageTransfers[i].TxHash))
 		}
 		transfers = append(transfers, pageTransfers...)
+		if progress != nil {
+			progress(PageProgress{Action: action, Address: address, StartBlock: startBlock, EndBlock: endBlock, Page: page, Items: len(items)})
+		}
 		if limit := RecordLimit(ctx); limit > 0 && int64(len(transfers)) >= limit {
 			return transfers[:limit], ErrRecordLimit
 		}
@@ -316,9 +319,6 @@ func (c *APIClient) list(ctx context.Context, address string, startBlock, endBlo
 			if err != nil {
 				return nil, err
 			}
-		}
-		if progress != nil {
-			progress(PageProgress{Action: action, Address: address, StartBlock: startBlock, EndBlock: endBlock, Page: page, Items: len(items)})
 		}
 		if len(items) < c.config.PageSize {
 			return transfers, nil

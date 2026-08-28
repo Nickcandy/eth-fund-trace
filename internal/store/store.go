@@ -87,6 +87,7 @@ func indexModels() map[string][]mongo.IndexModel {
 		TraceJobsCollection: {
 			{Keys: bson.D{{Key: "status", Value: 1}, {Key: "createdAt", Value: 1}}, Options: options.Index().SetName("idx_trace_jobs_status_created")},
 			{Keys: bson.D{{Key: "chain", Value: 1}, {Key: "seedAddress", Value: 1}, {Key: "createdAt", Value: -1}}, Options: options.Index().SetName("idx_trace_jobs_seed_created")},
+			{Keys: bson.D{{Key: "rootTraceJobId", Value: 1}, {Key: "createdAt", Value: -1}}, Options: options.Index().SetName("idx_trace_jobs_root_created")},
 		},
 		PropagationJobsCollection: {
 			{Keys: bson.D{{Key: "idempotencyKey", Value: 1}}, Options: options.Index().SetUnique(true).SetName("uq_propagation_jobs_idempotency")},
@@ -160,18 +161,66 @@ func (s *Store) SetAddressSyncing(ctx context.Context, chain string, chainID int
 	return err
 }
 
+var syncActions = []string{"txlist", "txlistinternal", "tokentx"}
+
+func (s *Store) EnsureAddressActionCounts(ctx context.Context, chain string, chainID int64, address string, limit int64) (map[string]int64, error) {
+	var metadata struct {
+		Counts map[string]int64 `bson:"actionRecordCounts"`
+	}
+	err := s.db.Collection(AddressesCollection).FindOne(ctx,
+		bson.D{{Key: "chain", Value: chain}, {Key: "address", Value: address}},
+		options.FindOne().SetProjection(bson.D{{Key: "actionRecordCounts", Value: 1}}),
+	).Decode(&metadata)
+	if err != nil && !errors.Is(err, mongo.ErrNoDocuments) {
+		return nil, err
+	}
+	if metadata.Counts != nil {
+		return metadata.Counts, nil
+	}
+
+	counts := make(map[string]int64, len(syncActions))
+	for _, action := range syncActions {
+		filter := bson.D{{Key: "chain", Value: chain}, {Key: "source", Value: action}, {Key: "$or", Value: bson.A{
+			bson.D{{Key: "from", Value: address}},
+			bson.D{{Key: "to", Value: address}},
+		}}}
+		count, countErr := s.db.Collection(TransfersCollection).CountDocuments(ctx, filter, options.Count().SetLimit(limit))
+		if countErr != nil {
+			return nil, countErr
+		}
+		counts[action] = count
+	}
+	_, err = s.db.Collection(AddressesCollection).UpdateOne(ctx,
+		bson.D{{Key: "chain", Value: chain}, {Key: "address", Value: address}},
+		bson.D{
+			{Key: "$set", Value: bson.D{{Key: "actionRecordCounts", Value: counts}}},
+			{Key: "$setOnInsert", Value: bson.D{{Key: "chainId", Value: chainID}, {Key: "syncStatus", Value: "discovered"}}},
+		}, options.Update().SetUpsert(true))
+	return counts, err
+}
+
+func (s *Store) AddAddressActionRecords(ctx context.Context, chain, address, action string, count int64) error {
+	if count <= 0 {
+		return nil
+	}
+	if action != "txlist" && action != "txlistinternal" && action != "tokentx" {
+		return fmt.Errorf("invalid sync action: %s", action)
+	}
+	_, err := s.db.Collection(AddressesCollection).UpdateOne(ctx,
+		bson.D{{Key: "chain", Value: chain}, {Key: "address", Value: address}},
+		bson.D{{Key: "$inc", Value: bson.D{{Key: "actionRecordCounts." + action, Value: count}}}})
+	return err
+}
+
 func (s *Store) CompleteAddressSync(ctx context.Context, chain, address string, coverage AddressSyncCoverage, syncedAt time.Time) error {
-	earliest := max(coverage.NormalFrom, max(coverage.InternalFrom, coverage.TokenFrom))
-	latest := min(coverage.NormalTo, min(coverage.InternalTo, coverage.TokenTo))
-	if latest < earliest {
+	commonFrom := max(coverage.NormalFrom, max(coverage.InternalFrom, coverage.TokenFrom))
+	commonTo := min(coverage.NormalTo, min(coverage.InternalTo, coverage.TokenTo))
+	if commonTo < commonFrom {
 		return fmt.Errorf("invalid address sync coverage: no common completed range")
 	}
 	_, err := s.db.Collection(AddressesCollection).UpdateOne(ctx,
 		bson.D{{Key: "chain", Value: chain}, {Key: "address", Value: address}},
 		bson.D{{Key: "$set", Value: bson.D{
-			{Key: "earliestSyncedBlock", Value: earliest},
-			{Key: "historySyncedToBlock", Value: latest},
-			{Key: "latestSyncedBlock", Value: latest},
 			{Key: "normalSyncedFrom", Value: coverage.NormalFrom},
 			{Key: "normalSyncedTo", Value: coverage.NormalTo},
 			{Key: "internalSyncedFrom", Value: coverage.InternalFrom},
@@ -186,12 +235,10 @@ func (s *Store) CompleteAddressSync(ctx context.Context, chain, address string, 
 	return err
 }
 
-func (s *Store) CompleteAddressPartial(ctx context.Context, chain, address string, latest, maxRecordsPerAction int64, reason string, syncedAt time.Time) error {
+func (s *Store) CompleteAddressPartial(ctx context.Context, chain, address string, _ int64, maxRecordsPerAction int64, reason string, syncedAt time.Time) error {
 	_, err := s.db.Collection(AddressesCollection).UpdateOne(ctx,
 		bson.D{{Key: "chain", Value: chain}, {Key: "address", Value: address}},
 		bson.D{{Key: "$set", Value: bson.D{
-			{Key: "historySyncedToBlock", Value: latest},
-			{Key: "latestSyncedBlock", Value: latest},
 			{Key: "lastSyncedAt", Value: syncedAt},
 			{Key: "syncStatus", Value: "partial"},
 			{Key: "syncError", Value: reason},
@@ -220,7 +267,7 @@ func (s *Store) BulkUpsertTransfers(ctx context.Context, transfers []Transfer) (
 	if err != nil {
 		return 0, err
 	}
-	return result.UpsertedCount + result.ModifiedCount, nil
+	return result.UpsertedCount, nil
 }
 
 func (s *Store) UpsertDiscoveredAddresses(ctx context.Context, chain string, chainID int64, addresses []string, observedAt time.Time) error {
@@ -542,8 +589,19 @@ func (s *Store) FindLatestTraceJob(ctx context.Context, chain, seedAddress, dire
 		{Key: "depth", Value: depth},
 		{Key: "asset", Value: asset},
 		{Key: "ruleVersion", Value: ruleVersion},
+		{Key: "rootTraceJobId", Value: bson.D{{Key: "$exists", Value: false}}},
 	}
 	err := s.db.Collection(TraceJobsCollection).FindOne(ctx, filter, options.FindOne().SetSort(bson.D{{Key: "createdAt", Value: -1}})).Decode(&job)
+	job.Result = normalizeBSON(job.Result)
+	return job, err
+}
+
+func (s *Store) FindLatestTraceExtension(ctx context.Context, rootID primitive.ObjectID) (TraceJob, error) {
+	var job TraceJob
+	err := s.db.Collection(TraceJobsCollection).FindOne(ctx,
+		bson.D{{Key: "rootTraceJobId", Value: rootID}},
+		options.FindOne().SetSort(bson.D{{Key: "createdAt", Value: -1}}),
+	).Decode(&job)
 	job.Result = normalizeBSON(job.Result)
 	return job, err
 }

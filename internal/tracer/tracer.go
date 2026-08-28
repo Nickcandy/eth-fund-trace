@@ -20,7 +20,7 @@ var ErrAddressNotSynced = errors.New("address is not synced")
 
 const (
 	traceRuleVersion       = "trace-v1"
-	traceTransferRecordCap = 200_000
+	traceTransferRecordCap = 50_000
 )
 
 type AddressNotSyncedError struct {
@@ -85,6 +85,7 @@ type Edge struct {
 	Kind                  string               `bson:"kind" json:"kind"`
 	Depth                 int                  `bson:"depth" json:"depth"`
 	Path                  []string             `bson:"path" json:"path"`
+	TxHash                string               `bson:"txHash,omitempty" json:"txHash,omitempty"`
 	FirstBlock            int64                `bson:"firstBlock,omitempty" json:"firstBlock,omitempty"`
 	FirstTime             time.Time            `bson:"firstTime,omitempty" json:"firstTime,omitempty"`
 	LatestBlock           int64                `bson:"latestBlock,omitempty" json:"latestBlock,omitempty"`
@@ -92,6 +93,9 @@ type Edge struct {
 	ConversionStatus      string               `bson:"conversionStatus,omitempty" json:"conversionStatus,omitempty"`
 	ConversionScanned     int                  `bson:"conversionScanned,omitempty" json:"conversionScanned,omitempty"`
 	ConversionEvidence    []ConversionEvidence `bson:"conversionEvidence,omitempty" json:"conversionEvidence,omitempty"`
+	Protocol              string               `bson:"protocol,omitempty" json:"protocol,omitempty"`
+	ProtocolAction        string               `bson:"protocolAction,omitempty" json:"protocolAction,omitempty"`
+	ProtocolMemo          string               `bson:"protocolMemo,omitempty" json:"protocolMemo,omitempty"`
 }
 
 // ConversionEvidence is a bounded transaction-level explanation for a semantic conversion edge.
@@ -187,6 +191,10 @@ func (g *Graph) addressCovered(address store.Address, from, through int64) bool 
 		address.TokenSyncedFrom <= from && address.TokenSyncedTo >= through
 }
 
+func isHighFrequencyAddress(address store.Address) bool {
+	return address.SyncStatus == "partial" && address.SyncError == "high_frequency"
+}
+
 func addressIdentity(address store.Address) store.AddressIdentity {
 	addressType := address.AddressType
 	if addressType == "" {
@@ -226,14 +234,19 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 	if err != nil {
 		return Result{}, err
 	}
-	if !found || !g.addressCovered(metadata, g.requiredStartBlocks[q.Chain], metadata.LatestSyncedBlock) {
+	_, dataThroughBlock, covered := metadata.CommonCoverage()
+	highFrequency := isHighFrequencyAddress(metadata)
+	if g.existingDataOnly && !covered {
+		covered = true
+	}
+	if !found || !highFrequency && (!covered || !g.addressCovered(metadata, g.requiredStartBlocks[q.Chain], dataThroughBlock)) {
 		return Result{}, AddressNotSyncedError{Chain: q.Chain, Address: seed}
 	}
 	dataStatus := "synced"
 	if g.existingDataOnly || metadata.SyncStatus == "partial" {
 		dataStatus = "partial"
 	}
-	result := Result{DataThroughBlock: metadata.LatestSyncedBlock, DataStatus: dataStatus, RuleVersion: traceRuleVersion}
+	result := Result{DataThroughBlock: dataThroughBlock, DataStatus: dataStatus, RuleVersion: traceRuleVersion}
 	bridgeSeen := make(map[string]bool)
 	seedLabels, err := g.repository.ListLabels(ctx, q.Chain, seed)
 	if err != nil {
@@ -247,9 +260,13 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 	frontier := make([]branchState, 0, len(directions)*len(assets))
 	visitedStates := make(map[string]bool, len(directions)*len(assets))
 	visitedNodes := map[string]bool{seed: true}
-	seedTerminal := metadata.IsTerminal || hasTerminalLabel(seedLabels)
+	seedTerminal := metadata.IsTerminal || highFrequency || hasTerminalLabel(seedLabels)
 	seedIdentity := addressIdentity(metadata)
-	result.Nodes = append(result.Nodes, Node{Chain: q.Chain, Address: seed, Depth: 0, Terminal: seedTerminal, AddressType: seedIdentity.AddressType, Protocol: seedIdentity.Protocol, Roles: seedIdentity.Roles})
+	seedNode := Node{Chain: q.Chain, Address: seed, Depth: 0, Terminal: seedTerminal, AddressType: seedIdentity.AddressType, Protocol: seedIdentity.Protocol, Roles: seedIdentity.Roles}
+	if highFrequency {
+		seedNode.StopReason = "high_frequency"
+	}
+	result.Nodes = append(result.Nodes, seedNode)
 	for _, direction := range directions {
 		for _, asset := range assets {
 			state := branchState{Address: seed, Direction: direction, AssetMode: asset.AssetMode, Asset: asset.Asset, Path: []string{seed}}
@@ -325,8 +342,9 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 				if metadataErr != nil {
 					return metadataErr
 				}
+				otherHighFrequency := isHighFrequencyAddress(otherMetadata)
 				identity := addressIdentity(otherMetadata)
-				if identity.AddressType == "unknown" && g.inspector != nil && !g.existingDataOnly {
+				if identity.AddressType == "unknown" && g.inspector != nil && !g.existingDataOnly && !otherHighFrequency {
 					identity, metadataErr = g.inspector.InspectAddress(ctx, q.Chain, other)
 					if metadataErr != nil {
 						return metadataErr
@@ -340,13 +358,13 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 					otherMetadata.Roles = identity.Roles
 				}
 				contract := identity.AddressType == "contract"
-				requiredFrom, requiredThrough := g.requiredStartBlocks[q.Chain], metadata.LatestSyncedBlock
+				requiredFrom, requiredThrough := g.requiredStartBlocks[q.Chain], dataThroughBlock
 				if state.Direction == "out" {
 					requiredFrom = summary.Representative.BlockNumber
 				} else {
 					requiredThrough = summary.Representative.BlockNumber
 				}
-				if !contract && (!otherFound || !g.addressCovered(otherMetadata, requiredFrom, requiredThrough)) {
+				if !contract && !otherHighFrequency && (!otherFound || !g.addressCovered(otherMetadata, requiredFrom, requiredThrough)) {
 					dependency := AddressNotSyncedError{Chain: q.Chain, Address: other}
 					if state.Direction == "out" {
 						dependency.StartBlock = summary.Representative.BlockNumber
@@ -369,7 +387,7 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 				if labelsErr != nil {
 					return labelsErr
 				}
-				terminal := otherMetadata.IsTerminal || hasTerminalLabel(otherLabels)
+				terminal := otherMetadata.IsTerminal || otherHighFrequency || hasTerminalLabel(otherLabels)
 				visitedStates[stateKey] = true
 				result.branchStates = append(result.branchStates, nextState)
 				isNewNode := !visitedNodes[other]
@@ -378,7 +396,11 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 					next = append(next, nextState)
 				}
 				if isNewNode {
-					result.Nodes = append(result.Nodes, Node{Chain: q.Chain, Address: other, Depth: depth + 1, Terminal: terminal, AddressType: identity.AddressType, Protocol: identity.Protocol, Roles: identity.Roles})
+					node := Node{Chain: q.Chain, Address: other, Depth: depth + 1, Terminal: terminal, AddressType: identity.AddressType, Protocol: identity.Protocol, Roles: identity.Roles}
+					if otherHighFrequency {
+						node.StopReason = "high_frequency"
+					}
+					result.Nodes = append(result.Nodes, node)
 				}
 				result.Paths = append(result.Paths, path)
 			}
@@ -412,11 +434,11 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 				setNodeTerminal(result.Nodes, state.Address, "cross_chain_bridge")
 				continue
 			}
-			if state.EnteringQuery.Address != "" && state.Contract && g.existingDataOnly {
+			if state.EnteringQuery.Address != "" && state.Contract && !isTHORChainVault(state.Identity) && g.existingDataOnly {
 				setNodeTerminal(result.Nodes, state.Address, "unsupported_contract")
 				continue
 			}
-			if state.EnteringQuery.Address != "" && state.Contract {
+			if state.EnteringQuery.Address != "" && state.Contract && !isTHORChainVault(state.Identity) {
 				if g.analyzer == nil || q.Chain != "ethereum" || state.EnteringTx.TxHash == "" {
 					setNodeTerminal(result.Nodes, state.Address, "unsupported_contract")
 					continue
@@ -433,6 +455,7 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 					return Result{}, conversionErr
 				}
 				if ok {
+					edgeStart := len(result.Edges)
 					aggregates := aggregateConversions([]analyzedConversion{conversion})
 					outputState := state
 					outputState.Amount = ""
@@ -451,6 +474,22 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 						}
 						if err := expand(outputState, summaries, evidence); err != nil {
 							return Result{}, err
+						}
+					}
+					if conversion.Protocol != "" {
+						for index := edgeStart; index < len(result.Edges); index++ {
+							result.Edges[index].Protocol = conversion.Protocol
+							result.Edges[index].ProtocolAction = conversion.ProtocolAction
+							result.Edges[index].ProtocolMemo = conversion.ProtocolMemo
+						}
+						identity, identityErr := g.markTHORChainVault(ctx, q.Chain, conversion.VaultAddress, result.Nodes, next)
+						if identityErr != nil {
+							return Result{}, identityErr
+						}
+						for index := range next {
+							if strings.EqualFold(next[index].Address, conversion.VaultAddress) {
+								next[index].Identity = identity
+							}
 						}
 					}
 				} else {
@@ -595,7 +634,7 @@ func edgeFromSummary(summary store.CounterpartySummary, depth int, path []string
 	if kind == "" {
 		kind = "transfer"
 	}
-	return Edge{Chain: summary.Chain, From: summary.From, To: summary.To, AssetType: summary.AssetType, Asset: summary.Asset, Symbol: summary.Symbol, Decimals: summary.Decimals, TokenMetadataComplete: summary.TokenMetadataComplete, TotalAmount: summary.TotalAmount, TransferCount: summary.TransferCount, Kind: kind, Depth: depth, Path: path, FirstBlock: summary.EarliestBlock, FirstTime: summary.EarliestTime, LatestBlock: summary.LatestBlock, LatestTime: summary.LatestTime}
+	return Edge{Chain: summary.Chain, From: summary.From, To: summary.To, AssetType: summary.AssetType, Asset: summary.Asset, Symbol: summary.Symbol, Decimals: summary.Decimals, TokenMetadataComplete: summary.TokenMetadataComplete, TotalAmount: summary.TotalAmount, TransferCount: summary.TransferCount, Kind: kind, Depth: depth, Path: path, TxHash: summary.Representative.TxHash, FirstBlock: summary.EarliestBlock, FirstTime: summary.EarliestTime, LatestBlock: summary.LatestBlock, LatestTime: summary.LatestTime}
 }
 
 func transferSummary(transfer store.Transfer) store.CounterpartySummary {
@@ -627,8 +666,12 @@ func summaryAsset(summary store.CounterpartySummary) (string, string) {
 }
 
 type analyzedConversion struct {
-	Transfer store.Transfer
-	Evidence ConversionEvidence
+	Transfer       store.Transfer
+	Evidence       ConversionEvidence
+	Protocol       string
+	ProtocolAction string
+	ProtocolMemo   string
+	VaultAddress   string
 }
 
 type conversionAggregate struct {
@@ -715,6 +758,13 @@ func (g *Graph) conversionTransfer(ctx context.Context, chain string, state bran
 	if !strings.EqualFold(analysis.To, state.Address) && !strings.EqualFold(analysis.EntryContract, state.Address) && !conversionUsesExecutor(analysis.Conversions, state.Address) {
 		return analyzedConversion{}, false, nil
 	}
+	if transfer, ok := thorchainMigrationTransfer(analysis, state); ok {
+		vaultAddress := analysis.ProtocolDestination
+		if state.Direction == "in" {
+			vaultAddress = analysis.From
+		}
+		return analyzedConversion{Transfer: transfer, Protocol: "thorchain", ProtocolAction: analysis.ProtocolAction, ProtocolMemo: analysis.ProtocolMemo, VaultAddress: vaultAddress}, true, nil
+	}
 	for _, conversion := range analysis.Conversions {
 		transfer, ok := transferFromConversion(analysis, state, conversion)
 		if !ok {
@@ -724,6 +774,84 @@ func (g *Graph) conversionTransfer(ctx context.Context, chain string, state bran
 	}
 	transfer, ok, err := legacyConversionTransfer(analysis, state)
 	return analyzedConversion{Transfer: transfer, Evidence: ConversionEvidence{TxHash: analysis.TxHash, Protocol: "uniswap", Version: "v3", Status: "complete", TokenIn: state.Asset, TokenOut: transfer.Asset, Evidence: []string{"verified Uniswap V3 pool logs"}}}, ok, err
+}
+
+func (g *Graph) markTHORChainVault(ctx context.Context, chain, address string, nodes []Node, states []branchState) (store.AddressIdentity, error) {
+	metadata, _, err := g.repository.FindAddress(ctx, chain, address)
+	if err != nil {
+		return store.AddressIdentity{}, err
+	}
+	identity := addressIdentity(metadata)
+	identity.Protocol = "thorchain"
+	if !containsRole(identity.Roles, "thorchain_vault") {
+		identity.Roles = append(identity.Roles, "thorchain_vault")
+	}
+	if err := g.repository.SetAddressIdentity(ctx, chain, address, identity); err != nil {
+		return store.AddressIdentity{}, err
+	}
+	for index := range nodes {
+		if nodes[index].Chain == chain && strings.EqualFold(nodes[index].Address, address) {
+			nodes[index].Protocol = identity.Protocol
+			nodes[index].Roles = identity.Roles
+		}
+	}
+	for index := range states {
+		if states[index].Address == address {
+			states[index].Identity = identity
+		}
+	}
+	return identity, nil
+}
+
+func containsRole(roles []string, role string) bool {
+	for _, value := range roles {
+		if value == role {
+			return true
+		}
+	}
+	return false
+}
+
+func isTHORChainVault(identity store.AddressIdentity) bool {
+	return identity.Protocol == "thorchain" && containsRole(identity.Roles, "thorchain_vault")
+}
+
+func thorchainMigrationTransfer(analysis store.TransactionAnalysis, state branchState) (store.Transfer, bool) {
+	if analysis.ProtocolAction != "vault_migration" || analysis.ProtocolDestination == "" || analysis.ProtocolAmount == "" || !verifiedTHORChainMigrationAnalysis(analysis) {
+		return store.Transfer{}, false
+	}
+	assetMode, asset := transferAsset(state.EnteringTx)
+	protocolMode, protocolAsset := "contract", strings.ToLower(analysis.ProtocolAsset)
+	if strings.EqualFold(analysis.ProtocolAsset, "ETH") {
+		protocolMode, protocolAsset = "eth", "ETH"
+	}
+	if assetMode != protocolMode || !strings.EqualFold(asset, protocolAsset) || transferAmount(state.EnteringTx) != analysis.ProtocolAmount {
+		return store.Transfer{}, false
+	}
+	if state.Direction == "in" {
+		return semanticTransfer(analysis, analysis.From, state.Address, analysis.ProtocolAsset, analysis.ProtocolAmount, "thorchain_vault_migration"), true
+	}
+	return semanticTransfer(analysis, state.Address, analysis.ProtocolDestination, analysis.ProtocolAsset, analysis.ProtocolAmount, "thorchain_vault_migration"), true
+}
+
+func verifiedTHORChainMigrationAnalysis(analysis store.TransactionAnalysis) bool {
+	if !analysis.Succeeded || analysis.Quality.Status != "complete" || analysis.ProtocolAction != "vault_migration" {
+		return false
+	}
+	if strings.EqualFold(analysis.ProtocolAsset, "ETH") {
+		for _, call := range analysis.InternalCalls {
+			if !call.IsError && strings.EqualFold(call.From, analysis.To) && strings.EqualFold(call.To, analysis.ProtocolDestination) && call.Value == analysis.ProtocolAmount {
+				return true
+			}
+		}
+		return false
+	}
+	for _, transfer := range analysis.Transfers {
+		if strings.EqualFold(transfer.Token, analysis.ProtocolAsset) && strings.EqualFold(transfer.From, analysis.To) && strings.EqualFold(transfer.To, analysis.ProtocolDestination) && transfer.Amount == analysis.ProtocolAmount {
+			return true
+		}
+	}
+	return false
 }
 
 func conversionUsesExecutor(conversions []store.SwapConversion, address string) bool {

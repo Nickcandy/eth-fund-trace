@@ -17,7 +17,36 @@ type TraceProvider interface {
 	Job(context.Context, string) (store.TraceJob, error)
 	LatestJob(context.Context, tracer.Query) (store.TraceJob, error)
 	Stop(context.Context, string) (store.TraceJob, error)
+	EnqueueExtension(context.Context, string, tracer.ExtensionRequest) (store.TraceJob, error)
+	LatestExtension(context.Context, string) (store.TraceJob, error)
 }
+
+func (h *TraceHandler) EnqueueExtension(c echo.Context) error {
+	var request tracer.ExtensionRequest
+	if err := c.Bind(&request); err != nil {
+		return writeError(c, http.StatusBadRequest, "invalid_request", "invalid extension request", false)
+	}
+	job, err := h.manager.EnqueueExtension(c.Request().Context(), c.Param("id"), request)
+	if errors.Is(err, tracer.ErrExtensionActive) {
+		return writeError(c, http.StatusConflict, "extension_active", err.Error(), true)
+	}
+	if err != nil {
+		return writeError(c, http.StatusBadRequest, "invalid_request", err.Error(), false)
+	}
+	return c.JSON(http.StatusAccepted, map[string]any{"traceJobId": job.ID.Hex(), "status": job.Status})
+}
+
+func (h *TraceHandler) LatestExtension(c echo.Context) error {
+	job, err := h.manager.LatestExtension(c.Request().Context(), c.Param("id"))
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return writeError(c, http.StatusNotFound, "trace_job_not_found", "trace extension not found", false)
+	}
+	if err != nil {
+		return writeError(c, http.StatusBadRequest, "invalid_request", err.Error(), false)
+	}
+	return c.JSON(http.StatusOK, job)
+}
+
 type TraceHandler struct{ manager TraceProvider }
 
 func NewTraceHandler(manager TraceProvider) *TraceHandler { return &TraceHandler{manager: manager} }

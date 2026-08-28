@@ -53,6 +53,32 @@ describe("buildGraphModel", () => {
 	expect(model.edges[0].conversionEvidence?.[0]).toMatchObject({ txHash: "0xswap", liquidityProvider: downstream });
   });
 
+  it("combines a verified reverse swap pair into one bidirectional display edge", () => {
+    const value = result();
+    value.edges = [
+      { chain: "ethereum", txHash: "0xswap", from: seed, to: downstream, assetType: "native", asset: "ETH", totalAmount: "100", transferCount: 1, kind: "transfer", depth: 1, path: [seed, downstream] },
+      { chain: "ethereum", txHash: "0xswap", from: downstream, to: seed, assetType: "erc20", asset: "0x0000000000000000000000000000000000000010", symbol: "USDC", decimals: 6, tokenMetadataComplete: true, totalAmount: "250", transferCount: 1, kind: "swap", depth: 2, path: [seed, downstream, seed], conversionEvidence: [{ txHash: "0xswap", protocol: "uniswap", version: "v3", status: "complete", tokenIn: "ETH", amountIn: "100", tokenOut: "USDC", amountOut: "250", evidence: ["verified logs"] }] },
+    ];
+
+    const model = buildGraphModel(value, { chain: "ethereum", address: seed });
+    expect(model.edges).toHaveLength(1);
+    expect(model.edges[0]).toMatchObject({ bidirectional: true, kind: "swap" });
+    expect(model.edges[0].swapLegs).toHaveLength(2);
+  });
+
+  it("does not combine swap legs with different transaction hashes", () => {
+    const value = result();
+    value.edges[0] = { ...value.edges[0], txHash: "0xin", from: seed, to: downstream };
+    value.edges[1] = { ...value.edges[1], txHash: "0xout", from: downstream, to: seed, kind: "swap", conversionEvidence: [{ txHash: "0xout", protocol: "uniswap", version: "v3", status: "complete", evidence: [] }] };
+    expect(buildGraphModel(value, { chain: "ethereum", address: seed }).edges).toHaveLength(2);
+  });
+
+  it("restores the THORChain vault role from a migration edge", () => {
+    const value = result();
+    value.edges[1] = { ...value.edges[1], kind: "thorchain_vault_migration", protocol: "thorchain", protocolAction: "vault_migration", protocolMemo: "MIGRATE:42" };
+    expect(buildGraphModel(value, { chain: "ethereum", address: seed }).nodes.find((node) => node.address === downstream)).toMatchObject({ protocol: "thorchain", roles: ["thorchain_vault"] });
+  });
+
   it("keeps the same address on another chain distinct from the seed", () => {
     const value = result();
     value.nodes.push({ chain: "base", address: seed, depth: 2, terminal: false });

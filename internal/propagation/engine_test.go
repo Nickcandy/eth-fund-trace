@@ -250,7 +250,7 @@ func TestRunSerializesEmptyCollectionsAsArrays(t *testing.T) {
 func graphRepository(addresses []string) *engineRepository {
 	r := &engineRepository{addresses: map[string]store.Address{}, labels: map[string][]store.Label{}, assets: map[string]store.AssetChannelResult{}, candidates: map[string]store.CandidateResult{}, analyses: map[string]store.TransactionAnalysis{}, bridges: map[string][]store.CrossChainLink{}}
 	for _, value := range addresses {
-		r.addresses[nodeKey("ethereum", value)] = store.Address{Chain: "ethereum", Address: value, SyncStatus: "synced", LatestSyncedBlock: 100}
+		r.addresses[nodeKey("ethereum", value)] = store.Address{Chain: "ethereum", Address: value, SyncStatus: "synced", NormalSyncedTo: 100, InternalSyncedTo: 100, TokenSyncedTo: 100}
 	}
 	return r
 }

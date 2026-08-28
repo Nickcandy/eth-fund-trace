@@ -57,7 +57,7 @@ async function mockAPI(page: Page) {
       return json({ id: "6a8a8c307fcbef52929d0d11", ...label }, 201);
     }
     if (path === "/api/v1/bridge-links") return json({}, 201);
-    if (path.includes("/addresses/")) return json({ address: { chain:"ethereum",chainId:1,address:seed,isContract:false,isTerminal:false,earliestSyncedBlock:0,historySyncedToBlock:19876543,latestSyncedBlock:19876543,lastSyncedAt:"2026-08-22T00:00:00Z",syncStatus:"synced" }, labels: [] });
+    if (path.includes("/addresses/")) return json({ address: { chain:"ethereum",chainId:1,address:seed,isContract:false,isTerminal:false,normalSyncedFrom:0,normalSyncedTo:19876543,internalSyncedFrom:0,internalSyncedTo:19876543,tokenSyncedFrom:0,tokenSyncedTo:19876543,lastSyncedAt:"2026-08-22T00:00:00Z",syncStatus:"synced" }, labels: [] });
     return json({ error: { code: "not_found", message: "not found", retryable: false } }, 404);
   });
 }

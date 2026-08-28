@@ -117,8 +117,8 @@ func TestManagerEnqueueIsIdempotentAndPersistsAssociations(t *testing.T) {
 	label := store.Label{ID: primitive.NewObjectID(), Address: source, Type: "hacker", Source: "manual", RiskLevel: "high", Confidence: 1, ObservedAt: time.Now()}
 	engineRepository := &engineRepository{
 		addresses: map[string]store.Address{
-			nodeKey("ethereum", source): {Chain: "ethereum", Address: source, SyncStatus: "synced", LatestSyncedBlock: 100},
-			nodeKey("ethereum", target): {Chain: "ethereum", Address: target, SyncStatus: "synced", LatestSyncedBlock: 100},
+			nodeKey("ethereum", source): {Chain: "ethereum", Address: source, SyncStatus: "synced", NormalSyncedTo: 100, InternalSyncedTo: 100, TokenSyncedTo: 100},
+			nodeKey("ethereum", target): {Chain: "ethereum", Address: target, SyncStatus: "synced", NormalSyncedTo: 100, InternalSyncedTo: 100, TokenSyncedTo: 100},
 		},
 		labels:     map[string][]store.Label{nodeKey("ethereum", source): {label}},
 		candidates: map[string]store.CandidateResult{"ethereum:" + source + ":out:ETH": {Items: []store.CounterpartySummary{summary(source, target, "0x1")}}},
@@ -149,7 +149,7 @@ func TestManagerEnqueueIsIdempotentAndPersistsAssociations(t *testing.T) {
 
 func TestManagerAcceptsTargetWithoutDeterministicLabel(t *testing.T) {
 	target := "0x0000000000000000000000000000000000000001"
-	engineRepository := &engineRepository{addresses: map[string]store.Address{nodeKey("ethereum", target): {SyncStatus: "synced"}}, labels: map[string][]store.Label{nodeKey("ethereum", target): {{Type: "suspected_hot_wallet", Source: "profile", Confidence: 1}}}}
+	engineRepository := &engineRepository{addresses: map[string]store.Address{nodeKey("ethereum", target): {SyncStatus: "synced", NormalSyncedTo: 100, InternalSyncedTo: 100, TokenSyncedTo: 100}}, labels: map[string][]store.Label{nodeKey("ethereum", target): {{Type: "suspected_hot_wallet", Source: "profile", Confidence: 1}}}}
 	repository := newManagerRepository(engineRepository)
 	job, err := NewManager(NewEngine(repository), repository).Enqueue(context.Background(), Request{Chain: "ethereum", TargetAddress: target})
 	if err != nil {

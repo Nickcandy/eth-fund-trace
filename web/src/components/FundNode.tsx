@@ -1,13 +1,15 @@
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
-import { AlertTriangle, CircleStop, Flame, Focus, Landmark, Plus } from "lucide-react";
+import { AlertTriangle, CircleStop, Flame, Focus, Landmark, LoaderCircle, Minus, Plus } from "lucide-react";
 import { chainLabel, shortAddress } from "../lib/format";
 
 export interface FundNodeData extends Record<string, unknown> {
   address: string; chain: string; seed: boolean; terminal: boolean; hotWallet: boolean; risk: string; labelTypes: string[];
 	addressType?: "unknown" | "eoa" | "contract"; protocol?: string; roles?: string[];
   onFocus: (chain: string, address: string) => void;
-  onExpand: () => void; canExpand: boolean; expanded: boolean;
+  onExpand: (side: "left" | "right") => void;
+  leftExpansion: ExpansionControl; rightExpansion: ExpansionControl;
 }
+export interface ExpansionControl { mode: "expand" | "trace" | "none"; expanded: boolean; status?: "running" | "failed"; disabled?: boolean }
 export type FundFlowNode = Node<FundNodeData, "fund">;
 
 export function FundNode({ data, selected }: NodeProps<FundFlowNode>) {
@@ -28,14 +30,24 @@ export function FundNode({ data, selected }: NodeProps<FundFlowNode>) {
 		{!data.roles?.length && !data.risk.includes("high") && !data.terminal && !data.hotWallet && <span><Landmark size={13} />{data.addressType === "contract" ? "合约" : "地址"}</span>}
       </div>
       <button className="node-focus" title="以此地址重新分析" onClick={(event) => { event.stopPropagation(); data.onFocus(data.chain, data.address); }}><Focus size={14} /></button>
-      {data.canExpand && <button className="node-expand" title={data.expanded ? "收起分支" : "展开相邻分支"} onClick={(event) => { event.stopPropagation(); data.onExpand(); }}><Plus size={14} /></button>}
+      <ExpansionButton side="left" control={data.leftExpansion} onClick={() => data.onExpand("left")} />
+      <ExpansionButton side="right" control={data.rightExpansion} onClick={() => data.onExpand("right")} />
       <Handle id="target-right" className="handle-target" type="target" position={Position.Right} />
       <Handle id="source-right" className="handle-source" type="source" position={Position.Right} />
     </div>
   );
 }
 
+function ExpansionButton({ side, control, onClick }: { side: "left" | "right"; control: ExpansionControl; onClick: () => void }) {
+	if (control.mode === "none") return null;
+	const direction = side === "left" ? "上游" : "下游";
+	const label = control.status === "running" ? `${direction}追踪中` : control.status === "failed" ? `重试${direction}` : control.mode === "trace" ? `继续追踪${direction}` : control.expanded ? `收起${direction}` : `展开${direction}`;
+	return <button className={`node-expand ${side} ${control.expanded ? "expanded" : ""} ${control.status ?? ""}`} title={label} aria-label={label} disabled={control.disabled || control.status === "running"} onClick={(event) => { event.stopPropagation(); onClick(); }}>{control.status === "running" ? <LoaderCircle className="spin" size={14} /> : control.expanded ? <Minus size={14} /> : <Plus size={14} />}<span>{label}</span></button>;
+}
+
 function roleLabel(role: string) {
+	if (role === "router") return "THORChain Router";
+	if (role === "thorchain_vault") return "THORChain Vault";
 	if (role === "kyberswap_router") return "KyberSwap Router";
 	if (role === "kyberswap_executor") return "KyberSwap Executor";
 	if (role === "pool") return "流动性池";

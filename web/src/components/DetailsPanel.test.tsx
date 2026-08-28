@@ -94,6 +94,24 @@ describe("DetailsPanel labels", () => {
 	expect(screen.getByText(/0x67336cec/)).toBeVisible();
 	expect(screen.getByText("internal ETH calls")).toBeVisible();
   });
+
+  it("shows both legs of a combined swap and THORChain vault roles", () => {
+	const node: GraphNodeModel = { id: "ethereum:0x1", chain: "ethereum", address: "0x0000000000000000000000000000000000000001", hop: 1, terminal: false, seed: false, risk: "normal", hotWallet: false, labelTypes: [], addressType: "eoa", protocol: "thorchain", roles: ["thorchain_vault"] };
+	const edge: GraphEdgeModel = {
+	  id: "swap", source: "ethereum:0x1", target: "ethereum:0x2", chain: "ethereum", asset: "ETH", assetSymbol: "ETH", sourceType: "aggregate", kind: "swap", count: 1, totalAmount: "1000000000000000000", bidirectional: true,
+	  swapLegs: [
+		{ source: "ethereum:0x1", target: "ethereum:0x2", assetType: "eth", asset: "ETH", assetSymbol: "ETH", totalAmount: "1000000000000000000", decimals: 18, kind: "transfer" },
+		{ source: "ethereum:0x2", target: "ethereum:0x1", assetType: "erc20", asset: "0xdac", assetSymbol: "USDT", totalAmount: "2500000", decimals: 6, kind: "swap" },
+	  ],
+	};
+	const { rerender } = render(<DetailsPanel node={node} labels={[]} onLabel={vi.fn()} onClose={() => undefined} onFocus={() => undefined} />);
+	expect(screen.getByText("THORChain Vault")).toBeVisible();
+	rerender(<DetailsPanel edge={edge} labels={[]} onLabel={vi.fn()} onClose={() => undefined} onFocus={() => undefined} />);
+	expect(screen.getByText("1 笔已确认 Swap")).toBeVisible();
+	expect(screen.getByText(/1 ETH/)).toBeVisible();
+	expect(screen.getByText(/2.5 USDT/)).toBeVisible();
+	expect(screen.getByText("资产双向交换")).toBeVisible();
+  });
 });
 
 function propagationResult(): PropagationResult {
