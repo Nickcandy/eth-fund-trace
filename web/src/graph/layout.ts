@@ -7,10 +7,19 @@ export const NODE_HEIGHT = 88;
 export const COLUMN_GAP = 380;
 export const ROW_GAP = 58;
 
-export interface PositionedNode { id: string; x: number; y: number }
+export interface PositionedNode {
+  id: string;
+  x: number;
+  y: number;
+}
 
-export function buildELKInput(model: GraphModel, side: "upstream" | "downstream") {
-  const eligible = model.nodes.filter((node) => side === "upstream" ? node.hop <= 0 : node.hop >= 0);
+export function buildELKInput(
+  model: GraphModel,
+  side: "upstream" | "downstream",
+) {
+  const eligible = model.nodes.filter((node) =>
+    side === "upstream" ? node.hop <= 0 : node.hop >= 0,
+  );
   const ids = new Set(eligible.map((node) => node.id));
   return {
     id: side,
@@ -21,16 +30,27 @@ export function buildELKInput(model: GraphModel, side: "upstream" | "downstream"
       "elk.layered.spacing.nodeNodeBetweenLayers": "110",
       "elk.layered.nodePlacement.strategy": "NETWORK_SIMPLEX",
     },
-    children: eligible.map((node) => ({ id: node.id, width: NODE_WIDTH, height: NODE_HEIGHT })),
-    edges: model.edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target)).map((edge) => ({
-      id: edge.id, sources: side === "upstream" ? [edge.target] : [edge.source], targets: side === "upstream" ? [edge.source] : [edge.target],
+    children: eligible.map((node) => ({
+      id: node.id,
+      width: NODE_WIDTH,
+      height: NODE_HEIGHT,
     })),
+    edges: model.edges
+      .filter((edge) => ids.has(edge.source) && ids.has(edge.target))
+      .map((edge) => ({
+        id: edge.id,
+        sources: side === "upstream" ? [edge.target] : [edge.source],
+        targets: side === "upstream" ? [edge.source] : [edge.target],
+      })),
   };
 }
 
-export async function layoutGraph(model: GraphModel): Promise<Map<string, PositionedNode>> {
+export async function layoutGraph(
+  model: GraphModel,
+): Promise<Map<string, PositionedNode>> {
   const [upstream, downstream] = await Promise.all([
-    elk.layout(buildELKInput(model, "upstream")), elk.layout(buildELKInput(model, "downstream")),
+    elk.layout(buildELKInput(model, "upstream")),
+    elk.layout(buildELKInput(model, "downstream")),
   ]);
   const result = new Map<string, PositionedNode>();
   const nodesByID = new Map(model.nodes.map((node) => [node.id, node]));
@@ -42,11 +62,19 @@ export async function layoutGraph(model: GraphModel): Promise<Map<string, Positi
   const downBaseY = downSeed?.y ?? 0;
   for (const child of upstream.children ?? []) {
     const node = nodesByID.get(child.id);
-    result.set(child.id, { id: child.id, x: (node?.hop ?? 0) * COLUMN_GAP, y: (child.y ?? 0) - upBaseY });
+    result.set(child.id, {
+      id: child.id,
+      x: (node?.hop ?? 0) * COLUMN_GAP,
+      y: (child.y ?? 0) - upBaseY,
+    });
   }
   for (const child of downstream.children ?? []) {
     const node = nodesByID.get(child.id);
-    result.set(child.id, { id: child.id, x: (node?.hop ?? 0) * COLUMN_GAP, y: (child.y ?? 0) - downBaseY });
+    result.set(child.id, {
+      id: child.id,
+      x: (node?.hop ?? 0) * COLUMN_GAP,
+      y: (child.y ?? 0) - downBaseY,
+    });
   }
   const columns = new Map<string, typeof model.nodes>();
   for (const node of model.nodes) {
@@ -63,14 +91,6 @@ export async function layoutGraph(model: GraphModel): Promise<Map<string, Positi
       const position = result.get(node.id);
       if (position) position.y = top + index * (NODE_HEIGHT + ROW_GAP);
     });
-  }
-  // Place Base below the full Ethereum extent instead of using a fixed offset.
-  const ethereumBottom = Math.max(0, ...model.nodes.filter((node) => node.chain === "ethereum").map((node) => result.get(node.id)?.y ?? 0));
-  const baseTop = Math.min(0, ...model.nodes.filter((node) => node.chain === "base").map((node) => result.get(node.id)?.y ?? 0));
-  const baseOffset = ethereumBottom - baseTop + NODE_HEIGHT + 120;
-  for (const node of model.nodes) {
-    const position = result.get(node.id);
-    if (position && node.chain === "base") position.y += baseOffset;
   }
   return result;
 }

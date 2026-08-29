@@ -14,7 +14,6 @@ type Chain struct {
 
 var supported = map[string]Chain{
 	"ethereum": {Name: "ethereum", ID: 1},
-	"base":     {Name: "base", ID: 8453},
 }
 
 func Resolve(value string) (Chain, error) {
@@ -29,4 +28,4 @@ func Resolve(value string) (Chain, error) {
 	return chain, nil
 }
 
-func Supported() []Chain { return []Chain{supported["ethereum"], supported["base"]} }
+func Supported() []Chain { return []Chain{supported["ethereum"]} }

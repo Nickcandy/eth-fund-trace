@@ -73,6 +73,25 @@ func TestExtendBranchUsesAggregatedDownstreamAnchor(t *testing.T) {
 	}
 }
 
+func TestExtendBranchMarksNoMatchingTransfersTerminal(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	anchor := "0x0000000000000000000000000000000000000002"
+	repository := &fakeRepository{addresses: map[string]store.Address{
+		anchor: completeAddress(0, 100),
+	}, labels: map[string][]store.Label{}}
+	root := Result{Nodes: []Node{{Chain: "ethereum", Address: seed}, {Chain: "ethereum", Address: anchor, Depth: 1}}, DataThroughBlock: 100, Edges: []Edge{
+		{Chain: "ethereum", From: seed, To: anchor, AssetType: "eth", Asset: "ETH", TotalAmount: "100000000000000000", FirstBlock: 10, LatestBlock: 10, Path: []string{seed, anchor}},
+	}}
+
+	result, err := New(repository).ExtendBranch(context.Background(), root, ExtensionRequest{Chain: "ethereum", Address: anchor, Direction: "out", Depth: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Edges) != 0 || len(result.Nodes) != 1 || !result.Nodes[0].Terminal || result.Nodes[0].StopReason != "no_matching_transfers" {
+		t.Fatalf("result=%+v, want an explicit no-matching-transfers terminal", result)
+	}
+}
+
 func TestExtendBranchUsesAggregatedUpstreamAnchor(t *testing.T) {
 	seed := "0x0000000000000000000000000000000000000001"
 	anchor := "0x0000000000000000000000000000000000000002"
@@ -154,14 +173,13 @@ func TestTraceRootIncludesOfficialEthereumTokensAndRejectsSymbolSpoof(t *testing
 	}
 }
 
-func TestRootAssetsAreScopedByChain(t *testing.T) {
+func TestRootAssetsAreEthereumOnly(t *testing.T) {
 	ethereum := rootAssets("ethereum")
 	if len(ethereum) != 5 || ethereum[0].Asset != "ETH" || ethereum[3].Asset != ethereumUSDT {
 		t.Fatalf("ethereum root assets=%+v", ethereum)
 	}
-	base := rootAssets("base")
-	if len(base) != 3 || base[0].Asset != "ETH" || base[1].Asset != baseUSDC || base[2].Asset != baseWETH {
-		t.Fatalf("base root assets=%+v", base)
+	if base := rootAssets("base"); len(base) != 1 || base[0].Asset != "ETH" {
+		t.Fatalf("unsupported chain root assets=%+v", base)
 	}
 }
 
@@ -172,7 +190,6 @@ type fakeRepository struct {
 	queryTransfers func(store.TransferQuery) []store.Transfer
 	labels         map[string][]store.Label
 	calls          []store.TransferQuery
-	bridges        map[string][]store.CrossChainLink
 }
 
 type addressInspectorStub struct {
@@ -287,10 +304,6 @@ func (r *fakeRepository) QueryTransfers(_ context.Context, q store.TransferQuery
 func (r *fakeRepository) ListLabels(_ context.Context, _, address string) ([]store.Label, error) {
 	return r.labels[address], nil
 }
-func (r *fakeRepository) ListCrossChainLinks(_ context.Context, chain, address string, _ int64) ([]store.CrossChainLink, error) {
-	return r.bridges[chain+":"+address], nil
-}
-
 func TestTraceBatchesFrontierAndPrunesTerminal(t *testing.T) {
 	seed := "0x0000000000000000000000000000000000000001"
 	terminal := "0x0000000000000000000000000000000000000002"
@@ -479,18 +492,18 @@ func TestTraceInspectsContractBeforeRequiringDependencyHistory(t *testing.T) {
 	}
 }
 
-func TestTraceStopsAtConfirmedBridge(t *testing.T) {
+func TestTraceStopsAtKnownBridgeWithoutCrossChainAnalysis(t *testing.T) {
 	seed := "0x0000000000000000000000000000000000000001"
 	bridge := "0x0000000000000000000000000000000000000002"
-	target := "0x0000000000000000000000000000000000000003"
-	next := "0x0000000000000000000000000000000000000003"
-	link := store.CrossChainLink{SourceChain: "ethereum", SourceAddress: bridge, SourceTxHash: "0xsource", TargetChain: "base", TargetAddress: target, TargetTxHash: "0xtarget", Status: "confirmed"}
-	r := &fakeRepository{addresses: map[string]store.Address{seed: completeAddress(0, 100), bridge: completeAddress(0, 100), target: completeAddress(0, 200), next: completeAddress(0, 200)}, transfers: []store.Transfer{{Chain: "ethereum", TxHash: "0xsource", BlockNumber: 90, From: seed, To: bridge, Asset: "ETH", Amount: "1000000000000000000"}, {Chain: "base", TxHash: "0xbase", From: target, To: next, Asset: "ETH", Amount: "1000000000000000000"}}, labels: map[string][]store.Label{}, bridges: map[string][]store.CrossChainLink{"ethereum:" + bridge: {link}}}
+	bridgeAddress := completeContractAddress(0, 100)
+	bridgeAddress.Protocol = "bridge"
+	bridgeAddress.Roles = []string{"cross_chain_bridge"}
+	r := &fakeRepository{addresses: map[string]store.Address{seed: completeAddress(0, 100), bridge: bridgeAddress}, transfers: []store.Transfer{{Chain: "ethereum", TxHash: "0xsource", BlockNumber: 90, From: seed, To: bridge, AssetType: "eth", Asset: "ETH", Amount: "1000000000000000000"}}, labels: map[string][]store.Label{}}
 	result, err := New(r).Trace(context.Background(), Query{Chain: "ethereum", Address: seed, Direction: "out", Depth: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.RuleVersion != traceRuleVersion || len(result.BridgeEdges) != 1 || len(result.Edges) != 1 || result.DataThroughBlocks["base"] != 0 {
+	if result.RuleVersion != traceRuleVersion || len(result.Edges) != 1 {
 		t.Fatalf("result=%+v", result)
 	}
 	if !result.Nodes[1].Terminal || result.Nodes[1].StopReason != "cross_chain_bridge" {
@@ -698,6 +711,43 @@ func TestTraceBuildsKyberSwapEdgeWithBoundedEvidence(t *testing.T) {
 	}
 }
 
+func TestTraceMarksReturningKyberSwapWhenInitiatorIsRecipient(t *testing.T) {
+	seed := "0x87aab7bac1308faf2a0d59da26b8379e18b26355"
+	executor := "0x6e4141d33021b52c91c28608403db4a0ffb50ec6"
+	provider := "0x67336cec42645f55059eff241cb02ea5cc52ff86"
+	usdt := "0xdac17f958d2ee523a2206206994597c13d831ec7"
+	txHash := "0xa83d5ad633dab303eff99cc35cf645fb20504fdf09f3f7bf92994f23aacf99be"
+	r := &fakeRepository{addresses: map[string]store.Address{
+		seed:     completeEOAAddress(0, 30_000_000),
+		executor: {AddressType: "contract", IsContract: true, Protocol: "kyberswap", Roles: []string{"kyberswap_executor"}},
+	}, labels: map[string][]store.Label{}, transfers: []store.Transfer{
+		{Chain: "ethereum", TxHash: txHash, BlockNumber: 22_989_558, From: seed, To: executor, AssetType: "erc20", Asset: usdt, Symbol: "USDT", Decimals: 6, TokenMetadataComplete: true, TokenValue: "1000000000000"},
+		{Chain: "ethereum", TxHash: txHash, BlockNumber: 22_989_558, From: executor, To: seed, AssetType: "eth", Asset: "ETH", Amount: "274823886224587330677"},
+	}}
+	analyzer := transactionAnalyzerStub{analysis: store.TransactionAnalysis{
+		Chain: "ethereum", TxHash: txHash, From: seed, To: executor, Succeeded: true, FinalOutputAddress: seed,
+		Conversions: []store.SwapConversion{{Protocol: "kyberswap", Version: "rfq", Status: "complete", Initiator: seed, Router: "0x6131b5fae19ea4f9d964eac0408e4408b66337b5", Executor: executor, LiquidityProvider: provider, Recipient: seed, TokenIn: usdt, AmountIn: "1000000000000", TokenOut: "ETH", AmountOut: "274823886224587330677", Evidence: []string{"receipt transfers", "WETH withdrawal", "internal ETH payout"}}},
+		Quality:     store.AnalysisQuality{Status: "complete"},
+	}}
+
+	result, err := New(r).WithTransactionAnalyzer(analyzer).Trace(context.Background(), Query{Chain: "ethereum", Address: seed, Direction: "both", Asset: "ETH", Depth: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var swapEdges []Edge
+	for _, edge := range result.Edges {
+		if edge.Kind == "swap" {
+			swapEdges = append(swapEdges, edge)
+		}
+	}
+	if len(result.Edges) != 2 || len(swapEdges) != 1 {
+		t.Fatalf("edges=%+v, want two transaction legs with exactly one verified swap leg", result.Edges)
+	}
+	if len(swapEdges[0].ConversionEvidence) != 1 || swapEdges[0].ConversionEvidence[0].TxHash != txHash || swapEdges[0].ConversionEvidence[0].AmountOut != "274823886224587330677" {
+		t.Fatalf("swap evidence=%+v", swapEdges[0].ConversionEvidence)
+	}
+}
+
 func TestTraceContinuesThroughVerifiedTHORChainVaultMigration(t *testing.T) {
 	seed := "0x0000000000000000000000000000000000000001"
 	router := "0xd37bbe5744d730a1d98d8dc97c42f0ca46ad7146"
@@ -727,6 +777,96 @@ func TestTraceContinuesThroughVerifiedTHORChainVaultMigration(t *testing.T) {
 		if node.Address == vault && (node.Protocol != "thorchain" || !slices.Contains(node.Roles, "thorchain_vault")) {
 			t.Fatalf("vault node=%+v", node)
 		}
+	}
+}
+
+func TestTraceContinuesThroughVerifiedTHORChainProtocolOutbound(t *testing.T) {
+	vault := "0x0000000000000000000000000000000000000001"
+	router := "0xd37bbe5744d730a1d98d8dc97c42f0ca46ad7146"
+	recipient := "0x0000000000000000000000000000000000000003"
+	next := "0x0000000000000000000000000000000000000004"
+	amount := "375820107740000000000"
+	r := &fakeRepository{addresses: map[string]store.Address{
+		vault: completeEOAAddress(0, 100), router: {SyncStatus: "partial", SyncError: "high_frequency", SyncMaxRecordsPerAction: 50_000, AddressType: "contract", IsContract: true}, recipient: completeEOAAddress(0, 100), next: completeEOAAddress(0, 100),
+	}, labels: map[string][]store.Label{}, transfers: []store.Transfer{
+		{Chain: "ethereum", TxHash: "0xout", BlockNumber: 10, From: vault, To: router, AssetType: "eth", Asset: "ETH", Amount: amount},
+		{Chain: "ethereum", TxHash: "0xnext", BlockNumber: 11, From: recipient, To: next, AssetType: "eth", Asset: "ETH", Amount: "100000000000000000000"},
+	}}
+	analyzer := transactionAnalyzerStub{analysis: store.TransactionAnalysis{
+		Chain: "ethereum", TxHash: "0xout", BlockNumber: 10, From: vault, To: router, Succeeded: true,
+		ProtocolAction: "protocol_outbound", ProtocolMemo: "OUT:ABC123", ProtocolDestination: recipient, ProtocolAsset: "ETH", ProtocolAmount: amount,
+		InternalCalls: []store.InternalCall{{From: router, To: recipient, Value: amount}}, Quality: store.AnalysisQuality{Status: "complete"},
+	}}
+
+	inspector := addressInspectorStub{identity: store.AddressIdentity{AddressType: "contract", Protocol: "thorchain", Roles: []string{"router"}}}
+	result, err := New(r).WithAddressInspector(inspector).WithTransactionAnalyzer(analyzer).Trace(context.Background(), Query{Address: vault, Direction: "out", Depth: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Edges) != 3 || result.Edges[1].Kind != "thorchain_protocol_outbound" || result.Edges[1].ProtocolAction != "protocol_outbound" || result.Edges[1].To != recipient || result.Edges[2].To != next {
+		t.Fatalf("edges=%+v", result.Edges)
+	}
+	for _, node := range result.Nodes {
+		if node.Address == router && (node.Protocol != "thorchain" || !containsRole(node.Roles, "router")) {
+			t.Fatalf("router identity not restored: %+v", node)
+		}
+		if node.Address == recipient && containsRole(node.Roles, "thorchain_vault") {
+			t.Fatalf("outbound recipient must not be marked as a vault: %+v", node)
+		}
+	}
+}
+
+func TestTraceAnnotatesTHORChainRouterCallAtDepthBoundary(t *testing.T) {
+	vault := "0x0000000000000000000000000000000000000001"
+	router := "0xd37bbe5744d730a1d98d8dc97c42f0ca46ad7146"
+	recipient := "0x0000000000000000000000000000000000000003"
+	amount := "375820107740000000000"
+	repository := &fakeRepository{addresses: map[string]store.Address{
+		vault: completeEOAAddress(0, 100), router: completeContractAddress(0, 100),
+	}, labels: map[string][]store.Label{}, transfers: []store.Transfer{
+		{Chain: "ethereum", TxHash: "0xout", BlockNumber: 10, From: vault, To: router, AssetType: "eth", Asset: "ETH", Amount: amount},
+	}}
+	analyzer := transactionAnalyzerStub{analysis: store.TransactionAnalysis{
+		Chain: "ethereum", TxHash: "0xout", BlockNumber: 10, From: vault, To: router, Succeeded: true,
+		ProtocolAction: "protocol_outbound", ProtocolMemo: "OUT:ABC123", ProtocolDestination: recipient, ProtocolAsset: "ETH", ProtocolAmount: amount,
+		InternalCalls: []store.InternalCall{{From: router, To: recipient, Value: amount}}, Quality: store.AnalysisQuality{Status: "complete"},
+	}}
+	inspector := addressInspectorStub{identity: store.AddressIdentity{AddressType: "contract", Protocol: "thorchain", Roles: []string{"router"}}}
+
+	result, err := New(repository).WithAddressInspector(inspector).WithTransactionAnalyzer(analyzer).Trace(context.Background(), Query{Address: vault, Direction: "out", Depth: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Edges) != 1 || result.Edges[0].Protocol != "thorchain" || result.Edges[0].ProtocolAction != "protocol_outbound" || result.Edges[0].ProtocolMemo != "OUT:ABC123" {
+		t.Fatalf("edge=%+v, want THORChain semantics before the router is expanded", result.Edges)
+	}
+}
+
+func TestExtendBranchFollowsTHORChainProtocolOutboundFromRouter(t *testing.T) {
+	vault := "0x0000000000000000000000000000000000000001"
+	router := "0xd37bbe5744d730a1d98d8dc97c42f0ca46ad7146"
+	recipient := "0x0000000000000000000000000000000000000003"
+	amount := "375820107740000000000"
+	repository := &fakeRepository{addresses: map[string]store.Address{
+		router: completeContractAddress(0, 100), recipient: completeEOAAddress(0, 100),
+	}, labels: map[string][]store.Label{}}
+	analyzer := transactionAnalyzerStub{analysis: store.TransactionAnalysis{
+		Chain: "ethereum", TxHash: "0xout", BlockNumber: 10, From: vault, To: router, Succeeded: true,
+		ProtocolAction: "protocol_outbound", ProtocolMemo: "OUT:ABC123", ProtocolDestination: recipient, ProtocolAsset: "ETH", ProtocolAmount: amount,
+		InternalCalls: []store.InternalCall{{From: router, To: recipient, Value: amount}}, Quality: store.AnalysisQuality{Status: "complete"},
+	}}
+	root := Result{
+		Nodes:            []Node{{Chain: "ethereum", Address: vault, Depth: 0}, {Chain: "ethereum", Address: router, Depth: 1, AddressType: "contract", Protocol: "thorchain", Roles: []string{"router"}}},
+		Edges:            []Edge{{Chain: "ethereum", From: vault, To: router, AssetType: "eth", Asset: "ETH", TotalAmount: amount, TransferCount: 1, Kind: "transfer", Depth: 1, Path: []string{vault, router}, TxHash: "0xout", FirstBlock: 10, LatestBlock: 10, Protocol: "thorchain", ProtocolAction: "protocol_outbound", ProtocolMemo: "OUT:ABC123"}},
+		DataThroughBlock: 100, DataStatus: "synced", RuleVersion: traceRuleVersion,
+	}
+
+	result, err := New(repository).WithTransactionAnalyzer(analyzer).ExtendBranch(context.Background(), root, ExtensionRequest{Chain: "ethereum", Address: router, Direction: "out", Depth: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Edges) != 1 || result.Edges[0].From != router || result.Edges[0].To != recipient || result.Edges[0].Kind != "thorchain_protocol_outbound" || result.Edges[0].ProtocolAction != "protocol_outbound" {
+		t.Fatalf("result=%+v, want the verified THORChain protocol output", result)
 	}
 }
 
@@ -820,19 +960,6 @@ func TestTraceDoesNotSwitchAssetForUnverifiedContractConversion(t *testing.T) {
 	}
 	if len(result.Edges) != 1 || result.Edges[0].Asset != "ETH" {
 		t.Fatalf("unverified conversion changed asset: %+v", result.Edges)
-	}
-}
-
-func TestBridgeTargetRespectsBranchDirection(t *testing.T) {
-	link := store.CrossChainLink{SourceChain: "ethereum", SourceAddress: "0x1", TargetChain: "base", TargetAddress: "0x2"}
-	if _, ok := bridgeTarget(link, Node{Chain: "ethereum", Address: "0x1"}, "in"); ok {
-		t.Fatal("incoming branch followed an outgoing bridge")
-	}
-	if _, ok := bridgeTarget(link, Node{Chain: "base", Address: "0x2"}, "out"); ok {
-		t.Fatal("outgoing branch followed an incoming bridge")
-	}
-	if target, ok := bridgeTarget(link, Node{Chain: "ethereum", Address: "0x1"}, "out"); !ok || target.Address != "0x2" {
-		t.Fatalf("target=%+v ok=%v", target, ok)
 	}
 }
 

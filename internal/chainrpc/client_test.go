@@ -24,6 +24,13 @@ func TestClientReadsChainTransactionReceiptLogsAndCall(t *testing.T) {
 			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"transactionHash":"0x1","blockNumber":"0xa","status":"0x1","logs":[]}}`))
 		case strings.Contains(request, `"method":"eth_getLogs"`):
 			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":[{"address":"0x0000000000000000000000000000000000000002","topics":["0x1"],"data":"0x","logIndex":"0x0","transactionHash":"0x1","blockNumber":"0xa"}]}`))
+		case strings.Contains(request, `"method":"eth_blockNumber"`):
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"0xa"}`))
+		case strings.Contains(request, `"method":"eth_getBalance"`):
+			if !strings.Contains(request, `"0xa"`) {
+				t.Errorf("balance request=%s, want explicit block tag", request)
+			}
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"0xde0b6b3a7640000"}`))
 		case strings.Contains(request, `"method":"eth_call"`):
 			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"0x01"}`))
 		}
@@ -45,6 +52,12 @@ func TestClientReadsChainTransactionReceiptLogsAndCall(t *testing.T) {
 	}
 	if value, err := client.Call(context.Background(), "0x2", "0x3"); err != nil || value != "0x01" {
 		t.Fatalf("value=%s err=%v", value, err)
+	}
+	if block, err := client.BlockNumber(context.Background()); err != nil || block != 10 {
+		t.Fatalf("block=%d err=%v", block, err)
+	}
+	if balance, err := client.Balance(context.Background(), "0x0000000000000000000000000000000000000002", 10); err != nil || balance != "1000000000000000000" {
+		t.Fatalf("balance=%s err=%v", balance, err)
 	}
 }
 

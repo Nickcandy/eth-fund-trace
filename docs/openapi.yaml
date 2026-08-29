@@ -2,14 +2,23 @@ openapi: 3.1.0
 info:
   title: ETH Fund Trace API
   version: 1.0.0
-  description: Ethereum and Base read-only fund tracing API.
+  description: Ethereum-only read-only fund tracing API. Known cross-chain bridge contracts are terminal classifications; cross-chain analysis is not supported.
 servers:
   - url: http://localhost:8080
 components:
   securitySchemes:
-    bearerAuth:
-      type: http
-      scheme: bearer
+    bearerAuth: {type: http, scheme: bearer}
+  parameters:
+    Chain:
+      name: chain
+      in: query
+      required: true
+      schema: {type: string, enum: [ethereum]}
+    ObjectID:
+      name: id
+      in: path
+      required: true
+      schema: {type: string, pattern: '^[0-9a-f]{24}$'}
   schemas:
     Error:
       type: object
@@ -28,610 +37,180 @@ components:
         jobId: {type: string}
         traceJobId: {type: string}
         status: {type: string}
-    SyncProgress:
-      type: object
-      required: [pagesFetched, recordsRead, recordsWritten, splitCount]
-      properties:
-        currentAddress: {type: string}
-        currentAction: {type: string, enum: [txlist, txlistinternal, tokentx]}
-        rangeStart: {type: integer, minimum: 0}
-        rangeEnd: {type: integer, minimum: 0}
-        currentPage: {type: integer, minimum: 0}
-        pagesFetched: {type: integer, minimum: 0}
-        recordsRead: {type: integer, minimum: 0, description: Records returned by Etherscan, including records reread after a range split.}
-        recordsWritten: {type: integer, minimum: 0, description: Records submitted to idempotent Mongo upserts.}
-        splitCount: {type: integer, minimum: 0}
-        updatedAt: {type: string, format: date-time}
-    SyncJob:
-      type: object
-      required: [jobId, chain, address, status, totalAddresses, completedAddresses, processedAddresses, cachedAddresses, fetched, retryable]
-      properties:
-        jobId: {type: string}
-        chain: {type: string, enum: [ethereum, base]}
-        address: {type: string}
-        status: {type: string, enum: [queued, running, succeeded, partial, failed]}
-        createdAt: {type: string, format: date-time}
-        startedAt: {type: string, format: date-time}
-        finishedAt: {type: string, format: date-time}
-        safeHead: {type: integer, minimum: 0}
-        totalAddresses: {type: integer, minimum: 0}
-        completedAddresses: {type: integer, minimum: 0}
-        processedAddresses: {type: integer, minimum: 0, description: Addresses that reached a terminal success or failure outcome.}
-        cachedAddresses: {type: integer, minimum: 0}
-        fetched: {type: integer, minimum: 0}
-        actionCounts: {type: object, additionalProperties: {type: integer}}
-        maxRecordsPerAction: {type: integer, minimum: 0, description: Per-action record cap; zero means unlimited.}
-        truncatedActions: {type: array, items: {type: string, enum: [txlist, txlistinternal, tokentx]}}
-        progress: {$ref: '#/components/schemas/SyncProgress'}
-        successfulNeighbors: {type: array, items: {type: string}}
-        failedNeighbors: {type: array, items: {type: object}}
-        errorCode: {type: string}
-        error: {type: string}
-        retryable: {type: boolean}
     Label:
       type: object
       required: [chain, address, type, source]
       properties:
-        id: {type: string, pattern: '^[0-9a-f]{24}$', readOnly: true}
-        chain: {type: string, enum: [ethereum, base]}
+        id: {type: string, readOnly: true}
+        chain: {type: string, enum: [ethereum]}
         address: {type: string}
         type: {type: string}
         source: {type: string, enum: [manual, public-list]}
         riskLevel: {type: string, enum: [low, medium, high]}
-        confidence: {type: number, minimum: 0, maximum: 1, default: 1}
+        confidence: {type: number, minimum: 0, maximum: 1}
         note: {type: string}
         evidence: {type: array, items: {type: string}}
-    BridgeLink:
-      type: object
-      required: [sourceChain, sourceTxHash, sourceAddress, sourceAsset, sourceAmount, targetChain, targetTxHash, targetAddress, targetAsset, targetAmount, bridgeAddress, evidence]
-      properties:
-        sourceChain: {type: string, enum: [ethereum, base]}
-        sourceTxHash: {type: string}
-        sourceLogIndex: {type: integer, minimum: 0}
-        sourceAddress: {type: string}
-        targetChain: {type: string, enum: [ethereum, base]}
-        targetTxHash: {type: string}
-        targetLogIndex: {type: integer, minimum: 0}
-        targetAddress: {type: string}
-        bridgeAddress: {type: string}
-        sourceAsset: {type: string}
-        sourceAmount: {type: string}
-        targetAsset: {type: string}
-        targetAmount: {type: string}
-        evidence: {type: array, minItems: 1, items: {type: string}}
-    Transfer:
-      type: object
-      required: [chain, chainId, txHash, blockNumber, from, to, assetType, asset, source, logIndex]
-      properties:
-        chain: {type: string, enum: [ethereum, base]}
-        chainId: {type: integer}
-        txHash: {type: string}
-        blockNumber: {type: integer}
-        blockTime: {type: string, format: date-time}
-        from: {type: string}
-        to: {type: string}
-        assetType: {type: string}
-        asset: {type: string}
-        symbol: {type: string}
-        decimals: {type: integer}
-        amount: {type: string, description: Raw integer amount; clients must not convert it to a floating-point number.}
-        tokenValue: {type: string}
-        tokenName: {type: string}
-        transferKind: {type: string, enum: [transfer, mint, burn]}
-        tokenMetadataComplete: {type: boolean}
-        source: {type: string, enum: [txlist, txlistinternal, tokentx]}
-        traceId: {type: string}
-        logIndex: {type: integer}
     TraceNode:
       type: object
       required: [chain, address, depth, terminal, addressType]
       properties:
-        chain: {type: string, enum: [ethereum, base]}
+        chain: {type: string, enum: [ethereum]}
         address: {type: string}
         depth: {type: integer}
         terminal: {type: boolean}
+        stopReason: {type: string, enum: [terminal, cross_chain_bridge, unsupported_contract, high_frequency, small_amount, ambiguous_conversion, missing_data, cycle]}
         addressType: {type: string, enum: [unknown, eoa, contract]}
         protocol: {type: string}
         roles: {type: array, items: {type: string}}
     TraceEdge:
       type: object
-      required: [chain, from, to, assetType, asset, totalAmount, transferCount, kind, depth, path]
+      required: [chain, from, to, asset, totalAmount, transferCount, kind, depth]
       properties:
-        chain: {type: string, enum: [ethereum, base]}
+        chain: {type: string, enum: [ethereum]}
         from: {type: string}
         to: {type: string}
-        assetType: {type: string}
         asset: {type: string}
-        symbol: {type: string}
-        decimals: {type: integer}
-        tokenMetadataComplete: {type: boolean}
-        totalAmount: {type: string, description: Cumulative amount in the asset's smallest unit}
-        transferCount: {type: integer, format: int64}
+        totalAmount: {type: string}
+        transferCount: {type: integer}
         kind: {type: string}
         depth: {type: integer}
         path: {type: array, items: {type: string}}
-        conversionStatus: {type: string, enum: [complete, partial]}
-        conversionScanned: {type: integer, maximum: 20}
-        conversionEvidence: {type: array, maxItems: 20, items: {$ref: '#/components/schemas/ConversionEvidence'}}
-    ConversionEvidence:
-      type: object
-      required: [txHash, protocol, version, status, evidence]
-      properties:
-        txHash: {type: string}
-        protocol: {type: string}
-        version: {type: string}
-        status: {type: string, enum: [complete, partial]}
-        initiator: {type: string}
-        router: {type: string}
-        executor: {type: string}
-        liquidityProvider: {type: string}
-        recipient: {type: string}
-        tokenIn: {type: string}
-        amountIn: {type: string}
-        tokenOut: {type: string}
-        amountOut: {type: string}
-        evidence: {type: array, items: {type: string}}
-    BridgeEdge:
-      type: object
-      required: [link, depth, path]
-      properties:
-        link: {$ref: '#/components/schemas/BridgeLink'}
-        depth: {type: integer}
-        path:
-          type: array
-          items:
-            type: object
-            properties: {chain: {type: string}, address: {type: string}}
+        conversionEvidence: {type: array, items: {type: object}}
     Risk:
       type: object
-      required: [score, level, ruleVersion, propagationVersion]
+      required: [score, level, ruleVersion]
       properties:
         score: {type: integer, minimum: 0, maximum: 100}
         level: {type: string, enum: [known_high, suspected, no_conclusion]}
-        inferredLabels: {type: array, items: {$ref: '#/components/schemas/InferredLabel'}}
-        evidence: {type: array, items: {$ref: '#/components/schemas/RiskEvidence'}}
-        ruleVersion: {type: string, example: risk-v1}
-        propagationVersion: {type: string, example: propagation-v1}
-    InferredLabel:
-      type: object
-      required: [address, type, source, confidence, direction, distance, path, txHashes]
-      properties:
-        address: {type: string}
-        type: {type: string}
-        source: {type: string, const: propagation}
-        confidence: {type: number, minimum: 0, maximum: 1}
-        direction: {type: string}
-        distance: {type: integer, minimum: 0}
-        path: {type: array, items: {type: string}}
-        paths: {type: array, items: {type: array, items: {type: string}}}
-        txHashes: {type: array, items: {type: string}}
-        evidence: {type: array, items: {type: string}}
-    RiskEvidence:
-      type: object
-      required: [address, labelType, baseScore, score, confidence, distance, direction, path, txHashes, rule]
-      properties:
-        address: {type: string}
-        labelType: {type: string}
-        baseScore: {type: integer}
-        score: {type: integer}
-        confidence: {type: number, minimum: 0, maximum: 1}
-        distance: {type: integer, minimum: 0}
-        direction: {type: string}
-        path: {type: array, items: {type: string}}
-        txHashes: {type: array, items: {type: string}}
-        evidence: {type: array, items: {type: string}}
-        rule: {type: string}
-    NodeRef:
-      type: object
-      required: [chain, address]
-      properties:
-        chain: {type: string, enum: [ethereum, base]}
-        address: {type: string}
+        evidence: {type: array, items: {type: object}}
+        ruleVersion: {type: string, const: direct-label-v1}
     TraceResult:
       type: object
       required: [nodes, edges, dataThroughBlock, dataStatus, risk, ruleVersion]
       properties:
         nodes: {type: array, items: {$ref: '#/components/schemas/TraceNode'}}
         edges: {type: array, items: {$ref: '#/components/schemas/TraceEdge'}}
-        bridgeEdges: {type: array, items: {$ref: '#/components/schemas/BridgeEdge'}}
         paths: {type: array, items: {type: array, items: {type: string}}}
-        crossChainPaths: {type: array, items: {type: array, items: {$ref: '#/components/schemas/NodeRef'}}}
         dataThroughBlock: {type: integer}
-        dataThroughBlocks: {type: object, additionalProperties: {type: integer}}
         dataStatus: {type: string}
-        labels: {type: array, items: {$ref: '#/components/schemas/InferredLabel'}}
+        labels: {type: array, items: {$ref: '#/components/schemas/Label'}}
         risk: {$ref: '#/components/schemas/Risk'}
-        ruleVersion: {type: string, example: trace-v1}
+        ruleVersion: {type: string, const: trace-v1}
     TraceJob:
       type: object
-      required: [id, chain, seedAddress, direction, depth, asset, status, currentDepth, visitedNodes, edgeCount]
+      required: [id, chain, seedAddress, direction, depth, asset, status]
       properties:
         id: {type: string}
-        chain: {type: string, enum: [ethereum, base]}
+        chain: {type: string, enum: [ethereum]}
         seedAddress: {type: string}
         direction: {type: string, enum: [in, out, both]}
         depth: {type: integer}
         asset: {type: string}
-        status: {type: string, enum: [queued, waiting_sync, running, succeeded, partial, failed]}
-        createdAt: {type: string, format: date-time}
-        startedAt: {type: string, format: date-time}
-        finishedAt: {type: string, format: date-time}
-        currentDepth: {type: integer}
-        visitedNodes: {type: integer}
-        edgeCount: {type: integer}
-        syncJobIds: {type: array, items: {type: string}}
+        status: {type: string, enum: [queued, waiting_sync, running, succeeded, partial, failed, stopped]}
         result: {$ref: '#/components/schemas/TraceResult'}
-        dataThroughBlock: {type: integer}
-        ruleVersion: {type: string}
+        ruleVersion: {type: string, const: trace-v1}
         errorCode: {type: string}
         error: {type: string}
         retryable: {type: boolean}
-    RiskAssociation:
-      type: object
-      required: [sourceLabelId, sourceAddress, sourceType, targetChain, targetAddress, direction, asset, confidence, score, distance, level, path, paths, txHashes]
-      properties:
-        sourceLabelId: {type: string}
-        sourceAddress: {type: string}
-        sourceType: {type: string}
-        targetChain: {type: string, enum: [ethereum, base]}
-        targetAddress: {type: string}
-        direction: {type: string, enum: [in, out]}
-        asset: {type: string}
-        confidence: {type: number, minimum: 0, maximum: 1}
-        score: {type: integer, minimum: 0, maximum: 100}
-        distance: {type: integer, minimum: 1}
-        level: {type: string, enum: [strong, weak]}
-        paths: {type: array, items: {type: array, items: {type: string}}}
-        txHashes: {type: array, items: {type: array, items: {type: string}}}
-        path: {type: object}
-        cycleDetected: {type: boolean}
-    PropagationJob:
-      type: object
-      required: [id, chain, targetAddress, asset, direction, status, maxHops, maxNodes, maxEdges, perNodeCandidateCap, maxPathsPerTarget, visitedNodes, edgeCount, dataThroughBlock, ruleVersion, propagationVersion, truncated, retryCount, retryable]
-      properties:
-        id: {type: string}
-        chain: {type: string, enum: [ethereum, base]}
-        targetAddress: {type: string}
-        asset: {type: string}
-        direction: {type: string, enum: [in, out, both]}
-        status: {type: string, enum: [queued, running, succeeded, failed, stopped]}
-        maxHops: {type: integer, maximum: 6}
-        maxNodes: {type: integer, maximum: 10000}
-        maxEdges: {type: integer, maximum: 50000}
-        perNodeCandidateCap: {type: integer, maximum: 50}
-        maxPathsPerTarget: {type: integer, maximum: 3}
-        visitedNodes: {type: integer}
-        edgeCount: {type: integer}
-        dataThroughBlock: {type: integer}
-        ruleVersion: {type: string, example: risk-association-v2}
-        propagationVersion: {type: string, example: propagation-v3}
-        truncated: {type: boolean}
-        truncationReason: {type: string, enum: [candidate_coverage, cross_chain_waterline_unavailable, max_nodes, max_edges]}
-        result:
-          type: object
-          properties:
-            associations: {type: array, items: {$ref: '#/components/schemas/RiskAssociation'}}
-            coverage: {type: array, items: {type: object}}
-        retryCount: {type: integer}
-        errorCode: {type: string}
-        error: {type: string}
-        retryable: {type: boolean}
-    EdgePage:
-      type: object
-      required: [items, dataThroughBlock, dataStatus]
-      properties:
-        items: {type: array, items: {$ref: '#/components/schemas/Transfer'}}
-        nextCursor: {type: string}
-        dataThroughBlock: {type: integer}
-        dataStatus: {type: string}
-    Profile:
-      type: object
-      required: [chain, address, ruleVersion, dataThroughBlock, features, score, classification]
-      properties:
-        chain: {type: string, enum: [ethereum, base]}
-        address: {type: string}
-        ruleVersion: {type: string, example: hot-wallet-v1}
-        dataThroughBlock: {type: integer}
-        features: {type: object, additionalProperties: {type: integer}}
-        score: {type: integer}
-        classification: {type: string}
-        suspectedHotWallet: {type: boolean}
-        signals: {type: array, items: {type: string}}
-    TransactionAnalysis:
-      type: object
-      required: [analysisVersion, chain, chainId, txHash, blockNumber, from, to, value, input, succeeded, transfers, swaps, wraps, internalCalls, conversions, quality, analyzedAt]
-      properties:
-        analysisVersion: {type: string, example: transaction-analysis-v2}
-        chain: {type: string, enum: [ethereum]}
-        chainId: {type: integer, enum: [1]}
-        txHash: {type: string, pattern: '^0x[0-9a-fA-F]{64}$'}
-        blockNumber: {type: integer, minimum: 0}
-        from: {type: string}
-        to: {type: string}
-        value: {type: string, description: Raw wei as a decimal string.}
-        input: {type: string}
-        succeeded: {type: boolean}
-        entryContract: {type: string}
-        entryContractName: {type: string}
-        transfers: {type: array, items: {$ref: '#/components/schemas/ReceiptTransfer'}}
-        swaps: {type: array, items: {$ref: '#/components/schemas/SwapEvent'}}
-        wraps: {type: array, items: {$ref: '#/components/schemas/WrapEvent'}}
-        internalCalls: {type: array, items: {$ref: '#/components/schemas/InternalCall'}}
-        conversions: {type: array, items: {$ref: '#/components/schemas/SwapConversion'}}
-        finalOutputAddress: {type: string}
-        quality: {$ref: '#/components/schemas/AnalysisQuality'}
-        analyzedAt: {type: string, format: date-time}
-    InternalCall:
-      type: object
-      required: [from, to, value, type, traceId, isError]
-      properties:
-        from: {type: string}
-        to: {type: string}
-        value: {type: string}
-        type: {type: string}
-        traceId: {type: string}
-        isError: {type: boolean}
-    SwapConversion:
-      type: object
-      required: [protocol, version, status, evidence]
-      properties:
-        protocol: {type: string}
-        version: {type: string}
-        status: {type: string, enum: [complete, partial]}
-        initiator: {type: string}
-        router: {type: string}
-        executor: {type: string}
-        liquidityProvider: {type: string}
-        recipient: {type: string}
-        tokenIn: {type: string}
-        amountIn: {type: string}
-        tokenOut: {type: string}
-        amountOut: {type: string}
-        evidence: {type: array, items: {type: string}}
-        issues: {type: array, items: {type: string}}
-    ReceiptTransfer:
-      type: object
-      required: [token, from, to, amount, logIndex]
-      properties:
-        token: {type: string}
-        from: {type: string}
-        to: {type: string}
-        amount: {type: string}
-        logIndex: {type: integer, minimum: 0}
-    SwapEvent:
-      type: object
-      required: [pool, verified, sender, recipient, logIndex, evidence]
-      properties:
-        pool: {type: string}
-        protocol: {type: string, enum: [uniswap]}
-        version: {type: string, enum: [v3]}
-        verified: {type: boolean}
-        sender: {type: string}
-        recipient: {type: string}
-        tokenIn: {type: string}
-        tokenOut: {type: string}
-        amountIn: {type: string}
-        amountOut: {type: string}
-        fee: {type: integer}
-        logIndex: {type: integer, minimum: 0}
-        outputAddress: {type: string}
-        evidence: {type: array, items: {type: string}}
-    WrapEvent:
-      type: object
-      required: [type, account, amount, logIndex, evidence]
-      properties:
-        type: {type: string, enum: [deposit, withdrawal]}
-        account: {type: string}
-        amount: {type: string}
-        logIndex: {type: integer, minimum: 0}
-        evidence: {type: string}
-    AnalysisQuality:
-      type: object
-      required: [status, ambiguousRoute, evidence]
-      properties:
-        status: {type: string, enum: [complete, partial]}
-        ambiguousRoute: {type: boolean}
-        evidence: {type: array, items: {type: string}}
-        issues: {type: array, items: {type: string}}
   responses:
     BadRequest:
       description: Invalid request
-      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
-  parameters:
-    ObjectID: {name: id, in: path, required: true, schema: {type: string}}
-    AddressPath: {name: address, in: path, required: true, schema: {type: string}}
-    Chain: {name: chain, in: query, schema: {type: string, enum: [ethereum, base], default: ethereum}}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
 security:
   - bearerAuth: []
 paths:
-  /api/v1/trace-jobs/latest:
-    get:
-      summary: Get the latest trace job for an exact trace query
-      parameters:
-        - { name: chain, in: query, required: true, schema: { type: string, enum: [ethereum, base] } }
-        - { name: address, in: query, required: true, schema: { type: string } }
-        - { name: direction, in: query, required: true, schema: { type: string, enum: [in, out, both] } }
-        - { name: depth, in: query, required: true, schema: { type: integer } }
-        - { name: asset, in: query, required: true, schema: { type: string } }
-      responses:
-        '200': { description: Latest matching trace job }
-        '404': { description: No matching trace job }
   /healthz:
     get:
       security: []
-      responses:
-        '200': {description: MongoDB is reachable}
+      responses: {'200': {description: Healthy}}
   /api/v1/sync:
     post:
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [address]
-              properties:
-                chain: {type: string, enum: [ethereum, base], default: ethereum}
-                address: {type: string}
-                startBlock: {type: integer, minimum: 0, default: 0}
-                neighborLimit: {type: integer, minimum: 0, maximum: 10, default: 10}
-      responses:
-        '202': {description: Sync job accepted, content: {application/json: {schema: {$ref: '#/components/schemas/AsyncJob'}}}}
-        '400': {$ref: '#/components/responses/BadRequest'}
-  /api/v1/transactions/{txHash}:
+      summary: Queue an Ethereum address history sync
+      responses: {'202': {description: Sync accepted, content: {application/json: {schema: {$ref: '#/components/schemas/AsyncJob'}}}}}
+  /api/v1/sync-jobs/latest:
     get:
-      parameters:
-        - {name: txHash, in: path, required: true, schema: {type: string, pattern: '^0x[0-9a-fA-F]{64}$'}}
-        - {name: chain, in: query, schema: {type: string, enum: [ethereum], default: ethereum}}
-      responses:
-        '200': {description: Confirmed transaction analysis, content: {application/json: {schema: {$ref: '#/components/schemas/TransactionAnalysis'}}}}
-        '400': {$ref: '#/components/responses/BadRequest'}
-        '404': {description: Transaction not found, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
-        '409': {description: Receipt not confirmed, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
-        '429': {description: Upstream rate limited, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
-        '503': {description: Upstream unavailable, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+      responses: {'200': {description: Latest matching sync job}}
   /api/v1/sync-jobs/{id}:
     get:
       parameters: [{$ref: '#/components/parameters/ObjectID'}]
-      responses: {'200': {description: Sync job, content: {application/json: {schema: {$ref: '#/components/schemas/SyncJob'}}}}, '404': {description: Job not found}}
-  /api/v1/sync-jobs/latest:
-    get:
-      parameters:
-        - {$ref: '#/components/parameters/Chain'}
-        - {name: address, in: query, required: true, schema: {type: string}}
-      responses:
-        '200': {description: Latest sync job for the address, content: {application/json: {schema: {$ref: '#/components/schemas/SyncJob'}}}}
-        '400': {$ref: '#/components/responses/BadRequest'}
-        '404': {description: No sync job exists for the address}
+      responses: {'200': {description: Sync job}, '404': {description: Job not found}}
   /api/v1/addresses/{address}:
     get:
-      parameters: [{$ref: '#/components/parameters/AddressPath'}, {$ref: '#/components/parameters/Chain'}]
-      responses: {'200': {description: Address metadata and labels}, '404': {description: Address not discovered}}
+      parameters:
+        - {name: address, in: path, required: true, schema: {type: string}}
+        - {$ref: '#/components/parameters/Chain'}
+      responses: {'200': {description: Address metadata}}
   /api/v1/addresses/{address}/profile:
     get:
-      parameters: [{$ref: '#/components/parameters/AddressPath'}, {$ref: '#/components/parameters/Chain'}]
-      responses: {'200': {description: Versioned address profile, content: {application/json: {schema: {$ref: '#/components/schemas/Profile'}}}}, '409': {description: Address not synced}}
+      parameters:
+        - {name: address, in: path, required: true, schema: {type: string}}
+        - {$ref: '#/components/parameters/Chain'}
+      responses: {'200': {description: Address activity profile}}
+  /api/v1/addresses/{address}/balance:
+    get:
+      parameters:
+        - {name: address, in: path, required: true, schema: {type: string}}
+        - {$ref: '#/components/parameters/Chain'}
+      responses: {'200': {description: Current on-chain balance and observation block}}
   /api/v1/edges:
     get:
       parameters:
         - {$ref: '#/components/parameters/Chain'}
-        - {name: address, in: query, required: true, schema: {type: array, items: {type: string}}}
-        - {name: direction, in: query, schema: {type: string, enum: [in, out, both], default: both}}
-        - {name: asset, in: query, schema: {type: string, default: all}}
-        - {name: fromBlock, in: query, schema: {type: integer, minimum: 0}}
-        - {name: toBlock, in: query, schema: {type: integer, minimum: 0}}
-        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 500, default: 100}}
-        - {name: cursor, in: query, schema: {type: string}}
-      responses: {'200': {description: Stable page of positive fact edges, content: {application/json: {schema: {$ref: '#/components/schemas/EdgePage'}}}}, '409': {description: Address not synced}}
+        - {name: address, in: query, required: true, schema: {type: string}}
+        - {name: direction, in: query, required: true, schema: {type: string, enum: [in, out]}}
+        - {name: asset, in: query, schema: {type: string}}
+      responses: {'200': {description: Transfer facts}}
   /api/v1/trace:
     get:
+      summary: Queue a trace-v1 analysis
       parameters:
         - {$ref: '#/components/parameters/Chain'}
         - {name: address, in: query, required: true, schema: {type: string}}
-        - {name: direction, in: query, schema: {type: string, enum: [in, out, both], default: both}}
-        - {name: depth, in: query, schema: {type: integer, minimum: 1, maximum: 5, default: 3}}
-        - {name: asset, in: query, schema: {type: string, default: ETH, description: Trace roots include native ETH and chain-specific official ERC-20 allowlist assets}}
-      responses:
-        '202':
-          description: Trace job accepted
-          content:
-            application/json:
-              schema: {$ref: '#/components/schemas/AsyncJob'}
+        - {name: direction, in: query, schema: {type: string, enum: [in, out, both]}}
+        - {name: depth, in: query, schema: {type: integer, minimum: 1}}
+        - {name: asset, in: query, schema: {type: string}}
+      responses: {'202': {description: Trace accepted, content: {application/json: {schema: {$ref: '#/components/schemas/AsyncJob'}}}}}
+  /api/v1/trace-jobs/latest:
+    get:
+      responses: {'200': {description: Latest matching trace-v1 job}}
   /api/v1/trace-jobs/{id}:
     get:
       parameters: [{$ref: '#/components/parameters/ObjectID'}]
-      responses: {'200': {description: Trace job and persisted result, content: {application/json: {schema: {$ref: '#/components/schemas/TraceJob'}}}}, '404': {description: Job not found}}
+      responses: {'200': {description: Trace job, content: {application/json: {schema: {$ref: '#/components/schemas/TraceJob'}}}}, '404': {description: Job not found}}
   /api/v1/trace-jobs/{id}/stop:
     post:
-      summary: Stop an active trace job and its current sync task
-      responses:
-        '200': { description: Stopped trace job }
-        '404': { description: Job not found }
-  /api/v1/propagation-jobs:
+      parameters: [{$ref: '#/components/parameters/ObjectID'}]
+      responses: {'200': {description: Trace stopped}, '404': {description: Job not found}}
+  /api/v1/trace-jobs/{id}/extensions:
     post:
-      summary: Create an idempotent bounded risk propagation job
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [chain, targetAddress, direction, asset]
-              properties:
-                chain: {type: string, enum: [ethereum, base]}
-                targetAddress: {type: string}
-                direction: {type: string, enum: [in, out, both]}
-                asset: {type: string}
-      responses:
-        '202': {description: Propagation job accepted, content: {application/json: {schema: {$ref: '#/components/schemas/PropagationJob'}}}}
-        '400': {$ref: '#/components/responses/BadRequest'}
-  /api/v1/propagation-jobs/{id}:
+      summary: Manually expand one visible trace node without a frontend hop limit
+      parameters: [{$ref: '#/components/parameters/ObjectID'}]
+      responses: {'202': {description: Extension accepted}}
+  /api/v1/trace-jobs/{id}/extensions/latest:
     get:
       parameters: [{$ref: '#/components/parameters/ObjectID'}]
-      responses:
-        '200': {description: Propagation job and result, content: {application/json: {schema: {$ref: '#/components/schemas/PropagationJob'}}}}
-        '404': {description: Propagation job not found}
-  /api/v1/propagation-jobs/{id}/stop:
-    post:
-      parameters: [{$ref: '#/components/parameters/ObjectID'}]
-      responses:
-        '200': {description: Stopped propagation job, content: {application/json: {schema: {$ref: '#/components/schemas/PropagationJob'}}}}
-        '404': {description: Propagation job not found or already complete}
+      responses: {'200': {description: Latest extension job}}
   /api/v1/risk:
     get:
+      summary: Queue trace-v1 with direct-label-only risk evaluation
       parameters:
         - {$ref: '#/components/parameters/Chain'}
         - {name: address, in: query, required: true, schema: {type: string}}
-        - {name: depth, in: query, schema: {type: integer, minimum: 1, maximum: 5}}
-      responses:
-        '202': {description: Asynchronous risk trace accepted, content: {application/json: {schema: {$ref: '#/components/schemas/AsyncJob'}}}}
-        '400': {$ref: '#/components/responses/BadRequest'}
+      responses: {'202': {description: Trace accepted, content: {application/json: {schema: {$ref: '#/components/schemas/AsyncJob'}}}}}
+  /api/v1/transactions/{txHash}:
+    get:
+      parameters:
+        - {name: txHash, in: path, required: true, schema: {type: string}}
+        - {$ref: '#/components/parameters/Chain'}
+      responses: {'200': {description: Transaction semantics}}
   /api/v1/labels:
     post:
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/Label'}}}}
-      responses:
-        '201': {description: Label upserted, content: {application/json: {schema: {$ref: '#/components/schemas/Label'}}}}
-        '400': {$ref: '#/components/responses/BadRequest'}
+      responses: {'201': {description: Label upserted}}
     get:
       parameters:
         - {$ref: '#/components/parameters/Chain'}
         - {name: address, in: query, required: true, schema: {type: string}}
-      responses:
-        '200': {description: Deterministic labels, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Label'}}}}}
-  /api/v1/bridge-links:
-    post:
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BridgeLink'}}}}
-      responses: {'201': {description: Confirmed bridge link}, '400': {$ref: '#/components/responses/BadRequest'} }
-    get:
-      parameters:
-        - {$ref: '#/components/parameters/Chain'}
-        - {name: address, in: query, required: true, schema: {type: string}}
-        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 500, default: 100}}
-        - {name: status, in: query, schema: {type: string, enum: [initiated, proven, finalized, completed, confirmed, failed, ambiguous]}}
-        - {name: protocol, in: query, schema: {type: string, enum: [official_opstack_bridge]}}
-        - {name: direction, in: query, schema: {type: string, enum: [deposit, withdrawal]}}
-      responses: {'200': {description: Bridge links touching the chain/address node}}
-  /api/v1/bridge-analysis:
-    post:
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [chain, txHash]
-              properties:
-                chain: {type: string, enum: [ethereum, base]}
-                txHash: {type: string, pattern: '^0x[0-9a-fA-F]{64}$'}
-      responses: {'200': {description: Recognized official bridge links}, '400': {$ref: '#/components/responses/BadRequest'}}
-  /api/v1/bridge-sync:
-    post:
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [linkId]
-              properties: {linkId: {type: string}}
-      responses: {'202': {description: Bridge status refresh queued}, '400': {$ref: '#/components/responses/BadRequest'}}
+      responses: {'200': {description: Direct deterministic labels}}

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -119,6 +120,23 @@ func (c *Client) BlockNumber(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("%w: invalid block number", ErrMalformed)
 	}
 	return value, nil
+}
+
+// Balance returns the native asset balance at an explicit block number.
+func (c *Client) Balance(ctx context.Context, address string, blockNumber int64) (string, error) {
+	var raw string
+	blockTag := "latest"
+	if blockNumber > 0 {
+		blockTag = fmt.Sprintf("0x%x", blockNumber)
+	}
+	if err := c.call(ctx, "eth_getBalance", []any{address, blockTag}, &raw); err != nil {
+		return "", err
+	}
+	value, ok := new(big.Int).SetString(strings.TrimPrefix(raw, "0x"), 16)
+	if !ok {
+		return "", fmt.Errorf("%w: invalid native balance", ErrMalformed)
+	}
+	return value.String(), nil
 }
 
 // Logs queries chain logs.

@@ -90,7 +90,7 @@ func (m *Manager) EnqueueExtension(ctx context.Context, rootID string, request E
 	if err != nil {
 		return store.TraceJob{}, err
 	}
-	if !root.RootTraceJobID.IsZero() || root.Status != "succeeded" && root.Status != "partial" {
+	if !root.RootTraceJobID.IsZero() || root.RuleVersion != traceRuleVersion || root.Status != "succeeded" && root.Status != "partial" {
 		return store.TraceJob{}, ErrInvalidExtension
 	}
 	request.Chain = root.Chain
@@ -150,6 +150,12 @@ func (m *Manager) Stop(ctx context.Context, id string) (store.TraceJob, error) {
 	if err != nil {
 		return store.TraceJob{}, err
 	}
+	if job.RootTraceJobID.IsZero() && job.Status != "queued" && job.Status != "waiting_sync" && job.Status != "running" {
+		if extension, extensionErr := m.jobs.FindLatestTraceExtension(ctx, job.ID); extensionErr == nil && (extension.Status == "queued" || extension.Status == "waiting_sync" || extension.Status == "running") {
+			job = extension
+			id = extension.ID.Hex()
+		}
+	}
 	if job.Status == "queued" || job.Status == "waiting_sync" || job.Status == "running" {
 		job.Status, job.ErrorCode, job.Error, job.Retryable = "stopped", "stopped_by_user", "stopped by user", false
 		job.FinishedAt = m.clock().UTC()
@@ -161,8 +167,10 @@ func (m *Manager) Stop(ctx context.Context, id string) (store.TraceJob, error) {
 			cancel()
 		}
 		m.cancelMu.Unlock()
-		for _, syncID := range job.SyncJobIDs {
-			_ = m.syncJobs.Stop(ctx, syncID)
+		if m.syncJobs != nil {
+			for _, syncID := range job.SyncJobIDs {
+				_ = m.syncJobs.Stop(ctx, syncID)
+			}
 		}
 	}
 	return job, nil
@@ -267,17 +275,27 @@ func (m *Manager) process(ctx context.Context, id primitive.ObjectID) {
 		return
 	}
 	result, traceErr := m.graph.Trace(jobCtx, request)
+	attemptedDependencies := make(map[string]bool)
+	terminalDependencies := make(map[string]string)
 	for traceErr != nil {
 		var unsynced AddressNotSyncedError
 		if errors.As(traceErr, &unsynced) && m.syncJobs != nil && unsynced.Address != "" {
+			dependencyChain := unsynced.Chain
+			if dependencyChain == "" {
+				dependencyChain = job.Chain
+			}
+			dependencyKey := syncDependencyKey(dependencyChain, unsynced.Address, unsynced.StartBlock, unsynced.EndBlock)
+			if attemptedDependencies[dependencyKey] {
+				terminalDependencies[dependencyAddressKey(dependencyChain, unsynced.Address)] = "missing_data"
+				partialSync = true
+				result, traceErr = m.graph.withTerminalDependencies(terminalDependencies).Trace(jobCtx, request)
+				continue
+			}
+			attemptedDependencies[dependencyKey] = true
 			job.Status = "waiting_sync"
 			if !m.save(ctx, &job) {
 				m.fail(ctx, &job, errors.New("failed to persist trace job"))
 				return
-			}
-			dependencyChain := unsynced.Chain
-			if dependencyChain == "" {
-				dependencyChain = job.Chain
 			}
 			syncJob, syncErr := m.syncJobs.Enqueue(ctx, syncer.Request{Chain: dependencyChain, Address: unsynced.Address, StartBlock: unsynced.StartBlock, EndBlock: unsynced.EndBlock, NeighborLimit: 0})
 			if syncErr != nil {
@@ -302,7 +320,7 @@ func (m *Manager) process(ctx context.Context, id primitive.ObjectID) {
 				job.ErrorCode = current.ErrorCode
 				job.Error = current.Error
 			}
-			result, traceErr = m.graph.Trace(jobCtx, request)
+			result, traceErr = m.graph.withTerminalDependencies(terminalDependencies).Trace(jobCtx, request)
 			continue
 		}
 		break
@@ -372,17 +390,30 @@ func (m *Manager) processExtension(ctx context.Context, job *store.TraceJob) {
 		return
 	}
 	extension, traceErr := m.graph.ExtendBranch(ctx, rootResult, request)
+	attemptedDependencies := make(map[string]bool)
+	terminalDependencies := make(map[string]string)
 	for traceErr != nil {
 		var unsynced AddressNotSyncedError
 		if !errors.As(traceErr, &unsynced) || m.syncJobs == nil {
 			break
 		}
+		dependencyChain := unsynced.Chain
+		if dependencyChain == "" {
+			dependencyChain = job.Chain
+		}
+		dependencyKey := syncDependencyKey(dependencyChain, unsynced.Address, unsynced.StartBlock, unsynced.EndBlock)
+		if attemptedDependencies[dependencyKey] {
+			terminalDependencies[dependencyAddressKey(dependencyChain, unsynced.Address)] = "missing_data"
+			extension, traceErr = m.graph.withTerminalDependencies(terminalDependencies).ExtendBranch(ctx, rootResult, request)
+			continue
+		}
+		attemptedDependencies[dependencyKey] = true
 		job.Status = "waiting_sync"
 		if !m.save(ctx, job) {
 			m.fail(ctx, job, errors.New("failed to persist trace extension"))
 			return
 		}
-		syncJob, syncErr := m.syncJobs.Enqueue(ctx, syncer.Request{Chain: unsynced.Chain, Address: unsynced.Address, StartBlock: unsynced.StartBlock, EndBlock: unsynced.EndBlock, NeighborLimit: 0})
+		syncJob, syncErr := m.syncJobs.Enqueue(ctx, syncer.Request{Chain: dependencyChain, Address: unsynced.Address, StartBlock: unsynced.StartBlock, EndBlock: unsynced.EndBlock, NeighborLimit: 0})
 		if syncErr != nil {
 			traceErr = syncErr
 			break
@@ -397,7 +428,7 @@ func (m *Manager) processExtension(ctx context.Context, job *store.TraceJob) {
 			break
 		}
 		job.Status = "running"
-		extension, traceErr = m.graph.ExtendBranch(ctx, rootResult, request)
+		extension, traceErr = m.graph.withTerminalDependencies(terminalDependencies).ExtendBranch(ctx, rootResult, request)
 	}
 	if traceErr != nil {
 		m.fail(ctx, job, traceErr)
@@ -458,6 +489,14 @@ func decodeResult(value any) (Result, error) {
 	return result, err
 }
 func (m *Manager) fail(ctx context.Context, job *store.TraceJob, err error) {
+	lookupCtx := ctx
+	if ctx.Err() != nil {
+		lookupCtx = context.Background()
+	}
+	if current, lookupErr := m.jobs.GetTraceJob(lookupCtx, job.ID); lookupErr == nil && current.Status == "stopped" {
+		*job = current
+		return
+	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		job.ErrorCode = "interrupted"
 	} else {
@@ -472,6 +511,10 @@ func (m *Manager) fail(ctx context.Context, job *store.TraceJob, err error) {
 		saveCtx = context.Background()
 	}
 	_ = m.jobs.SaveTraceJob(saveCtx, *job)
+}
+
+func syncDependencyKey(chain, address string, startBlock, endBlock int64) string {
+	return fmt.Sprintf("%s:%s:%d:%d", strings.ToLower(chain), strings.ToLower(address), startBlock, endBlock)
 }
 func (m *Manager) release(key string) { m.mu.Lock(); delete(m.active, key); m.mu.Unlock() }
 

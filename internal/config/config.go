@@ -31,15 +31,7 @@ type Config struct {
 	SyncMaxRecordsPerAction     int64
 	TraceExistingDataOnly       bool
 	EthereumSyncStartBlock      int64
-	BaseSyncStartBlock          int64
 	EthereumRPCURL              string
-	BaseRPCURL                  string
-	EthereumBridgeConfirmations int
-	BaseBridgeConfirmations     int
-	BridgeSyncIntervalSeconds   int
-	BridgeSyncBatchSize         int
-	BridgeSyncMaxRetries        int
-	BridgeSyncMaxConcurrency    int
 }
 
 func Load() Config {
@@ -66,18 +58,10 @@ func Load() Config {
 		SyncCacheTTLMinutes:         nonNegativeIntValue("SYNC_CACHE_TTL_MINUTES", 15),
 		SyncConfirmations:           nonNegativeIntValue("SYNC_CONFIRMATIONS", 12),
 		SyncQueueSize:               intValue("SYNC_QUEUE_SIZE", 100),
-		SyncMaxRecordsPerAction:     nonNegativeInt64Value("SYNC_MAX_RECORDS_PER_ACTION", 0),
+		SyncMaxRecordsPerAction:     nonNegativeInt64Value("SYNC_MAX_RECORDS_PER_ACTION", 50_000),
 		TraceExistingDataOnly:       boolValue("TRACE_EXISTING_DATA_ONLY", false),
 		EthereumSyncStartBlock:      int64Value("ETHEREUM_SYNC_START_BLOCK", 21525891),
-		BaseSyncStartBlock:          int64Value("BASE_SYNC_START_BLOCK", 24450127),
 		EthereumRPCURL:              os.Getenv("ETHEREUM_RPC_URL"),
-		BaseRPCURL:                  os.Getenv("BASE_RPC_URL"),
-		EthereumBridgeConfirmations: nonNegativeIntValue("ETHEREUM_BRIDGE_CONFIRMATIONS", 12),
-		BaseBridgeConfirmations:     nonNegativeIntValue("BASE_BRIDGE_CONFIRMATIONS", 20),
-		BridgeSyncIntervalSeconds:   intValue("BRIDGE_SYNC_INTERVAL_SECONDS", 60),
-		BridgeSyncBatchSize:         intValue("BRIDGE_SYNC_BATCH_SIZE", 50),
-		BridgeSyncMaxRetries:        intValue("BRIDGE_SYNC_MAX_RETRIES", 8),
-		BridgeSyncMaxConcurrency:    intValue("BRIDGE_SYNC_MAX_CONCURRENCY", 2),
 	}
 }
 

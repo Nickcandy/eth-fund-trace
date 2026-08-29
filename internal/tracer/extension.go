@@ -31,7 +31,7 @@ type extensionAnchor struct {
 }
 
 func ValidateExtension(request ExtensionRequest) error {
-	if request.Chain != "ethereum" && request.Chain != "base" || request.Direction != "in" && request.Direction != "out" || request.Depth != 1 {
+	if request.Chain != "ethereum" || request.Direction != "in" && request.Direction != "out" || request.Depth != 1 {
 		return ErrInvalidExtension
 	}
 	_, err := ethaddr.Normalize(request.Address)
@@ -58,6 +58,9 @@ func (g *Graph) ExtendBranch(ctx context.Context, root Result, request Extension
 	result := Result{
 		Nodes: []Node{anchorNode}, DataThroughBlock: root.DataThroughBlock, DataThroughBlocks: root.DataThroughBlocks,
 		DataStatus: root.DataStatus, RuleVersion: traceRuleVersion,
+	}
+	if anchorNode.Protocol == "thorchain" && containsRole(anchorNode.Roles, "router") && request.Direction == "out" {
+		return g.extendTHORChainRouter(ctx, root, result, request)
 	}
 	for _, anchor := range anchors {
 		transfers, err := g.repository.QueryTransfers(ctx, store.TransferQuery{
@@ -111,7 +114,8 @@ func (g *Graph) ExtendBranch(ctx context.Context, root Result, request Extension
 			} else {
 				requiredThrough = transfer.BlockNumber
 			}
-			if !exists || !isHighFrequencyAddress(metadata) && !g.addressCovered(metadata, requiredFrom, requiredThrough) {
+			dependencyStopReason := g.dependencyStopReason(request.Chain, other)
+			if dependencyStopReason == "" && (!exists || !isHighFrequencyAddress(metadata) && !g.addressCovered(metadata, requiredFrom, requiredThrough)) {
 				dependency := AddressNotSyncedError{Chain: request.Chain, Address: other}
 				if request.Direction == "out" {
 					dependency.StartBlock = transfer.BlockNumber
@@ -125,10 +129,13 @@ func (g *Graph) ExtendBranch(ctx context.Context, root Result, request Extension
 				return Result{}, labelErr
 			}
 			identity := addressIdentity(metadata)
-			terminal := metadata.IsTerminal || isHighFrequencyAddress(metadata) || hasTerminalLabel(labels)
+			terminal := metadata.IsTerminal || isHighFrequencyAddress(metadata) || dependencyStopReason != "" || hasTerminalLabel(labels)
+			if dependencyStopReason != "" {
+				result.DataStatus = "partial"
+			}
 			path := append(append([]string(nil), anchor.Path...), other)
 			result.Edges = append(result.Edges, edgeFromSummary(summary, anchorNode.Depth+1, path))
-			result.Nodes = appendNode(result.Nodes, Node{Chain: request.Chain, Address: other, Depth: anchorNode.Depth + 1, Terminal: terminal, AddressType: identity.AddressType, Protocol: identity.Protocol, Roles: identity.Roles})
+			result.Nodes = appendNode(result.Nodes, Node{Chain: request.Chain, Address: other, Depth: anchorNode.Depth + 1, Terminal: terminal, AddressType: identity.AddressType, Protocol: identity.Protocol, Roles: identity.Roles, StopReason: dependencyStopReason})
 			result.Paths = append(result.Paths, path)
 			result.MoneyTransfers = append(result.MoneyTransfers, moneyTransfer(summary, ""))
 			result.MoneyStates = append(result.MoneyStates,
@@ -136,6 +143,61 @@ func (g *Graph) ExtendBranch(ctx context.Context, root Result, request Extension
 				store.MoneyState{Chain: summary.Chain, Address: strings.ToLower(summary.To), Direction: "in", AssetType: summary.AssetType, Asset: summary.Asset, Amount: summary.TotalAmount, RemainingAmount: summary.TotalAmount, EntryTxHash: summary.Representative.TxHash, EntryBlock: summary.Representative.BlockNumber, Path: path, Evidence: "transfer", Inferred: true},
 			)
 		}
+	}
+	if len(result.Edges) == 0 && !result.Nodes[0].Terminal {
+		result.Nodes[0].Terminal = true
+		result.Nodes[0].StopReason = "no_matching_transfers"
+	}
+	return result, nil
+}
+
+func (g *Graph) extendTHORChainRouter(ctx context.Context, root, result Result, request ExtensionRequest) (Result, error) {
+	if g.analyzer == nil {
+		result.Nodes[0].Terminal, result.Nodes[0].StopReason = true, "unsupported_contract"
+		return result, nil
+	}
+	for _, enteringEdge := range root.Edges {
+		if !strings.EqualFold(enteringEdge.To, request.Address) || enteringEdge.TxHash == "" || len(enteringEdge.Path) == 0 || !strings.EqualFold(enteringEdge.Path[len(enteringEdge.Path)-1], request.Address) {
+			continue
+		}
+		enteringTransfer := store.Transfer{
+			Chain: enteringEdge.Chain, TxHash: enteringEdge.TxHash, BlockNumber: enteringEdge.FirstBlock,
+			From: enteringEdge.From, To: enteringEdge.To, AssetType: enteringEdge.AssetType, Asset: enteringEdge.Asset,
+			Symbol: enteringEdge.Symbol, Decimals: enteringEdge.Decimals, TokenMetadataComplete: enteringEdge.TokenMetadataComplete,
+		}
+		if enteringEdge.AssetType == "eth" || strings.EqualFold(enteringEdge.Asset, "ETH") {
+			enteringTransfer.Amount = enteringEdge.TotalAmount
+		} else {
+			enteringTransfer.TokenValue = enteringEdge.TotalAmount
+		}
+		assetMode, asset := edgeAsset(enteringEdge)
+		state := branchState{Address: request.Address, Direction: "out", AssetMode: assetMode, Asset: asset, EnteringTx: enteringTransfer, Amount: enteringEdge.TotalAmount, Contract: true, Identity: store.AddressIdentity{AddressType: "contract", Protocol: "thorchain", Roles: []string{"router"}}, Path: enteringEdge.Path}
+		conversion, ok, err := g.conversionTransfer(ctx, request.Chain, state, enteringEdge.TxHash)
+		if err != nil {
+			return Result{}, err
+		}
+		if !ok || conversion.Protocol != "thorchain" || pathContains(enteringEdge.Path, conversion.Transfer.To) {
+			continue
+		}
+		summary := transferSummary(conversion.Transfer)
+		path := append(append([]string(nil), enteringEdge.Path...), strings.ToLower(conversion.Transfer.To))
+		edge := edgeFromSummary(summary, result.Nodes[0].Depth+1, path)
+		edge.Protocol, edge.ProtocolAction, edge.ProtocolMemo = conversion.Protocol, conversion.ProtocolAction, conversion.ProtocolMemo
+		result.Edges = append(result.Edges, edge)
+		node := Node{Chain: request.Chain, Address: strings.ToLower(conversion.Transfer.To), Depth: result.Nodes[0].Depth + 1}
+		if conversion.VaultAddress != "" {
+			node.Protocol, node.Roles = "thorchain", []string{"thorchain_vault"}
+		}
+		result.Nodes = appendNode(result.Nodes, node)
+		result.Paths = append(result.Paths, path)
+		result.MoneyTransfers = append(result.MoneyTransfers, moneyTransfer(summary, ""))
+		result.MoneyStates = append(result.MoneyStates,
+			store.MoneyState{Chain: summary.Chain, Address: strings.ToLower(summary.From), Direction: "out", AssetType: summary.AssetType, Asset: summary.Asset, Amount: summary.TotalAmount, RemainingAmount: summary.TotalAmount, EntryTxHash: summary.Representative.TxHash, EntryBlock: summary.Representative.BlockNumber, Path: path, Evidence: "thorchain", Inferred: false},
+			store.MoneyState{Chain: summary.Chain, Address: strings.ToLower(summary.To), Direction: "in", AssetType: summary.AssetType, Asset: summary.Asset, Amount: summary.TotalAmount, RemainingAmount: summary.TotalAmount, EntryTxHash: summary.Representative.TxHash, EntryBlock: summary.Representative.BlockNumber, Path: path, Evidence: "thorchain", Inferred: false},
+		)
+	}
+	if len(result.Edges) == 0 {
+		result.Nodes[0].Terminal, result.Nodes[0].StopReason = true, "ambiguous_conversion"
 	}
 	return result, nil
 }
@@ -217,6 +279,7 @@ func appendNode(nodes []Node, node Node) []Node {
 }
 
 func MergeResults(root, extension Result) Result {
+	root.Labels = appendLabels(root.Labels, extension.Labels)
 	for _, node := range extension.Nodes {
 		root.Nodes = appendNode(root.Nodes, node)
 	}
@@ -258,6 +321,21 @@ func MergeResults(root, extension Result) Result {
 		}
 	}
 	return root
+}
+
+func appendLabels(current, extra []store.Label) []store.Label {
+	seen := make(map[string]struct{}, len(current))
+	for _, label := range current {
+		seen[label.Chain+"|"+strings.ToLower(label.Address)+"|"+label.Type+"|"+label.Source] = struct{}{}
+	}
+	for _, label := range extra {
+		key := label.Chain + "|" + strings.ToLower(label.Address) + "|" + label.Type + "|" + label.Source
+		if _, exists := seen[key]; !exists {
+			current = append(current, label)
+			seen[key] = struct{}{}
+		}
+	}
+	return current
 }
 
 func edgeKey(edge Edge) string {

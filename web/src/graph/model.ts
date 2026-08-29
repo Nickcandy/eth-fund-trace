@@ -1,34 +1,79 @@
-import type { BridgeEdge, ConversionEvidence, NodeRef, RiskAssociation, TraceResult } from "../api/types";
+import type { ConversionEvidence, NodeRef, TraceResult } from "../api/types";
 import { displayDecimals } from "../lib/format";
 
 export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
 export interface GraphNodeModel {
-  id: string; chain: string; address: string; hop: number; terminal: boolean; seed: boolean;
-  risk: "high" | "suspected" | "normal"; hotWallet: boolean; labelTypes: string[]; inferenceConfidence?: number;
-  addressType?: "unknown" | "eoa" | "contract"; protocol?: string; roles?: string[];
-  stopReason?: string; category?: "seed" | "high_frequency" | "contract" | "hot_wallet" | "terminal" | "address";
+  id: string;
+  chain: string;
+  address: string;
+  hop: number;
+  terminal: boolean;
+  seed: boolean;
+  risk: "high" | "suspected" | "normal";
+  hotWallet: boolean;
+  labelTypes: string[];
+  inferenceConfidence?: number;
+  addressType?: "unknown" | "eoa" | "contract";
+  protocol?: string;
+  roles?: string[];
+  stopReason?: string;
+  category?:
+    | "seed"
+    | "high_frequency"
+    | "contract"
+    | "hot_wallet"
+    | "terminal"
+    | "address";
 }
 
 export interface GraphEdgeModel {
-  id: string; source: string; target: string; chain: string; assetType?: string; asset: string; assetSymbol: string;
-  sourceType: string; kind: string; count: number; totalAmount: string; decimals?: number;
-	txHash?: string; bidirectional?: boolean; swapLegs?: GraphEdgeLeg[];
-  firstBlock?: number; firstTime?: string; latestBlock?: number; latestTime?: string;
+  id: string;
+  source: string;
+  target: string;
+  chain: string;
+  assetType?: string;
+  asset: string;
+  assetSymbol: string;
+  sourceType: string;
+  kind: string;
+  count: number;
+  totalAmount: string;
+  decimals?: number;
+  txHash?: string;
+  bidirectional?: boolean;
+  swapLegs?: GraphEdgeLeg[];
+  firstBlock?: number;
+  firstTime?: string;
+  latestBlock?: number;
+  latestTime?: string;
   flow?: "inbound" | "outbound" | "return";
-  conversionStatus?: "complete" | "partial"; conversionScanned?: number; bridge?: BridgeEdge;
-	conversionEvidence?: ConversionEvidence[];
-	protocol?: string; protocolAction?: string; protocolMemo?: string;
+  conversionStatus?: "complete" | "partial";
+  conversionScanned?: number;
+  conversionEvidence?: ConversionEvidence[];
+  protocol?: string;
+  protocolAction?: string;
+  protocolMemo?: string;
 }
 
 export interface GraphEdgeLeg {
-	source: string; target: string; assetType?: string; asset: string; assetSymbol: string;
-	totalAmount: string; decimals?: number; kind: string;
+  source: string;
+  target: string;
+  assetType?: string;
+  asset: string;
+  assetSymbol: string;
+  totalAmount: string;
+  decimals?: number;
+  kind: string;
 }
 
-export interface GraphModel { nodes: GraphNodeModel[]; edges: GraphEdgeModel[] }
+export interface GraphModel {
+  nodes: GraphNodeModel[];
+  edges: GraphEdgeModel[];
+}
 
-const nodeID = (chain: string, address: string) => `${chain}:${address.toLowerCase()}`;
+const nodeID = (chain: string, address: string) =>
+  `${chain}:${address.toLowerCase()}`;
 
 function signedHops(result: TraceResult, seed: NodeRef): Map<string, number> {
   const seedID = nodeID(seed.chain, seed.address);
@@ -43,46 +88,81 @@ function signedHops(result: TraceResult, seed: NodeRef): Map<string, number> {
       let next: string | undefined;
       let hop = currentHop;
       if (edge.to.toLowerCase() === address && currentHop <= 0) {
-        next = nodeID(chain, edge.from); hop = currentHop - 1;
+        next = nodeID(chain, edge.from);
+        hop = currentHop - 1;
       } else if (edge.from.toLowerCase() === address && currentHop >= 0) {
-        next = nodeID(chain, edge.to); hop = currentHop + 1;
+        next = nodeID(chain, edge.to);
+        hop = currentHop + 1;
       }
-      if (next && !hops.has(next)) { hops.set(next, hop); queue.push(next); }
-    }
-    for (const edge of result.bridgeEdges ?? []) {
-      const link = edge.link;
-      const source = nodeID(link.sourceChain, link.sourceAddress);
-      const target = nodeID(link.targetChain, link.targetAddress);
-      if (current === source && currentHop >= 0 && !hops.has(target)) { hops.set(target, currentHop + 1); queue.push(target); }
-      if (current === target && currentHop <= 0 && !hops.has(source)) { hops.set(source, currentHop - 1); queue.push(source); }
+      if (next && !hops.has(next)) {
+        hops.set(next, hop);
+        queue.push(next);
+      }
     }
   }
   return hops;
 }
 
-export function buildGraphModel(result: TraceResult, seed: NodeRef, associations: RiskAssociation[] | null = [], riskSource?: NodeRef): GraphModel {
-  const normalizedAssociations = associations ?? [];
+export function buildGraphModel(
+  result: TraceResult,
+  seed: NodeRef,
+): GraphModel {
   const hops = signedHops(result, seed);
-  const labelMap = new Map<string, Array<{ type: string; confidence: number }>>();
+  const labelMap = new Map<
+    string,
+    Array<{ type: string; confidence: number; riskLevel?: string }>
+  >();
   for (const label of result.labels ?? []) {
     const values = labelMap.get(label.address.toLowerCase()) ?? [];
-    labelMap.set(label.address.toLowerCase(), [...values, { type: label.type, confidence: label.confidence }]);
+    labelMap.set(label.address.toLowerCase(), [
+      ...values,
+      {
+        type: label.type,
+        confidence: label.confidence,
+        riskLevel: label.riskLevel,
+      },
+    ]);
   }
   const nodes = result.nodes.map((node): GraphNodeModel => {
     const isSeedChain = node.chain === seed.chain;
-    const labels = isSeedChain ? labelMap.get(node.address.toLowerCase()) ?? [] : [];
-    const association = normalizedAssociations.find((item) => item.targetChain === node.chain && item.targetAddress.toLowerCase() === node.address.toLowerCase());
-    const isRiskSource = riskSource && nodeID(node.chain, node.address) === nodeID(riskSource.chain, riskSource.address);
+    const labels = isSeedChain
+      ? (labelMap.get(node.address.toLowerCase()) ?? [])
+      : [];
     return {
-      id: nodeID(node.chain, node.address), chain: node.chain, address: node.address.toLowerCase(),
+      id: nodeID(node.chain, node.address),
+      chain: node.chain,
+      address: node.address.toLowerCase(),
       hop: hops.get(nodeID(node.chain, node.address)) ?? node.depth,
-      terminal: node.terminal, seed: nodeID(node.chain, node.address) === nodeID(seed.chain, seed.address),
-      risk: isRiskSource || association?.level === "strong" ? "high" : association ? "suspected" : "normal",
-      hotWallet: labels.some((label) => label.type === "suspected_hot_wallet"), labelTypes: labels.map((label) => label.type),
-      inferenceConfidence: association?.confidence,
-      addressType: node.addressType, protocol: node.protocol, roles: node.roles ?? [],
+      terminal: node.terminal,
+      seed:
+        nodeID(node.chain, node.address) === nodeID(seed.chain, seed.address),
+      risk: labels.some(
+        (label) =>
+          label.riskLevel === "high" ||
+          label.type === "known_illicit" ||
+          label.type === "sanctioned",
+      )
+        ? "high"
+        : "normal",
+      hotWallet: labels.some((label) => label.type === "suspected_hot_wallet"),
+      labelTypes: labels.map((label) => label.type),
+      addressType: node.addressType,
+      protocol: node.protocol,
+      roles: node.roles ?? [],
       stopReason: node.stopReason,
-      category: node.stopReason === "high_frequency" ? "high_frequency" : node.addressType === "contract" ? "contract" : labels.some((label) => label.type === "suspected_hot_wallet") ? "hot_wallet" : node.terminal ? "terminal" : nodeID(node.chain, node.address) === nodeID(seed.chain, seed.address) ? "seed" : "address",
+      category:
+        node.stopReason === "high_frequency"
+          ? "high_frequency"
+          : node.addressType === "contract"
+            ? "contract"
+            : labels.some((label) => label.type === "suspected_hot_wallet")
+              ? "hot_wallet"
+              : node.terminal
+                ? "terminal"
+                : nodeID(node.chain, node.address) ===
+                    nodeID(seed.chain, seed.address)
+                  ? "seed"
+                  : "address",
     };
   });
   const nodeHops = new Map(nodes.map((node) => [node.id, node.hop]));
@@ -95,62 +175,141 @@ export function buildGraphModel(result: TraceResult, seed: NodeRef, associations
   };
   const grouped = new Map<string, GraphEdgeModel>();
   result.edges.forEach((edge) => {
-    const key = [edge.chain, edge.txHash ?? "", edge.from.toLowerCase(), edge.to.toLowerCase(), edge.asset.toLowerCase(), edge.kind, edge.totalAmount, edge.firstBlock ?? 0, edge.latestBlock ?? 0, edge.path.join(">")].join("|");
-    const source = nodeID(edge.chain, edge.from); const target = nodeID(edge.chain, edge.to);
+    const key = [
+      edge.chain,
+      edge.txHash ?? "",
+      edge.from.toLowerCase(),
+      edge.to.toLowerCase(),
+      edge.asset.toLowerCase(),
+      edge.kind,
+      edge.totalAmount,
+      edge.firstBlock ?? 0,
+      edge.latestBlock ?? 0,
+      edge.path.join(">"),
+    ].join("|");
+    const source = nodeID(edge.chain, edge.from);
+    const target = nodeID(edge.chain, edge.to);
     grouped.set(key, {
-      id: key, source, target, chain: edge.chain,
-      assetType: edge.assetType, asset: edge.asset, assetSymbol: edge.symbol || edge.asset, sourceType: "aggregate", kind: edge.kind,
-      count: edge.transferCount, totalAmount: edge.totalAmount, txHash: edge.txHash, flow: flow(source, target),
-      decimals: displayDecimals(edge.assetType, edge.asset, edge.decimals, edge.tokenMetadataComplete),
-      firstBlock: edge.firstBlock, firstTime: edge.firstTime, latestBlock: edge.latestBlock, latestTime: edge.latestTime,
-      conversionStatus: edge.conversionStatus, conversionScanned: edge.conversionScanned,
-	  conversionEvidence: edge.conversionEvidence,
-	  protocol: edge.protocol, protocolAction: edge.protocolAction, protocolMemo: edge.protocolMemo,
+      id: key,
+      source,
+      target,
+      chain: edge.chain,
+      assetType: edge.assetType,
+      asset: edge.asset,
+      assetSymbol: edge.symbol || edge.asset,
+      sourceType: "aggregate",
+      kind: edge.kind,
+      count: edge.transferCount,
+      totalAmount: edge.totalAmount,
+      txHash: edge.txHash,
+      flow: flow(source, target),
+      decimals: displayDecimals(
+        edge.assetType,
+        edge.asset,
+        edge.decimals,
+        edge.tokenMetadataComplete,
+      ),
+      firstBlock: edge.firstBlock,
+      firstTime: edge.firstTime,
+      latestBlock: edge.latestBlock,
+      latestTime: edge.latestTime,
+      conversionStatus: edge.conversionStatus,
+      conversionScanned: edge.conversionScanned,
+      conversionEvidence: edge.conversionEvidence,
+      protocol: edge.protocol,
+      protocolAction: edge.protocolAction,
+      protocolMemo: edge.protocolMemo,
     });
   });
-  for (const bridge of result.bridgeEdges ?? []) {
-    const link = bridge.link;
-    const key = `bridge:${link.sourceChain}:${link.sourceTxHash}:${link.sourceLogIndex}:${link.targetChain}:${link.targetTxHash}:${link.targetLogIndex}`;
-    const source = nodeID(link.sourceChain, link.sourceAddress); const target = nodeID(link.targetChain, link.targetAddress);
-    grouped.set(key, {
-      id: key, source, target, chain: `${link.sourceChain}->${link.targetChain}`,
-      assetType: "bridge", asset: link.sourceAsset, assetSymbol: link.sourceAsset, sourceType: "bridge", kind: "bridge", count: 1,
-      totalAmount: link.sourceAmount, decimals: displayDecimals(undefined, link.sourceAsset, undefined, undefined), flow: flow(source, target), bridge,
-    });
-  }
-  return { nodes: applyTHORChainVaultRoles(nodes, [...grouped.values()]), edges: combineSwapEdges([...grouped.values()]) };
+  return {
+    nodes: applyTHORChainVaultRoles(nodes, [...grouped.values()]),
+    edges: combineSwapEdges([...grouped.values()]),
+  };
 }
 
 function combineSwapEdges(edges: GraphEdgeModel[]): GraphEdgeModel[] {
-	const consumed = new Set<string>();
-	const result: GraphEdgeModel[] = [];
-	for (const edge of edges) {
-		if (consumed.has(edge.id)) continue;
-		const verifiedSwap = edge.kind === "swap" && edge.txHash && edge.conversionEvidence?.some((item) => item.status === "complete" && item.txHash.toLowerCase() === edge.txHash?.toLowerCase());
-		const reverse = verifiedSwap ? edges.filter((candidate) => candidate.id !== edge.id && !consumed.has(candidate.id) && candidate.chain === edge.chain && candidate.txHash?.toLowerCase() === edge.txHash?.toLowerCase() && candidate.source === edge.target && candidate.target === edge.source) : [];
-		if (reverse.length !== 1) {
-			result.push(edge);
-			continue;
-		}
-		const input = reverse[0];
-		consumed.add(edge.id); consumed.add(input.id);
-		const existingInput = result.findIndex((candidate) => candidate.id === input.id);
-		if (existingInput >= 0) result.splice(existingInput, 1);
-		const endpoints = [edge.source, edge.target].sort().join("|");
-		result.push({
-			...edge, id: `swap:${edge.chain}:${edge.txHash}:${endpoints}`, source: input.source, target: input.target,
-			flow: input.flow, count: 1, bidirectional: true,
-			swapLegs: [toSwapLeg(input), toSwapLeg(edge)],
-		});
-	}
-	return result;
+  const consumed = new Set<string>();
+  const result: GraphEdgeModel[] = [];
+  for (const edge of edges) {
+    if (consumed.has(edge.id)) continue;
+    const verifiedSwap =
+      edge.kind === "swap" &&
+      edge.txHash &&
+      edge.conversionEvidence?.some(
+        (item) =>
+          item.status === "complete" &&
+          item.txHash.toLowerCase() === edge.txHash?.toLowerCase(),
+      );
+    const inputs = verifiedSwap
+      ? edges.filter(
+          (candidate) =>
+            candidate.id !== edge.id &&
+            !consumed.has(candidate.id) &&
+            candidate.kind !== "swap" &&
+            candidate.chain === edge.chain &&
+            candidate.txHash?.toLowerCase() === edge.txHash?.toLowerCase() &&
+            candidate.target === edge.source,
+        )
+      : [];
+    if (inputs.length !== 1) {
+      result.push(edge);
+      continue;
+    }
+    const input = inputs[0];
+    consumed.add(edge.id);
+    consumed.add(input.id);
+    const existingInput = result.findIndex(
+      (candidate) => candidate.id === input.id,
+    );
+    if (existingInput >= 0) result.splice(existingInput, 1);
+    const endpoints = [input.source, input.target].sort().join("|");
+    result.push({
+      ...edge,
+      id: `swap:${edge.chain}:${edge.txHash}:${endpoints}`,
+      source: input.source,
+      target: input.target,
+      flow: input.flow,
+      count: 1,
+      bidirectional: true,
+      swapLegs: [toSwapLeg(input), toSwapLeg(edge)],
+    });
+  }
+  return result;
 }
 
 function toSwapLeg(edge: GraphEdgeModel): GraphEdgeLeg {
-	return { source: edge.source, target: edge.target, assetType: edge.assetType, asset: edge.asset, assetSymbol: edge.assetSymbol, totalAmount: edge.totalAmount, decimals: edge.decimals, kind: edge.kind };
+  return {
+    source: edge.source,
+    target: edge.target,
+    assetType: edge.assetType,
+    asset: edge.asset,
+    assetSymbol: edge.assetSymbol,
+    totalAmount: edge.totalAmount,
+    decimals: edge.decimals,
+    kind: edge.kind,
+  };
 }
 
-function applyTHORChainVaultRoles(nodes: GraphNodeModel[], edges: GraphEdgeModel[]): GraphNodeModel[] {
-	const vaults = new Set(edges.filter((edge) => edge.protocol === "thorchain" && edge.protocolAction === "vault_migration").map((edge) => edge.target));
-	return nodes.map((node) => vaults.has(node.id) ? { ...node, protocol: "thorchain", roles: [...new Set([...(node.roles ?? []), "thorchain_vault"])] } : node);
+function applyTHORChainVaultRoles(
+  nodes: GraphNodeModel[],
+  edges: GraphEdgeModel[],
+): GraphNodeModel[] {
+  const vaults = new Set(
+    edges
+      .filter(
+        (edge) =>
+          edge.protocol === "thorchain" &&
+          edge.protocolAction === "vault_migration",
+      )
+      .map((edge) => edge.target),
+  );
+  return nodes.map((node) =>
+    vaults.has(node.id)
+      ? {
+          ...node,
+          protocol: "thorchain",
+          roles: [...new Set([...(node.roles ?? []), "thorchain_vault"])],
+        }
+      : node,
+  );
 }

@@ -128,6 +128,17 @@ func TestInspectAddressClassifiesKyberExecutorAndEOA(t *testing.T) {
 	}
 }
 
+func TestInspectAddressClassifiesKnownBridgeAsTerminalIdentity(t *testing.T) {
+	service := New(&sourceStub{code: "0x6001"}, &repoStub{}, time.Now)
+	identity, err := service.InspectAddress(context.Background(), "ethereum", EthereumL1StandardBridge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.Protocol != "bridge" || !slices.Contains(identity.Roles, "cross_chain_bridge") {
+		t.Fatalf("identity=%+v", identity)
+	}
+}
+
 func TestInspectAddressClassifiesWOOXWalletsBeforeBytecodeLookup(t *testing.T) {
 	service := New(&sourceStub{code: "0x60016000"}, newRepoStub(), time.Now)
 	identity, err := service.InspectAddress(context.Background(), "ethereum", "0x03DD167D62E1dfC223FfD7b37fC8bF45Fb973478")
@@ -197,6 +208,23 @@ func TestAnalyzeKyberRFQBuildsVerifiedConversion(t *testing.T) {
 	}
 	if analysis.Quality.Status != "complete" || analysis.FinalOutputAddress != initiator {
 		t.Fatalf("quality=%+v output=%s", analysis.Quality, analysis.FinalOutputAddress)
+	}
+}
+
+func TestAnalyzeKyberRFQAcceptsCompleteReceiptWhenZeroValueRouterCallIsOmitted(t *testing.T) {
+	source := kyberFixtureSource()
+	source.internals = source.internals[1:]
+	amountOut, _ := new(big.Int).SetString(source.internals[1].Value, 10)
+	unwrapAmount := new(big.Int).Add(amountOut, big.NewInt(1)).String()
+	source.receipt.Logs[3].Data = "0x" + word(decimal(unwrapAmount))
+	source.internals[0].Value = unwrapAmount
+
+	analysis, err := New(source, newRepoStub(), time.Now).Analyze(context.Background(), "ethereum", testHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(analysis.Conversions) != 1 || analysis.Conversions[0].Status != "complete" || analysis.Quality.Status != "complete" {
+		t.Fatalf("analysis=%+v", analysis)
 	}
 }
 

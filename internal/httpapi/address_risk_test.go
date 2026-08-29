@@ -29,11 +29,11 @@ func (s addressProviderStub) ListLabels(context.Context, string, string) ([]stor
 func TestAddressHandlerReturnsMetadataAndLabels(t *testing.T) {
 	seed := "0x0000000000000000000000000000000000000001"
 	e := echo.New()
-	h := NewAddressHandler(addressProviderStub{address: store.Address{Chain: "base", ChainID: 8453, Address: seed, SyncStatus: "synced"}, found: true, labels: []store.Label{{Type: "exchange"}}})
+	h := NewAddressHandler(addressProviderStub{address: store.Address{Chain: "ethereum", ChainID: 1, Address: seed, SyncStatus: "synced"}, found: true, labels: []store.Label{{Type: "exchange"}}})
 	e.GET("/api/v1/addresses/:address", h.Get)
 	res := httptest.NewRecorder()
-	e.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/api/v1/addresses/"+seed+"?chain=base", nil))
-	if res.Code != 200 || !containsAll(res.Body.String(), `"chainId":8453`, `"exchange"`) {
+	e.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/api/v1/addresses/"+seed+"?chain=ethereum", nil))
+	if res.Code != 200 || !containsAll(res.Body.String(), `"chainId":1`, `"exchange"`) {
 		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
 	}
 }

@@ -36,7 +36,6 @@ type Repository interface {
 	SetAddressIdentity(context.Context, string, string, store.AddressIdentity) error
 	QueryTransfers(context.Context, store.TransferQuery) ([]store.Transfer, error)
 	ListLabels(context.Context, string, string) ([]store.Label, error)
-	ListCrossChainLinks(context.Context, string, string, int64) ([]store.CrossChainLink, error)
 }
 
 type TransactionAnalyzer interface {
@@ -61,15 +60,6 @@ type Node struct {
 	Protocol    string   `json:"protocol,omitempty"`
 	Roles       []string `json:"roles,omitempty"`
 	StopReason  string   `json:"stopReason,omitempty"`
-}
-type NodeRef struct {
-	Chain   string `json:"chain"`
-	Address string `json:"address"`
-}
-type BridgeEdge struct {
-	Link  store.CrossChainLink `json:"link"`
-	Depth int                  `json:"depth"`
-	Path  []NodeRef            `json:"path"`
 }
 type Edge struct {
 	Chain                 string               `bson:"chain" json:"chain"`
@@ -116,17 +106,15 @@ type ConversionEvidence struct {
 	Evidence          []string `bson:"evidence" json:"evidence"`
 }
 type Result struct {
-	Nodes             []Node               `bson:"nodes" json:"nodes"`
-	Edges             []Edge               `bson:"edges" json:"edges"`
-	BridgeEdges       []BridgeEdge         `bson:"bridgeEdges,omitempty" json:"bridgeEdges,omitempty"`
-	CrossChainPaths   [][]NodeRef          `bson:"crossChainPaths,omitempty" json:"crossChainPaths,omitempty"`
-	Paths             [][]string           `bson:"paths,omitempty" json:"paths,omitempty"`
-	DataThroughBlock  int64                `bson:"dataThroughBlock" json:"dataThroughBlock"`
-	DataThroughBlocks map[string]int64     `bson:"dataThroughBlocks,omitempty" json:"dataThroughBlocks,omitempty"`
-	DataStatus        string               `bson:"dataStatus" json:"dataStatus"`
-	Labels            []risk.InferredLabel `bson:"labels,omitempty" json:"labels,omitempty"`
-	Risk              risk.Result          `bson:"risk" json:"risk"`
-	RuleVersion       string               `bson:"ruleVersion" json:"ruleVersion"`
+	Nodes             []Node           `bson:"nodes" json:"nodes"`
+	Edges             []Edge           `bson:"edges" json:"edges"`
+	Paths             [][]string       `bson:"paths,omitempty" json:"paths,omitempty"`
+	DataThroughBlock  int64            `bson:"dataThroughBlock" json:"dataThroughBlock"`
+	DataThroughBlocks map[string]int64 `bson:"dataThroughBlocks,omitempty" json:"dataThroughBlocks,omitempty"`
+	DataStatus        string           `bson:"dataStatus" json:"dataStatus"`
+	Labels            []store.Label    `bson:"labels,omitempty" json:"labels,omitempty"`
+	Risk              risk.Result      `bson:"risk" json:"risk"`
+	RuleVersion       string           `bson:"ruleVersion" json:"ruleVersion"`
 	branchStates      []branchState
 	MoneyStates       []store.MoneyState    `bson:"moneyStates,omitempty" json:"moneyStates,omitempty"`
 	MoneyTransfers    []store.MoneyTransfer `bson:"moneyTransfers,omitempty" json:"moneyTransfers,omitempty"`
@@ -149,11 +137,12 @@ type branchState struct {
 	Path          []string
 }
 type Graph struct {
-	repository          Repository
-	analyzer            TransactionAnalyzer
-	inspector           AddressInspector
-	requiredStartBlocks map[string]int64
-	existingDataOnly    bool
+	repository           Repository
+	analyzer             TransactionAnalyzer
+	inspector            AddressInspector
+	requiredStartBlocks  map[string]int64
+	existingDataOnly     bool
+	terminalDependencies map[string]string
 }
 
 func New(repository Repository) *Graph { return &Graph{repository: repository} }
@@ -177,6 +166,20 @@ func (g *Graph) WithRequiredStartBlocks(blocks map[string]int64) *Graph {
 func (g *Graph) WithExistingDataOnly(enabled bool) *Graph {
 	g.existingDataOnly = enabled
 	return g
+}
+
+func (g *Graph) withTerminalDependencies(dependencies map[string]string) *Graph {
+	copy := *g
+	copy.terminalDependencies = dependencies
+	return &copy
+}
+
+func dependencyAddressKey(chain, address string) string {
+	return strings.ToLower(chain + ":" + address)
+}
+
+func (g *Graph) dependencyStopReason(chain, address string) string {
+	return g.terminalDependencies[dependencyAddressKey(chain, address)]
 }
 
 func (g *Graph) addressCovered(address store.Address, from, through int64) bool {
@@ -218,7 +221,11 @@ func ValidateQuery(query Query) error {
 }
 
 func (g *Graph) Trace(ctx context.Context, query Query) (Result, error) {
-	return g.traceWithBridges(ctx, query)
+	result, err := g.traceSameChain(ctx, query)
+	if err == nil {
+		result.DataThroughBlocks = map[string]int64{"ethereum": result.DataThroughBlock}
+	}
+	return result, err
 }
 
 func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error) {
@@ -247,11 +254,11 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 		dataStatus = "partial"
 	}
 	result := Result{DataThroughBlock: dataThroughBlock, DataStatus: dataStatus, RuleVersion: traceRuleVersion}
-	bridgeSeen := make(map[string]bool)
 	seedLabels, err := g.repository.ListLabels(ctx, q.Chain, seed)
 	if err != nil {
 		return Result{}, err
 	}
+	result.Labels = append(result.Labels, seedLabels...)
 	directions := []string{q.Direction}
 	if q.Direction == "both" {
 		directions = []string{"in", "out"}
@@ -260,11 +267,17 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 	frontier := make([]branchState, 0, len(directions)*len(assets))
 	visitedStates := make(map[string]bool, len(directions)*len(assets))
 	visitedNodes := map[string]bool{seed: true}
-	seedTerminal := metadata.IsTerminal || highFrequency || hasTerminalLabel(seedLabels)
+	seedStopReason := g.dependencyStopReason(q.Chain, seed)
 	seedIdentity := addressIdentity(metadata)
+	seedTerminal := metadata.IsTerminal || highFrequency || seedStopReason != "" || hasTerminalLabel(seedLabels) || isCrossChainBridge(seedIdentity)
 	seedNode := Node{Chain: q.Chain, Address: seed, Depth: 0, Terminal: seedTerminal, AddressType: seedIdentity.AddressType, Protocol: seedIdentity.Protocol, Roles: seedIdentity.Roles}
 	if highFrequency {
 		seedNode.StopReason = "high_frequency"
+	} else if seedStopReason != "" {
+		seedNode.StopReason = seedStopReason
+		result.DataStatus = "partial"
+	} else if isCrossChainBridge(seedIdentity) {
+		seedNode.StopReason = "cross_chain_bridge"
 	}
 	result.Nodes = append(result.Nodes, seedNode)
 	for _, direction := range directions {
@@ -343,8 +356,9 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 					return metadataErr
 				}
 				otherHighFrequency := isHighFrequencyAddress(otherMetadata)
+				dependencyStopReason := g.dependencyStopReason(q.Chain, other)
 				identity := addressIdentity(otherMetadata)
-				if identity.AddressType == "unknown" && g.inspector != nil && !g.existingDataOnly && !otherHighFrequency {
+				if (identity.AddressType == "unknown" || identity.AddressType == "contract" && identity.Protocol == "") && g.inspector != nil && !g.existingDataOnly {
 					identity, metadataErr = g.inspector.InspectAddress(ctx, q.Chain, other)
 					if metadataErr != nil {
 						return metadataErr
@@ -358,13 +372,16 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 					otherMetadata.Roles = identity.Roles
 				}
 				contract := identity.AddressType == "contract"
+				if err := g.annotateTHORChainRouterCall(ctx, q.Chain, identity, summary.Representative, &result.Edges[edgeIndex]); err != nil {
+					return err
+				}
 				requiredFrom, requiredThrough := g.requiredStartBlocks[q.Chain], dataThroughBlock
 				if state.Direction == "out" {
 					requiredFrom = summary.Representative.BlockNumber
 				} else {
 					requiredThrough = summary.Representative.BlockNumber
 				}
-				if !contract && !otherHighFrequency && (!otherFound || !g.addressCovered(otherMetadata, requiredFrom, requiredThrough)) {
+				if !contract && !otherHighFrequency && dependencyStopReason == "" && (!otherFound || !g.addressCovered(otherMetadata, requiredFrom, requiredThrough)) {
 					dependency := AddressNotSyncedError{Chain: q.Chain, Address: other}
 					if state.Direction == "out" {
 						dependency.StartBlock = summary.Representative.BlockNumber
@@ -387,7 +404,11 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 				if labelsErr != nil {
 					return labelsErr
 				}
-				terminal := otherMetadata.IsTerminal || otherHighFrequency || hasTerminalLabel(otherLabels)
+				result.Labels = appendLabels(result.Labels, otherLabels)
+				terminal := otherMetadata.IsTerminal || otherHighFrequency && !contract || dependencyStopReason != "" || hasTerminalLabel(otherLabels) || isCrossChainBridge(identity)
+				if dependencyStopReason != "" {
+					result.DataStatus = "partial"
+				}
 				visitedStates[stateKey] = true
 				result.branchStates = append(result.branchStates, nextState)
 				isNewNode := !visitedNodes[other]
@@ -397,8 +418,12 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 				}
 				if isNewNode {
 					node := Node{Chain: q.Chain, Address: other, Depth: depth + 1, Terminal: terminal, AddressType: identity.AddressType, Protocol: identity.Protocol, Roles: identity.Roles}
-					if otherHighFrequency {
+					if otherHighFrequency && !contract {
 						node.StopReason = "high_frequency"
+					} else if dependencyStopReason != "" {
+						node.StopReason = dependencyStopReason
+					} else if isCrossChainBridge(identity) {
+						node.StopReason = "cross_chain_bridge"
 					}
 					result.Nodes = append(result.Nodes, node)
 				}
@@ -408,30 +433,6 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 		}
 		for _, state := range frontier {
 			if nodeTerminal(result.Nodes, state.Address) {
-				continue
-			}
-			links, linkErr := g.repository.ListCrossChainLinks(ctx, q.Chain, state.Address, 500)
-			if linkErr != nil {
-				return Result{}, linkErr
-			}
-			bridgeTerminal := false
-			for _, link := range links {
-				if state.EnteringTx.TxHash == "" || !bridgeMatchesTransaction(link, state.EnteringTx.TxHash) {
-					continue
-				}
-				if _, ok := bridgeTarget(link, Node{Chain: q.Chain, Address: state.Address}, state.Direction); !ok || bridgeSeen[bridgeKey(link)] {
-					continue
-				}
-				bridgeSeen[bridgeKey(link)] = true
-				path := make([]NodeRef, len(state.Path))
-				for i, address := range state.Path {
-					path[i] = NodeRef{Chain: q.Chain, Address: address}
-				}
-				result.BridgeEdges = append(result.BridgeEdges, BridgeEdge{Link: link, Depth: len(state.Path), Path: path})
-				bridgeTerminal = true
-			}
-			if bridgeTerminal {
-				setNodeTerminal(result.Nodes, state.Address, "cross_chain_bridge")
 				continue
 			}
 			if state.EnteringQuery.Address != "" && state.Contract && !isTHORChainVault(state.Identity) && g.existingDataOnly {
@@ -455,6 +456,9 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 					return Result{}, conversionErr
 				}
 				if ok {
+					if mergeExistingSwapLegs(result.Edges, conversion) {
+						continue
+					}
 					edgeStart := len(result.Edges)
 					aggregates := aggregateConversions([]analyzedConversion{conversion})
 					outputState := state
@@ -482,13 +486,15 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 							result.Edges[index].ProtocolAction = conversion.ProtocolAction
 							result.Edges[index].ProtocolMemo = conversion.ProtocolMemo
 						}
-						identity, identityErr := g.markTHORChainVault(ctx, q.Chain, conversion.VaultAddress, result.Nodes, next)
-						if identityErr != nil {
-							return Result{}, identityErr
-						}
-						for index := range next {
-							if strings.EqualFold(next[index].Address, conversion.VaultAddress) {
-								next[index].Identity = identity
+						if conversion.VaultAddress != "" {
+							identity, identityErr := g.markTHORChainVault(ctx, q.Chain, conversion.VaultAddress, result.Nodes, next)
+							if identityErr != nil {
+								return Result{}, identityErr
+							}
+							for index := range next {
+								if strings.EqualFold(next[index].Address, conversion.VaultAddress) {
+									next[index].Identity = identity
+								}
 							}
 						}
 					}
@@ -522,7 +528,7 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 		}
 		frontier = next
 	}
-	result.Risk = risk.Result{Level: "no_conclusion", RuleVersion: risk.RiskVersion, PropagationVersion: risk.PropagationVersion}
+	result.Risk = risk.Analyze(seed, nil, seedLabels)
 	consumeMoneyStates(result.MoneyStates)
 	result.Ledgers = buildLedgers(result.MoneyStates)
 	result.Reconciliation = "complete"
@@ -729,6 +735,53 @@ func conversionKey(from, to, asset string) string {
 	return strings.ToLower(from + "|" + to + "|" + asset)
 }
 
+func mergeExistingSwapLegs(edges []Edge, conversion analyzedConversion) bool {
+	if conversion.Evidence.Status != "complete" || conversion.Evidence.TxHash == "" || conversion.Evidence.Executor == "" || conversion.Evidence.Recipient == "" || conversion.Evidence.TokenOut == "" || conversion.Evidence.AmountOut == "" {
+		return false
+	}
+	currentLeg := -1
+	outputLeg := -1
+	for index := range edges {
+		edge := &edges[index]
+		if !strings.EqualFold(edge.TxHash, conversion.Evidence.TxHash) {
+			continue
+		}
+		if edgeMatchesTransfer(*edge, conversion.Transfer) {
+			currentLeg = index
+		}
+		if strings.EqualFold(edge.From, conversion.Evidence.Executor) &&
+			strings.EqualFold(edge.To, conversion.Evidence.Recipient) &&
+			strings.EqualFold(edge.Asset, conversion.Evidence.TokenOut) &&
+			edge.TotalAmount == conversion.Evidence.AmountOut {
+			outputLeg = index
+		}
+	}
+	if currentLeg < 0 || outputLeg < 0 {
+		return false
+	}
+	edges[outputLeg].Kind = "swap"
+	edges[outputLeg].Protocol = conversion.Evidence.Protocol
+	edges[outputLeg].ConversionEvidence = appendConversionEvidence(edges[outputLeg].ConversionEvidence, conversion.Evidence)
+	return true
+}
+
+func edgeMatchesTransfer(edge Edge, transfer store.Transfer) bool {
+	return strings.EqualFold(edge.TxHash, transfer.TxHash) &&
+		strings.EqualFold(edge.From, transfer.From) &&
+		strings.EqualFold(edge.To, transfer.To) &&
+		strings.EqualFold(edge.Asset, transfer.Asset) &&
+		edge.TotalAmount == transferAmount(transfer)
+}
+
+func appendConversionEvidence(current []ConversionEvidence, evidence ConversionEvidence) []ConversionEvidence {
+	for _, item := range current {
+		if strings.EqualFold(item.TxHash, evidence.TxHash) && strings.EqualFold(item.Protocol, evidence.Protocol) && strings.EqualFold(item.Executor, evidence.Executor) {
+			return current
+		}
+	}
+	return append(current, evidence)
+}
+
 func branchStateKey(state branchState) string {
 	return strings.Join([]string{strings.ToLower(state.Address), state.Direction, state.AssetMode, strings.ToLower(state.Asset), fmt.Sprint(state.AnchorBlock), strings.ToLower(state.EnteringTx.TxHash)}, "|")
 }
@@ -758,10 +811,13 @@ func (g *Graph) conversionTransfer(ctx context.Context, chain string, state bran
 	if !strings.EqualFold(analysis.To, state.Address) && !strings.EqualFold(analysis.EntryContract, state.Address) && !conversionUsesExecutor(analysis.Conversions, state.Address) {
 		return analyzedConversion{}, false, nil
 	}
-	if transfer, ok := thorchainMigrationTransfer(analysis, state); ok {
-		vaultAddress := analysis.ProtocolDestination
-		if state.Direction == "in" {
-			vaultAddress = analysis.From
+	if transfer, ok := thorchainProtocolTransfer(analysis, state); ok {
+		vaultAddress := ""
+		if analysis.ProtocolAction == "vault_migration" {
+			vaultAddress = analysis.ProtocolDestination
+			if state.Direction == "in" {
+				vaultAddress = analysis.From
+			}
 		}
 		return analyzedConversion{Transfer: transfer, Protocol: "thorchain", ProtocolAction: analysis.ProtocolAction, ProtocolMemo: analysis.ProtocolMemo, VaultAddress: vaultAddress}, true, nil
 	}
@@ -816,8 +872,42 @@ func isTHORChainVault(identity store.AddressIdentity) bool {
 	return identity.Protocol == "thorchain" && containsRole(identity.Roles, "thorchain_vault")
 }
 
-func thorchainMigrationTransfer(analysis store.TransactionAnalysis, state branchState) (store.Transfer, bool) {
-	if analysis.ProtocolAction != "vault_migration" || analysis.ProtocolDestination == "" || analysis.ProtocolAmount == "" || !verifiedTHORChainMigrationAnalysis(analysis) {
+func isCrossChainBridge(identity store.AddressIdentity) bool {
+	return containsRole(identity.Roles, "cross_chain_bridge")
+}
+
+func (g *Graph) annotateTHORChainRouterCall(ctx context.Context, chain string, identity store.AddressIdentity, transfer store.Transfer, edge *Edge) error {
+	if chain != "ethereum" || identity.Protocol != "thorchain" || !containsRole(identity.Roles, "router") {
+		return nil
+	}
+	edge.Protocol = "thorchain"
+	edge.ProtocolAction = "router_inbound"
+	if g.analyzer == nil || transfer.TxHash == "" {
+		return nil
+	}
+	analysis, err := g.analyzer.Analyze(ctx, chain, transfer.TxHash)
+	if err != nil {
+		return fmt.Errorf("analyze THORChain router call: %w", err)
+	}
+	if !strings.EqualFold(analysis.To, edge.To) || !verifiedTHORChainTransferOutAnalysis(analysis) {
+		return nil
+	}
+	edge.ProtocolAction = analysis.ProtocolAction
+	edge.ProtocolMemo = analysis.ProtocolMemo
+	return nil
+}
+
+func thorchainProtocolTransfer(analysis store.TransactionAnalysis, state branchState) (store.Transfer, bool) {
+	kind, supported := map[string]string{
+		"vault_migration":   "thorchain_vault_migration",
+		"protocol_outbound": "thorchain_protocol_outbound",
+		"cross_chain_swap":  "thorchain_cross_chain_swap",
+		"refund":            "thorchain_refund",
+	}[analysis.ProtocolAction]
+	if !supported || analysis.ProtocolDestination == "" || analysis.ProtocolAmount == "" || !verifiedTHORChainTransferOutAnalysis(analysis) {
+		return store.Transfer{}, false
+	}
+	if state.Direction == "in" && analysis.ProtocolAction != "vault_migration" {
 		return store.Transfer{}, false
 	}
 	assetMode, asset := transferAsset(state.EnteringTx)
@@ -829,13 +919,13 @@ func thorchainMigrationTransfer(analysis store.TransactionAnalysis, state branch
 		return store.Transfer{}, false
 	}
 	if state.Direction == "in" {
-		return semanticTransfer(analysis, analysis.From, state.Address, analysis.ProtocolAsset, analysis.ProtocolAmount, "thorchain_vault_migration"), true
+		return semanticTransfer(analysis, analysis.From, state.Address, analysis.ProtocolAsset, analysis.ProtocolAmount, kind), true
 	}
-	return semanticTransfer(analysis, state.Address, analysis.ProtocolDestination, analysis.ProtocolAsset, analysis.ProtocolAmount, "thorchain_vault_migration"), true
+	return semanticTransfer(analysis, state.Address, analysis.ProtocolDestination, analysis.ProtocolAsset, analysis.ProtocolAmount, kind), true
 }
 
-func verifiedTHORChainMigrationAnalysis(analysis store.TransactionAnalysis) bool {
-	if !analysis.Succeeded || analysis.Quality.Status != "complete" || analysis.ProtocolAction != "vault_migration" {
+func verifiedTHORChainTransferOutAnalysis(analysis store.TransactionAnalysis) bool {
+	if !analysis.Succeeded || analysis.Quality.Status != "complete" || !isTraceableTHORChainAction(analysis.ProtocolAction) {
 		return false
 	}
 	if strings.EqualFold(analysis.ProtocolAsset, "ETH") {
@@ -852,6 +942,15 @@ func verifiedTHORChainMigrationAnalysis(analysis store.TransactionAnalysis) bool
 		}
 	}
 	return false
+}
+
+func isTraceableTHORChainAction(action string) bool {
+	switch action {
+	case "vault_migration", "protocol_outbound", "cross_chain_swap", "refund":
+		return true
+	default:
+		return false
+	}
 }
 
 func conversionUsesExecutor(conversions []store.SwapConversion, address string) bool {
@@ -977,38 +1076,6 @@ func hasWrap(wraps []store.WrapEvent, kind string) bool {
 		}
 	}
 	return false
-}
-
-func (g *Graph) traceWithBridges(ctx context.Context, query Query) (Result, error) {
-	q, err := normalize(query)
-	if err != nil {
-		return Result{}, err
-	}
-	result, err := g.traceSameChain(ctx, q)
-	if err != nil {
-		return Result{}, err
-	}
-	result.RuleVersion = traceRuleVersion
-	result.DataThroughBlocks = map[string]int64{q.Chain: result.DataThroughBlock}
-	return result, nil
-}
-
-func bridgeTarget(link store.CrossChainLink, node Node, direction string) (NodeRef, bool) {
-	if direction != "in" && link.SourceChain == node.Chain && strings.EqualFold(link.SourceAddress, node.Address) {
-		return NodeRef{Chain: link.TargetChain, Address: link.TargetAddress}, true
-	}
-	if direction != "out" && link.TargetChain == node.Chain && strings.EqualFold(link.TargetAddress, node.Address) {
-		return NodeRef{Chain: link.SourceChain, Address: link.SourceAddress}, true
-	}
-	return NodeRef{}, false
-}
-
-func bridgeKey(link store.CrossChainLink) string {
-	return strings.Join([]string{link.SourceChain, link.SourceTxHash, fmt.Sprint(link.SourceLogIndex), link.TargetChain, link.TargetTxHash, fmt.Sprint(link.TargetLogIndex)}, "|")
-}
-
-func bridgeMatchesTransaction(link store.CrossChainLink, txHash string) bool {
-	return strings.EqualFold(link.SourceTxHash, txHash) || strings.EqualFold(link.TargetTxHash, txHash)
 }
 
 func pathContains(path []string, address string) bool {

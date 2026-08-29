@@ -35,7 +35,7 @@ Etherscan 的[最佳实践](https://docs.etherscan.io/resources/best-practices)�
 | Pro Plus | 30 calls/s | 1,500,000/day | 可用 |
 | Dedicated/Custom | 联系 Etherscan | 联系 Etherscan | 可用 |
 
-官方还说明 Free 仅覆盖部分链；[支持链页面](https://docs.etherscan.io/supported-chains)当前将 Ethereum Mainnet 标为 Free Tier Available，将 Base Mainnet 标为 Paid Tier Only。
+官方还说明 Free 仅覆盖部分链；当前项目只使用 Ethereum Mainnet。
 
 ## 历史数据与分页能力差异
 
@@ -48,7 +48,7 @@ Etherscan 的[最佳实践](https://docs.etherscan.io/resources/best-practices)�
 - Free 套餐的链覆盖范围；
 - PRO endpoints 是否可用。
 
-所以，对 Ethereum 大地址全历史同步，付费套餐主要通过更高 calls/s 缩短请求耗时，并通过更高 daily quota 降低当天耗尽配额的风险；它不会从官方契约层面消除逐页拉取、区块切分、超时和本地落库成本。若还要同步 Base，当前官方支持链表要求使用付费套餐。
+所以，对 Ethereum 大地址全历史同步，付费套餐主要通过更高 calls/s 缩短请求耗时，并通过更高 daily quota 降低当天耗尽配额的风险；它不会从官方契约层面消除逐页拉取、区块切分、超时和本地落库成本。
 
 ## 工程建议
 

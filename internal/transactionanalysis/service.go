@@ -17,7 +17,7 @@ import (
 
 const (
 	// AnalysisVersion invalidates cached analyses when semantic rules change.
-	AnalysisVersion   = "transaction-analysis-v4"
+	AnalysisVersion   = "transaction-analysis-v6"
 	EthereumV3Factory = "0x1f98431c8ad98523631ae4a59f267346ea31f984"
 	EthereumWETH      = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
 	// KyberSwapRouter is the Ethereum MetaAggregation Router supported by the RFQ adapter.
@@ -37,24 +37,28 @@ var (
 	ErrUnsupportedChain = errors.New("unsupported transaction analysis chain")
 )
 
+const EthereumL1StandardBridge = "0x3154cf16ccdb4c6d922629664174b904d80f2c35"
+
 var officialContracts = map[string]string{
 	"0xe592427a0aece92de3edee1f18e0157c05861564": "Uniswap V3 SwapRouter",
 	"0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45": "Uniswap SwapRouter02",
 	"0xef1c6e67703c7bd7107eed8303fbe6ec2554bf6b": "Uniswap Universal Router",
 	"0x66a9893cc07d91d95644aedd05d03f95e1dba8af": "Uniswap Universal Router",
-	EthereumWETH:      "Wrapped Ether",
-	EthereumV3Factory: "Uniswap V3 Factory",
-	KyberSwapRouter:   "KyberSwap MetaAggregation Router",
-	KyberSwapExecutor: "KyberSwap Executor",
-	THORChainRouter:   "THORChain Router v4",
+	EthereumWETH:             "Wrapped Ether",
+	EthereumV3Factory:        "Uniswap V3 Factory",
+	KyberSwapRouter:          "KyberSwap MetaAggregation Router",
+	KyberSwapExecutor:        "KyberSwap Executor",
+	THORChainRouter:          "THORChain Router v4",
+	EthereumL1StandardBridge: "Base L1 Standard Bridge",
 }
 
 var contractIdentities = map[string]store.AddressIdentity{
-	KyberSwapRouter:   {AddressType: "contract", Protocol: "kyberswap", Roles: []string{"kyberswap_router"}},
-	KyberSwapExecutor: {AddressType: "contract", Protocol: "kyberswap", Roles: []string{"kyberswap_executor"}},
-	THORChainRouter:   {AddressType: "contract", Protocol: "thorchain", Roles: []string{"router"}},
-	EthereumV3Factory: {AddressType: "contract", Protocol: "uniswap", Roles: []string{"factory"}},
-	EthereumWETH:      {AddressType: "contract", Protocol: "weth", Roles: []string{"wrapped_native_token"}},
+	KyberSwapRouter:          {AddressType: "contract", Protocol: "kyberswap", Roles: []string{"kyberswap_router"}},
+	KyberSwapExecutor:        {AddressType: "contract", Protocol: "kyberswap", Roles: []string{"kyberswap_executor"}},
+	THORChainRouter:          {AddressType: "contract", Protocol: "thorchain", Roles: []string{"router"}},
+	EthereumV3Factory:        {AddressType: "contract", Protocol: "uniswap", Roles: []string{"factory"}},
+	EthereumWETH:             {AddressType: "contract", Protocol: "weth", Roles: []string{"wrapped_native_token"}},
+	EthereumL1StandardBridge: {AddressType: "contract", Protocol: "bridge", Roles: []string{"cross_chain_bridge"}},
 }
 
 // wooXIdentities contains the Ethereum addresses publicly labelled for WOO X.
@@ -213,11 +217,11 @@ func (s *Service) Analyze(ctx context.Context, chain, txHash string) (store.Tran
 		if !parseTHORChainCall(&analysis) {
 			analysis.Quality.Status = "partial"
 			analysis.Quality.Issues = append(analysis.Quality.Issues, "unsupported or malformed THORChain calldata")
-		} else if analysis.ProtocolAction == "vault_migration" && !verifiedTHORChainMigration(analysis) {
+		} else if isTHORChainTransferOutAction(analysis.ProtocolAction) && !verifiedTHORChainTransferOut(analysis) {
 			analysis.Quality.Status = "partial"
-			analysis.Quality.Issues = append(analysis.Quality.Issues, "THORChain vault migration transfer evidence mismatch")
-		} else if analysis.ProtocolAction == "vault_migration" {
-			analysis.Quality.Evidence = append(analysis.Quality.Evidence, "verified THORChain vault migration transfer")
+			analysis.Quality.Issues = append(analysis.Quality.Issues, "THORChain transferOut evidence mismatch")
+		} else if isTHORChainTransferOutAction(analysis.ProtocolAction) {
+			analysis.Quality.Evidence = append(analysis.Quality.Evidence, "verified THORChain transferOut")
 		}
 	case analysis.To == KyberSwapRouter:
 		s.finalizeKyberRFQ(&analysis, internalErr)
@@ -289,7 +293,20 @@ func parseTHORChainCall(analysis *store.TransactionAnalysis) bool {
 }
 
 func verifiedTHORChainMigration(analysis store.TransactionAnalysis) bool {
-	if !analysis.Succeeded || analysis.To != THORChainRouter || analysis.ProtocolAction != "vault_migration" || analysis.ProtocolDestination == "" || analysis.ProtocolAmount == "" {
+	return analysis.ProtocolAction == "vault_migration" && verifiedTHORChainTransferOut(analysis)
+}
+
+func isTHORChainTransferOutAction(action string) bool {
+	switch action {
+	case "vault_migration", "protocol_outbound", "cross_chain_swap", "refund":
+		return true
+	default:
+		return false
+	}
+}
+
+func verifiedTHORChainTransferOut(analysis store.TransactionAnalysis) bool {
+	if !analysis.Succeeded || analysis.To != THORChainRouter || !isTHORChainTransferOutAction(analysis.ProtocolAction) || analysis.ProtocolDestination == "" || analysis.ProtocolAmount == "" {
 		return false
 	}
 	if analysis.ProtocolAsset == "ETH" {
@@ -325,12 +342,6 @@ func (s *Service) finalizeKyberRFQ(analysis *store.TransactionAnalysis, internal
 			return
 		}
 	}
-	if !hasInternalCall(analysis.InternalCalls, KyberSwapRouter, KyberSwapExecutor, "") {
-		partial.Issues = []string{"router to executor call missing"}
-		analysis.Conversions = append(analysis.Conversions, partial)
-		analysis.Quality.Status = "partial"
-		return
-	}
 	candidates := make([]store.SwapConversion, 0, 1)
 	for _, input := range analysis.Transfers {
 		if input.From != analysis.From || input.To != KyberSwapExecutor || input.Token == EthereumWETH {
@@ -345,7 +356,7 @@ func (s *Service) finalizeKyberRFQ(analysis *store.TransactionAnalysis, internal
 				if output.Token != EthereumWETH || output.From != provider || output.To != KyberSwapExecutor {
 					continue
 				}
-				if !hasWithdrawal(analysis.Wraps, KyberSwapExecutor, output.Amount) || !hasInternalCall(analysis.InternalCalls, EthereumWETH, KyberSwapExecutor, output.Amount) {
+				if !hasWithdrawalFunding(analysis.Wraps, analysis.InternalCalls, KyberSwapExecutor, output.Amount) {
 					continue
 				}
 				recipients := internalRecipients(analysis.InternalCalls, KyberSwapExecutor, output.Amount)
@@ -392,9 +403,24 @@ func internalRecipients(calls []store.InternalCall, from, value string) []string
 	return result
 }
 
-func hasWithdrawal(wraps []store.WrapEvent, account, amount string) bool {
+func hasWithdrawalFunding(wraps []store.WrapEvent, calls []store.InternalCall, account, payoutAmount string) bool {
+	payout, ok := new(big.Int).SetString(payoutAmount, 10)
+	if !ok {
+		return false
+	}
 	for _, wrap := range wraps {
-		if wrap.Type == "withdrawal" && wrap.Account == account && wrap.Amount == amount {
+		if wrap.Type != "withdrawal" || wrap.Account != account || !hasInternalCall(calls, EthereumWETH, account, wrap.Amount) {
+			continue
+		}
+		withdrawn, valid := new(big.Int).SetString(wrap.Amount, 10)
+		if !valid {
+			continue
+		}
+		delta := new(big.Int).Sub(withdrawn, payout)
+		if delta.Sign() < 0 {
+			delta.Neg(delta)
+		}
+		if delta.Cmp(big.NewInt(1)) <= 0 {
 			return true
 		}
 	}

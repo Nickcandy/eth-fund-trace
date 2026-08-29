@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { displayDecimals, formatAssetAmount, formatChainAmount } from "./format";
+import {
+  displayDecimals,
+  formatAssetAmount,
+  formatChainAmount,
+} from "./format";
 
 describe("formatChainAmount", () => {
   it("formats a large integer as a compact human-readable amount", () => {
-    expect(formatChainAmount("123456789012345678901234", 18)).toBe("123,456.789");
+    expect(formatChainAmount("123456789012345678901234", 18)).toBe(
+      "123,456.789",
+    );
   });
 
   it("compacts the raw integer when token precision is unknown", () => {
@@ -17,7 +23,9 @@ describe("formatChainAmount", () => {
   });
 
   it("places the asset unit after the compact amount", () => {
-    expect(formatAssetAmount("1234567890000000000", 18, "ETH", 2)).toBe("1.23 ETH");
+    expect(formatAssetAmount("1234567890000000000", 18, "ETH", 2)).toBe(
+      "1.23 ETH",
+    );
   });
 
   it("infers 18 decimals for native ETH but not for tokens with unknown precision", () => {
@@ -30,5 +38,4 @@ describe("formatChainAmount", () => {
     expect(formatChainAmount("1", 18)).toBe("1e-18");
     expect(formatChainAmount("-1", 18)).toBe("-1e-18");
   });
-
 });

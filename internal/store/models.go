@@ -141,62 +141,6 @@ type Label struct {
 	ObservedAt time.Time          `bson:"observedAt" json:"observedAt"`
 }
 
-// PropagationJob is a bounded, persistent risk-association computation.
-type PropagationJob struct {
-	ID                  primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	IdempotencyKey      string             `bson:"idempotencyKey" json:"-"`
-	Chain               string             `bson:"chain" json:"chain"`
-	TargetAddress       string             `bson:"targetAddress" json:"targetAddress"`
-	Asset               string             `bson:"asset" json:"asset"`
-	Direction           string             `bson:"direction" json:"direction"`
-	Status              string             `bson:"status" json:"status"`
-	MaxHops             int                `bson:"maxHops" json:"maxHops"`
-	MaxNodes            int                `bson:"maxNodes" json:"maxNodes"`
-	MaxEdges            int                `bson:"maxEdges" json:"maxEdges"`
-	MaxAssetChannels    int                `bson:"maxAssetChannels" json:"maxAssetChannels"`
-	PerNodeCandidateCap int                `bson:"perNodeCandidateCap" json:"perNodeCandidateCap"`
-	MaxPathsPerTarget   int                `bson:"maxPathsPerTarget" json:"maxPathsPerTarget"`
-	CurrentHop          int                `bson:"currentHop" json:"currentHop"`
-	VisitedNodes        int                `bson:"visitedNodes" json:"visitedNodes"`
-	EdgeCount           int                `bson:"edgeCount" json:"edgeCount"`
-	DataThroughBlock    int64              `bson:"dataThroughBlock" json:"dataThroughBlock"`
-	RuleVersion         string             `bson:"ruleVersion" json:"ruleVersion"`
-	PropagationVersion  string             `bson:"propagationVersion" json:"propagationVersion"`
-	Truncated           bool               `bson:"truncated" json:"truncated"`
-	TruncationReason    string             `bson:"truncationReason,omitempty" json:"truncationReason,omitempty"`
-	RetryCount          int                `bson:"retryCount" json:"retryCount"`
-	LeaseUntil          time.Time          `bson:"leaseUntil,omitempty" json:"leaseUntil,omitempty"`
-	CreatedAt           time.Time          `bson:"createdAt" json:"createdAt"`
-	StartedAt           time.Time          `bson:"startedAt,omitempty" json:"startedAt,omitempty"`
-	FinishedAt          time.Time          `bson:"finishedAt,omitempty" json:"finishedAt,omitempty"`
-	Result              any                `bson:"result,omitempty" json:"result,omitempty"`
-	ErrorCode           string             `bson:"errorCode,omitempty" json:"errorCode,omitempty"`
-	Error               string             `bson:"error,omitempty" json:"error,omitempty"`
-	Retryable           bool               `bson:"retryable" json:"retryable"`
-}
-
-// InferredRiskAssociation stores one versioned association without changing labels.
-type InferredRiskAssociation struct {
-	ID                 primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	SourceLabelID      primitive.ObjectID `bson:"sourceLabelId" json:"sourceLabelId"`
-	SourceAddress      string             `bson:"sourceAddress" json:"sourceAddress"`
-	SourceType         string             `bson:"sourceType" json:"sourceType"`
-	TargetChain        string             `bson:"targetChain" json:"targetChain"`
-	TargetAddress      string             `bson:"targetAddress" json:"targetAddress"`
-	Direction          string             `bson:"direction" json:"direction"`
-	Asset              string             `bson:"asset" json:"asset"`
-	PropagationVersion string             `bson:"propagationVersion" json:"propagationVersion"`
-	RuleVersion        string             `bson:"ruleVersion" json:"ruleVersion"`
-	DataThroughBlock   int64              `bson:"dataThroughBlock" json:"dataThroughBlock"`
-	Confidence         float64            `bson:"confidence" json:"confidence"`
-	Score              int                `bson:"score" json:"score"`
-	Paths              [][]string         `bson:"paths" json:"paths"`
-	TxHashes           [][]string         `bson:"txHashes" json:"txHashes"`
-	BestPathEvidence   any                `bson:"bestPathEvidence,omitempty" json:"bestPathEvidence,omitempty"`
-	Stale              bool               `bson:"stale" json:"stale"`
-	ComputedAt         time.Time          `bson:"computedAt" json:"computedAt"`
-}
-
 type TraceJob struct {
 	ID                 primitive.ObjectID `bson:"_id,omitempty" json:"id"`
 	Chain              string             `bson:"chain" json:"chain"`
@@ -367,43 +311,6 @@ type CounterpartySummary struct {
 	Representative        Transfer
 }
 
-// CandidateQuery selects bounded multi-channel propagation candidates.
-type CandidateQuery struct {
-	Chain, Address, Direction, AssetMode, Asset string
-	PerChannelLimit, Limit                      int
-	ToBlock                                     int64
-	ForcedCounterparties                        []string
-}
-
-// CandidateCoverage describes how much of the scanned relationship set was selected.
-type CandidateCoverage struct {
-	SelectedCounterparties int    `bson:"selectedCounterparties" json:"selectedCounterparties"`
-	TotalCounterparties    int    `bson:"totalCounterparties" json:"totalCounterparties"`
-	SelectedAmount         string `bson:"selectedAmount" json:"selectedAmount"`
-	TotalAmount            string `bson:"totalAmount" json:"totalAmount"`
-	AmountCoverage         string `bson:"amountCoverage" json:"amountCoverage"`
-	Truncated              bool   `bson:"truncated" json:"truncated"`
-	TruncationReason       string `bson:"truncationReason,omitempty" json:"truncationReason,omitempty"`
-}
-
-// CandidateResult contains selected summaries and explicit scan coverage.
-type CandidateResult struct {
-	Items    []CounterpartySummary
-	Coverage CandidateCoverage
-}
-
-// AssetChannel identifies one independently traceable transfer asset.
-type AssetChannel struct {
-	AssetMode string `bson:"assetMode" json:"assetMode"`
-	Asset     string `bson:"asset" json:"asset"`
-}
-
-// AssetChannelResult is a bounded set of assets observed for one address and direction.
-type AssetChannelResult struct {
-	Items     []AssetChannel
-	Truncated bool
-}
-
 // TransactionAnalysis is a cached interpretation of a confirmed receipt.
 type TransactionAnalysis struct {
 	AnalysisVersion     string            `bson:"analysisVersion" json:"analysisVersion"`
@@ -428,7 +335,6 @@ type TransactionAnalysis struct {
 	ProtocolDestination string            `bson:"protocolDestination,omitempty" json:"protocolDestination,omitempty"`
 	ProtocolAsset       string            `bson:"protocolAsset,omitempty" json:"protocolAsset,omitempty"`
 	ProtocolAmount      string            `bson:"protocolAmount,omitempty" json:"protocolAmount,omitempty"`
-	BridgeLinks         []CrossChainLink  `bson:"bridgeLinks,omitempty" json:"bridgeLinks,omitempty"`
 	FinalOutputAddress  string            `bson:"finalOutputAddress,omitempty" json:"finalOutputAddress,omitempty"`
 	Quality             AnalysisQuality   `bson:"quality" json:"quality"`
 	AnalyzedAt          time.Time         `bson:"analyzedAt" json:"analyzedAt"`
@@ -516,50 +422,4 @@ type PoolMetadata struct {
 	Factory    string    `bson:"factory" json:"factory"`
 	Verified   bool      `bson:"verified" json:"verified"`
 	ObservedAt time.Time `bson:"observedAt" json:"observedAt"`
-}
-
-type CrossChainLink struct {
-	ID             primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	SourceChain    string             `bson:"sourceChain" json:"sourceChain"`
-	SourceChainID  int64              `bson:"sourceChainId" json:"sourceChainId"`
-	SourceTxHash   string             `bson:"sourceTxHash" json:"sourceTxHash"`
-	SourceLogIndex int64              `bson:"sourceLogIndex" json:"sourceLogIndex"`
-	SourceAddress  string             `bson:"sourceAddress" json:"sourceAddress"`
-	TargetChain    string             `bson:"targetChain" json:"targetChain"`
-	TargetChainID  int64              `bson:"targetChainId" json:"targetChainId"`
-	TargetTxHash   string             `bson:"targetTxHash" json:"targetTxHash"`
-	TargetLogIndex int64              `bson:"targetLogIndex" json:"targetLogIndex"`
-	TargetAddress  string             `bson:"targetAddress" json:"targetAddress"`
-	BridgeAddress  string             `bson:"bridgeAddress" json:"bridgeAddress"`
-	SourceAsset    string             `bson:"sourceAsset" json:"sourceAsset"`
-	SourceAmount   string             `bson:"sourceAmount" json:"sourceAmount"`
-	TargetAsset    string             `bson:"targetAsset" json:"targetAsset"`
-	TargetAmount   string             `bson:"targetAmount" json:"targetAmount"`
-	Status         string             `bson:"status" json:"status"`
-	IdentityKey    string             `bson:"identityKey,omitempty" json:"identityKey,omitempty"`
-	Protocol       string             `bson:"protocol,omitempty" json:"protocol,omitempty"`
-	Direction      string             `bson:"direction,omitempty" json:"direction,omitempty"`
-	MessageHash    string             `bson:"messageHash,omitempty" json:"messageHash,omitempty"`
-	Nonce          string             `bson:"nonce,omitempty" json:"nonce,omitempty"`
-	SourceBlock    int64              `bson:"sourceBlock,omitempty" json:"sourceBlock,omitempty"`
-	TargetBlock    int64              `bson:"targetBlock,omitempty" json:"targetBlock,omitempty"`
-	EvidenceLevel  string             `bson:"evidenceLevel,omitempty" json:"evidenceLevel,omitempty"`
-	LastCheckedAt  time.Time          `bson:"lastCheckedAt,omitempty" json:"lastCheckedAt,omitempty"`
-	NextCheckAt    time.Time          `bson:"nextCheckAt,omitempty" json:"nextCheckAt,omitempty"`
-	AdapterVersion string             `bson:"adapterVersion,omitempty" json:"adapterVersion,omitempty"`
-	RetryCount     int                `bson:"retryCount,omitempty" json:"retryCount,omitempty"`
-	LastErrorCode  string             `bson:"lastErrorCode,omitempty" json:"lastErrorCode,omitempty"`
-	Evidence       []string           `bson:"evidence" json:"evidence"`
-	ObservedAt     time.Time          `bson:"observedAt" json:"observedAt"`
-}
-
-// BridgeLinkQuery filters cross-chain links for API and worker use.
-type BridgeLinkQuery struct {
-	Chain     string
-	Address   string
-	Status    string
-	Protocol  string
-	Direction string
-	Limit     int64
-	DueBefore time.Time
 }

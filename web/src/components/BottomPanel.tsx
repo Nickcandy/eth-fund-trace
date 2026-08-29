@@ -1,35 +1,503 @@
-import { FormEvent, useEffect, useState } from "react";
-import { RefreshCw, Search } from "lucide-react";
-import type { BridgeInput, CrossChainLink, SyncJob, TraceJob, TraceResult, Transfer } from "../api/types";
+import { useEffect, useState } from "react";
+import type { SyncJob, TraceJob, TraceResult, Transfer } from "../api/types";
 import { collapseSyncJobsByAddress } from "../api/job";
-import { chainLabel, DETAIL_AMOUNT_FRACTION_DIGITS, displayDecimals, formatAssetAmount, shortAddress } from "../lib/format";
-import { WriteForms } from "./WriteForms";
+import {
+  DETAIL_AMOUNT_FRACTION_DIGITS,
+  displayDecimals,
+  formatAssetAmount,
+  shortAddress,
+} from "../lib/format";
 
-type Tab = "facts" | "money" | "transactions" | "jobs" | "bridges" | "write";
-interface Props { facts: Transfer[]; traceResult?: TraceResult; hasMore?: boolean; loadingMore?: boolean; onMore: () => void; traceJob?: TraceJob; syncJobs: SyncJob[]; bridges: CrossChainLink[]; chain: "ethereum"|"base"; address: string; onBridge: (input: BridgeInput) => Promise<void>; onAnalyzeBridge?:(txHash:string)=>Promise<void>; onSyncBridge?:(id:string)=>Promise<void>; onStopTrace?:()=>Promise<void> }
-export function BottomPanel({ facts, traceResult, hasMore, loadingMore, onMore, traceJob, syncJobs, bridges, chain, address, onBridge, onAnalyzeBridge=async()=>{}, onSyncBridge=async()=>{}, onStopTrace=async()=>{} }: Props) {
- const [tab,setTab]=useState<Tab>("facts");
- const hasActiveSync=syncJobs.some(job=>["queued","running"].includes(job.status));
- const uniqueSyncJobs=collapseSyncJobsByAddress(syncJobs); const completedSyncs=uniqueSyncJobs.filter(job=>["succeeded","partial"].includes(job.status)).length; const activeSyncIndex=uniqueSyncJobs.findIndex(job=>["queued","running"].includes(job.status)); const visibleSyncIndex=activeSyncIndex>=0?activeSyncIndex:uniqueSyncJobs.length-1; const visibleSync=uniqueSyncJobs[visibleSyncIndex];
- useEffect(()=>{if(hasActiveSync)setTab("jobs")},[hasActiveSync]);
- return <section className="bottom-panel"><nav>{([['facts','事实边'],['money','资金对账'],['transactions','交易明细'],['jobs','任务进度'],['bridges','桥接关系'],['write','写入证据']] as [Tab,string][]).map(([id,label])=><button className={tab===id?'active':''} onClick={()=>setTab(id)} key={id}>{label}{id==='facts'&&<span>{facts.length}</span>}</button>)}</nav><div className="tab-body">
- {tab==='facts'&&<FactTable facts={facts} hasMore={hasMore} loadingMore={loadingMore} onMore={onMore}/>} {tab==='transactions'&&<FactTable facts={facts} detailed hasMore={hasMore} loadingMore={loadingMore} onMore={onMore}/>}
- {tab==='money'&&<MoneyView result={traceResult}/>}
- {tab==='jobs'&&<div className="job-list">{traceJob&&<TraceProgressCard job={traceJob} completedSyncs={completedSyncs} currentStep={visibleSyncIndex+1} currentAddress={visibleSync?.progress?.currentAddress||visibleSync?.address} onStop={onStopTrace}/>} {visibleSync&&<SyncProgressCard job={visibleSync} step={visibleSyncIndex+1}/>} {traceJob&&uniqueSyncJobs.length>0&&<NeighborQueue seed={traceJob.seedAddress} jobs={uniqueSyncJobs}/>} {!traceJob&&!visibleSync&&<Empty text="当前没有任务"/>}</div>}
- {tab==='bridges'&&<BridgeList bridges={bridges} chain={chain} onAnalyze={onAnalyzeBridge} onSync={onSyncBridge}/>}
-	 {tab==='write'&&<WriteForms chain={chain} address={address} onBridge={onBridge}/>} </div></section>;
+type Tab = "facts" | "money" | "transactions" | "jobs";
+interface Props {
+  facts: Transfer[];
+  traceResult?: TraceResult;
+  hasMore?: boolean;
+  loadingMore?: boolean;
+  onMore: () => void;
+  traceJob?: TraceJob;
+  syncJobs: SyncJob[];
+  onStopTrace?: () => Promise<void>;
 }
-function MoneyView({result}:{result?:TraceResult}) { if(!result)return <Empty text="追踪完成后显示资金对账"/>; const ledgers=result.ledgers??[]; const transfers=result.moneyTransfers??[]; const states=result.moneyStates??[]; return <div className="money-view"><header><strong>对账状态：{reconciliationLabel(result.reconciliation)}</strong><span>{transfers.length} 笔资金事实 · {states.length} 个资金状态</span></header><section><h3>资产账本</h3>{ledgers.length?ledgers.map((ledger,index)=><div className="money-row ledger-row" key={`${ledger.address}-${ledger.asset}-${index}`}><code title={ledger.address}>{shortAddress(ledger.address,8)}</code><strong>{ledger.asset}</strong><span>流入 {ledger.incomingAmount}</span><span>流出 {ledger.outgoingAmount}</span><span>已解释 {ledger.explainedAmount}</span><span className={ledger.unexplainedAmount!=="0"?'money-warning':''}>未解释 {ledger.unexplainedAmount}</span></div>):<Empty text="没有可对账资产"/>}</section><section><h3>资金转账</h3>{transfers.map((transfer,index)=><div className="money-row transfer-row" key={`${transfer.txHash}-${index}`}><code>{shortAddress(transfer.from)}</code><span>→</span><code>{shortAddress(transfer.to)}</code><strong>{transfer.amount} {transfer.asset}</strong><code>{shortAddress(transfer.txHash,8)}</code><span>{transfer.stopReason??(transfer.inferred?'FIFO 推断':'链上事实')}</span></div>)}</section><section><h3>剩余状态</h3>{states.map((state,index)=><div className="money-row state-row" key={`${state.address}-${state.entryTxHash}-${index}`}><code>{shortAddress(state.address)}</code><strong>{state.direction==='in'?'流入':'流出'} {state.asset}</strong><span>{state.remainingAmount} / {state.amount}</span><code>{shortAddress(state.entryTxHash??'',8)}</code><span>{state.stopReason??(state.inferred?'FIFO 推断':'链上事实')}</span></div>)}</section></div> }
-function reconciliationLabel(value?:string){return ({complete:'完整',partial:'部分',inconsistent:'不一致'} as Record<string,string>)[value??'']??'无结果'}
-function BridgeList({bridges,chain,onAnalyze,onSync}:{bridges:CrossChainLink[];chain:"ethereum"|"base";onAnalyze:(hash:string)=>Promise<void>;onSync:(id:string)=>Promise<void>}) { const [hash,setHash]=useState(""); const [message,setMessage]=useState(""); const submit=async(e:FormEvent)=>{e.preventDefault();try{await onAnalyze(hash);setMessage("识别完成")}catch(error){setMessage(error instanceof Error?error.message:"识别失败")}}; return <div className="bridge-list"><form className="bridge-analyze" onSubmit={submit}><select aria-label="桥交易网络" defaultValue={chain} name="chain" disabled><option value="ethereum">Ethereum</option><option value="base">Base</option></select><input aria-label="跨链交易哈希" placeholder="跨链源交易哈希" value={hash} onChange={e=>setHash(e.target.value)}/><button title="识别跨链交易"><Search size={14}/></button>{message&&<span>{message}</span>}</form>{bridges.length?bridges.map(b=>{const pending=['initiated','proven','finalized'].includes(b.status??'');const amount=formatAssetAmount(b.sourceAmount,displayDecimals(undefined,b.sourceAsset,undefined,undefined),b.sourceAsset,DETAIL_AMOUNT_FRACTION_DIGITS);return <div className={`bridge-row ${b.status??''}`} key={b.identityKey??`${b.sourceTxHash}-${b.targetTxHash}`}><strong>{chainLabel(b.sourceChain)} → {chainLabel(b.targetChain)}<small>{b.direction==='withdrawal'?'提款':'存款'} · {b.protocol??'人工证据'}</small></strong><span title={b.sourceAmount}>{amount}</span><code>{shortAddress(b.targetTxHash??'待确认',8)}</code><span>{bridgeStatus(b.status)}</span>{pending&&b.id&&<button title="刷新桥接状态" onClick={()=>onSync(b.id!)}><RefreshCw size={14}/></button>}</div>}):<Empty text="当前地址没有桥接关系"/>}</div> }
-function bridgeStatus(status?:string){return ({initiated:'已发起',proven:'已证明',finalized:'待执行',completed:'已到账',confirmed:'人工确认',ambiguous:'证据冲突',failed:'失败'} as Record<string,string>)[status??'']??status}
-function TraceProgressCard({job,completedSyncs,currentStep,currentAddress,onStop}:{job:TraceJob;completedSyncs:number;currentStep:number;currentAddress?:string;onStop:()=>Promise<void>}) { const waiting=job.status==='waiting_sync'; const active=['queued','waiting_sync','running'].includes(job.status); return <div className="job-card trace-job"><div className="job-heading"><div><span className="job-kind">追踪任务 1</span><code title={job.seedAddress}>{shortAddress(job.seedAddress,8)}</code></div><div className="job-actions"><Status value={job.status}/>{active&&<button className="stop-command" title="停止当前追踪任务" onClick={()=>void onStop()}>停止</button>}</div></div><div className="job-context"><span>种子地址</span><code title={job.seedAddress}>{job.seedAddress}</code></div>{waiting&&currentAddress&&<div className="job-current-neighbor"><span>当前同步步骤 {currentStep}</span><code title={currentAddress}>{shortAddress(currentAddress,10)}</code></div>}<div className="job-metrics"><Metric label="已完成同步" value={`${completedSyncs} 个地址`}/><Metric label="追踪深度" value={waiting?`准备中 / ${job.depth}`:`${job.currentDepth} / ${job.depth}`}/><Metric label="节点 / 事实边" value={waiting?'等待汇总':`${job.visitedNodes} / ${job.edgeCount}`}/></div></div> }
-function SyncProgressCard({job,step}:{job:SyncJob;step:number}) { const progress=job.progress; const currentAddress=progress?.currentAddress||job.address; return <div className="job-card sync-job"><div className="job-heading"><div><span className="job-kind">同步步骤 {step}</span><code title={currentAddress}>{shortAddress(currentAddress,10)}</code></div><Status value={job.status}/></div><div className="job-context"><span>处理地址</span><code title={currentAddress}>{currentAddress}</code></div>{progress&&<><div className="job-current"><span>{actionLabel(progress.currentAction)}</span><code>当前区间第 {progress.currentPage||0} 页</code><span>区块 {formatNumber(progress.rangeStart)} - {formatNumber(progress.rangeEnd)}</span></div><div className="job-metrics"><Metric label="累计 API 页" value={progress.pagesFetched}/><Metric label="API 已读取" value={`${formatNumber(progress.recordsRead)} 条`}/><Metric label="Mongo 已写入" value={`${formatNumber(progress.recordsWritten)} 条`}/><Metric label="区间拆分" value={`${progress.splitCount} 次`}/></div></>}{!progress&&<div className="job-metrics"><Metric label="已获取" value={`${formatNumber(job.fetched)} 条`}/></div>}{job.maxRecordsPerAction&&<p className="muted">每类最多 {formatNumber(job.maxRecordsPerAction)} 条{job.truncatedActions?.length?` · 已截断 ${job.truncatedActions.map(actionLabel).join("、")}`:""}</p>}{job.error&&job.errorCode!=="record_limit"&&<p className="job-error">{job.error}</p>}</div> }
-function NeighborQueue({seed,jobs}:{seed:string;jobs:SyncJob[]}) { const normalizedSeed=seed.toLowerCase(); const completed=jobs.filter(job=>['succeeded','partial'].includes(job.status)).length; const neighborCount=jobs.filter(job=>(job.progress?.currentAddress||job.address).toLowerCase()!==normalizedSeed).length; return <div className="neighbor-queue"><div className="neighbor-queue-head"><div><strong>地址同步队列</strong><span>{neighborCount} 个邻居</span></div><span>{completed} / {jobs.length} 已处理</span></div><div className="neighbor-rows">{jobs.map((job,index)=>{const current=['queued','running'].includes(job.status);const address=job.progress?.currentAddress||job.address;return <div className={`neighbor-row ${current?'current':''}`} key={job.jobId}><span className="neighbor-index">{index+1}</span><span className="neighbor-role">{address.toLowerCase()===normalizedSeed?'种子':'邻居'}</span><code title={address}>{address}</code><span className="neighbor-action">{current?`${actionLabel(job.progress?.currentAction)} · 累计 ${formatNumber(job.progress?.pagesFetched)} 页 / ${formatNumber(job.progress?.recordsRead)} 条`:formatSyncOutcome(job)}</span><Status value={job.status}/></div>})}</div></div> }
-function formatSyncOutcome(job:SyncJob){if(job.status==='failed')return job.errorCode||'同步失败';if(job.status==='partial')return `部分完成 · ${formatNumber(job.fetched)} 条`;if(job.status==='succeeded')return `已写入 ${formatNumber(job.fetched)} 条`;return '等待处理'}
-function Metric({label,value}:{label:string;value:string|number}) { return <div><span>{label}</span><strong>{typeof value==='number'?formatNumber(value):value}</strong></div> }
-function Status({value}:{value:string}) { const labels:Record<string,string>={queued:'排队中',waiting_sync:'等待同步',running:'运行中',succeeded:'已完成',partial:'部分完成',failed:'失败',stopped:'已停止'}; return <span className={`job-status ${value}`}>{labels[value]??value}</span> }
-function actionLabel(action?:string) { return ({txlist:'普通 ETH',txlistinternal:'内部 ETH',tokentx:'ERC-20'} as Record<string,string>)[action??'']??'准备请求' }
-function formatNumber(value?:number) { return (value??0).toLocaleString('zh-CN') }
-function FactTable({facts,detailed=false,hasMore,loadingMore,onMore}:{facts:Transfer[];detailed?:boolean;hasMore?:boolean;loadingMore?:boolean;onMore:()=>void}) { if(!facts.length)return <Empty text="当前查询没有事实边"/>; return <div className="fact-table"><div className="table-head"><span>区块 / 时间</span><span>方向</span><span>资产</span><span>金额</span><span>交易</span></div>{facts.map((f,i)=>{const symbol=f.symbol||f.asset;return <div className="table-row" key={`${f.txHash}-${f.logIndex}-${i}`}><span>#{f.blockNumber}{detailed&&f.blockTime?<small>{new Date(f.blockTime).toLocaleString('zh-CN')}</small>:null}</span><span><code>{shortAddress(f.from)}</code> → <code>{shortAddress(f.to)}</code></span><span>{symbol}<small>{f.source}{f.transferKind&&` · ${f.transferKind}`}</small></span><span>{formatAssetAmount(f.amount||f.tokenValue,displayDecimals(f.assetType,f.asset,f.decimals,f.tokenMetadataComplete),symbol,DETAIL_AMOUNT_FRACTION_DIGITS)}</span><code>{shortAddress(f.txHash,8)}</code></div>})}{hasMore&&<button className="load-more" disabled={loadingMore} onClick={onMore}>{loadingMore?'加载中':'加载更多事实边'}</button>}</div> }
-function Empty({text}:{text:string}){return <div className="tab-empty">{text}</div>}
+export function BottomPanel({
+  facts,
+  traceResult,
+  hasMore,
+  loadingMore,
+  onMore,
+  traceJob,
+  syncJobs,
+  onStopTrace = async () => {},
+}: Props) {
+  const [tab, setTab] = useState<Tab>("facts");
+  const hasActiveSync = syncJobs.some((job) =>
+    ["queued", "running"].includes(job.status),
+  );
+  const uniqueSyncJobs = collapseSyncJobsByAddress(syncJobs);
+  const completedSyncs = uniqueSyncJobs.filter((job) =>
+    ["succeeded", "partial"].includes(job.status),
+  ).length;
+  const activeSyncIndex = uniqueSyncJobs.findIndex((job) =>
+    ["queued", "running"].includes(job.status),
+  );
+  const visibleSyncIndex =
+    activeSyncIndex >= 0 ? activeSyncIndex : uniqueSyncJobs.length - 1;
+  const visibleSync = uniqueSyncJobs[visibleSyncIndex];
+  useEffect(() => {
+    if (hasActiveSync) setTab("jobs");
+  }, [hasActiveSync]);
+  return (
+    <section className="bottom-panel">
+      <nav>
+        {(
+          [
+            ["facts", "事实边"],
+            ["money", "资金对账"],
+            ["transactions", "交易明细"],
+            ["jobs", "任务进度"],
+          ] as [Tab, string][]
+        ).map(([id, label]) => (
+          <button
+            className={tab === id ? "active" : ""}
+            onClick={() => setTab(id)}
+            key={id}
+          >
+            {label}
+            {id === "facts" && <span>{facts.length}</span>}
+          </button>
+        ))}
+      </nav>
+      <div className="tab-body">
+        {tab === "facts" && (
+          <FactTable
+            facts={facts}
+            hasMore={hasMore}
+            loadingMore={loadingMore}
+            onMore={onMore}
+          />
+        )}{" "}
+        {tab === "transactions" && (
+          <FactTable
+            facts={facts}
+            detailed
+            hasMore={hasMore}
+            loadingMore={loadingMore}
+            onMore={onMore}
+          />
+        )}
+        {tab === "money" && <MoneyView result={traceResult} />}
+        {tab === "jobs" && (
+          <div className="job-list">
+            {traceJob && (
+              <TraceProgressCard
+                job={traceJob}
+                completedSyncs={completedSyncs}
+                currentStep={visibleSyncIndex + 1}
+                currentAddress={
+                  visibleSync?.progress?.currentAddress || visibleSync?.address
+                }
+                onStop={onStopTrace}
+              />
+            )}{" "}
+            {visibleSync && (
+              <SyncProgressCard job={visibleSync} step={visibleSyncIndex + 1} />
+            )}{" "}
+            {traceJob && uniqueSyncJobs.length > 0 && (
+              <NeighborQueue
+                seed={traceJob.seedAddress}
+                jobs={uniqueSyncJobs}
+              />
+            )}{" "}
+            {!traceJob && !visibleSync && <Empty text="当前没有任务" />}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+function MoneyView({ result }: { result?: TraceResult }) {
+  if (!result) return <Empty text="追踪完成后显示资金对账" />;
+  const ledgers = result.ledgers ?? [];
+  const transfers = result.moneyTransfers ?? [];
+  const states = result.moneyStates ?? [];
+  return (
+    <div className="money-view">
+      <header>
+        <strong>对账状态：{reconciliationLabel(result.reconciliation)}</strong>
+        <span>
+          {transfers.length} 笔资金事实 · {states.length} 个资金状态
+        </span>
+      </header>
+      <section>
+        <h3>资产账本</h3>
+        {ledgers.length ? (
+          ledgers.map((ledger, index) => (
+            <div
+              className="money-row ledger-row"
+              key={`${ledger.address}-${ledger.asset}-${index}`}
+            >
+              <code title={ledger.address}>
+                {shortAddress(ledger.address, 8)}
+              </code>
+              <strong>{ledger.asset}</strong>
+              <span>流入 {ledger.incomingAmount}</span>
+              <span>流出 {ledger.outgoingAmount}</span>
+              <span>已解释 {ledger.explainedAmount}</span>
+              <span
+                className={
+                  ledger.unexplainedAmount !== "0" ? "money-warning" : ""
+                }
+              >
+                未解释 {ledger.unexplainedAmount}
+              </span>
+            </div>
+          ))
+        ) : (
+          <Empty text="没有可对账资产" />
+        )}
+      </section>
+      <section>
+        <h3>资金转账</h3>
+        {transfers.map((transfer, index) => (
+          <div
+            className="money-row transfer-row"
+            key={`${transfer.txHash}-${index}`}
+          >
+            <code>{shortAddress(transfer.from)}</code>
+            <span>→</span>
+            <code>{shortAddress(transfer.to)}</code>
+            <strong>
+              {transfer.amount} {transfer.asset}
+            </strong>
+            <code>{shortAddress(transfer.txHash, 8)}</code>
+            <span>
+              {transfer.stopReason ??
+                (transfer.inferred ? "FIFO 推断" : "链上事实")}
+            </span>
+          </div>
+        ))}
+      </section>
+      <section>
+        <h3>剩余状态</h3>
+        {states.map((state, index) => (
+          <div
+            className="money-row state-row"
+            key={`${state.address}-${state.entryTxHash}-${index}`}
+          >
+            <code>{shortAddress(state.address)}</code>
+            <strong>
+              {state.direction === "in" ? "流入" : "流出"} {state.asset}
+            </strong>
+            <span>
+              {state.remainingAmount} / {state.amount}
+            </span>
+            <code>{shortAddress(state.entryTxHash ?? "", 8)}</code>
+            <span>
+              {state.stopReason ?? (state.inferred ? "FIFO 推断" : "链上事实")}
+            </span>
+          </div>
+        ))}
+      </section>
+    </div>
+  );
+}
+function reconciliationLabel(value?: string) {
+  return (
+    (
+      { complete: "完整", partial: "部分", inconsistent: "不一致" } as Record<
+        string,
+        string
+      >
+    )[value ?? ""] ?? "无结果"
+  );
+}
+function TraceProgressCard({
+  job,
+  completedSyncs,
+  currentStep,
+  currentAddress,
+  onStop,
+}: {
+  job: TraceJob;
+  completedSyncs: number;
+  currentStep: number;
+  currentAddress?: string;
+  onStop: () => Promise<void>;
+}) {
+  const waiting = job.status === "waiting_sync";
+  const active = ["queued", "waiting_sync", "running"].includes(job.status);
+  return (
+    <div className="job-card trace-job">
+      <div className="job-heading">
+        <div>
+          <span className="job-kind">追踪任务 1</span>
+          <code title={job.seedAddress}>
+            {shortAddress(job.seedAddress, 8)}
+          </code>
+        </div>
+        <div className="job-actions">
+          <Status value={job.status} />
+          {active && (
+            <button
+              className="stop-command"
+              title="停止当前追踪任务"
+              onClick={() => void onStop()}
+            >
+              停止
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="job-context">
+        <span>种子地址</span>
+        <code title={job.seedAddress}>{job.seedAddress}</code>
+      </div>
+      {waiting && currentAddress && (
+        <div className="job-current-neighbor">
+          <span>当前同步步骤 {currentStep}</span>
+          <code title={currentAddress}>{shortAddress(currentAddress, 10)}</code>
+        </div>
+      )}
+      <div className="job-metrics">
+        <Metric label="已完成同步" value={`${completedSyncs} 个地址`} />
+        <Metric
+          label="追踪深度"
+          value={
+            waiting
+              ? `准备中 / ${job.depth}`
+              : `${job.currentDepth} / ${job.depth}`
+          }
+        />
+        <Metric
+          label="节点 / 事实边"
+          value={
+            waiting ? "等待汇总" : `${job.visitedNodes} / ${job.edgeCount}`
+          }
+        />
+      </div>
+    </div>
+  );
+}
+function SyncProgressCard({ job, step }: { job: SyncJob; step: number }) {
+  const progress = job.progress;
+  const currentAddress = progress?.currentAddress || job.address;
+  return (
+    <div className="job-card sync-job">
+      <div className="job-heading">
+        <div>
+          <span className="job-kind">同步步骤 {step}</span>
+          <code title={currentAddress}>{shortAddress(currentAddress, 10)}</code>
+        </div>
+        <Status value={job.status} />
+      </div>
+      <div className="job-context">
+        <span>处理地址</span>
+        <code title={currentAddress}>{currentAddress}</code>
+      </div>
+      {progress && (
+        <>
+          <div className="job-current">
+            <span>{actionLabel(progress.currentAction)}</span>
+            <code>当前区间第 {progress.currentPage || 0} 页</code>
+            <span>
+              区块 {formatNumber(progress.rangeStart)} -{" "}
+              {formatNumber(progress.rangeEnd)}
+            </span>
+          </div>
+          <div className="job-metrics">
+            <Metric label="累计 API 页" value={progress.pagesFetched} />
+            <Metric
+              label="API 已读取"
+              value={`${formatNumber(progress.recordsRead)} 条`}
+            />
+            <Metric
+              label="Mongo 已写入"
+              value={`${formatNumber(progress.recordsWritten)} 条`}
+            />
+            <Metric label="区间拆分" value={`${progress.splitCount} 次`} />
+          </div>
+        </>
+      )}
+      {!progress && (
+        <div className="job-metrics">
+          <Metric label="已获取" value={`${formatNumber(job.fetched)} 条`} />
+        </div>
+      )}
+      {job.maxRecordsPerAction && (
+        <p className="muted">
+          每类最多 {formatNumber(job.maxRecordsPerAction)} 条
+          {job.truncatedActions?.length
+            ? ` · 已截断 ${job.truncatedActions.map(actionLabel).join("、")}`
+            : ""}
+        </p>
+      )}
+      {job.error && job.errorCode !== "record_limit" && (
+        <p className="job-error">{job.error}</p>
+      )}
+    </div>
+  );
+}
+function NeighborQueue({ seed, jobs }: { seed: string; jobs: SyncJob[] }) {
+  const normalizedSeed = seed.toLowerCase();
+  const completed = jobs.filter((job) =>
+    ["succeeded", "partial"].includes(job.status),
+  ).length;
+  const neighborCount = jobs.filter(
+    (job) =>
+      (job.progress?.currentAddress || job.address).toLowerCase() !==
+      normalizedSeed,
+  ).length;
+  return (
+    <div className="neighbor-queue">
+      <div className="neighbor-queue-head">
+        <div>
+          <strong>地址同步队列</strong>
+          <span>{neighborCount} 个邻居</span>
+        </div>
+        <span>
+          {completed} / {jobs.length} 已处理
+        </span>
+      </div>
+      <div className="neighbor-rows">
+        {jobs.map((job, index) => {
+          const current = ["queued", "running"].includes(job.status);
+          const address = job.progress?.currentAddress || job.address;
+          return (
+            <div
+              className={`neighbor-row ${current ? "current" : ""}`}
+              key={job.jobId}
+            >
+              <span className="neighbor-index">{index + 1}</span>
+              <span className="neighbor-role">
+                {address.toLowerCase() === normalizedSeed ? "种子" : "邻居"}
+              </span>
+              <code title={address}>{address}</code>
+              <span className="neighbor-action">
+                {current
+                  ? `${actionLabel(job.progress?.currentAction)} · 累计 ${formatNumber(job.progress?.pagesFetched)} 页 / ${formatNumber(job.progress?.recordsRead)} 条`
+                  : formatSyncOutcome(job)}
+              </span>
+              <Status value={job.status} />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+function formatSyncOutcome(job: SyncJob) {
+  if (job.status === "failed") return job.errorCode || "同步失败";
+  if (job.status === "partial")
+    return `部分完成 · ${formatNumber(job.fetched)} 条`;
+  if (job.status === "succeeded")
+    return `已写入 ${formatNumber(job.fetched)} 条`;
+  return "等待处理";
+}
+function Metric({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div>
+      <span>{label}</span>
+      <strong>{typeof value === "number" ? formatNumber(value) : value}</strong>
+    </div>
+  );
+}
+function Status({ value }: { value: string }) {
+  const labels: Record<string, string> = {
+    queued: "排队中",
+    waiting_sync: "等待同步",
+    running: "运行中",
+    succeeded: "已完成",
+    partial: "部分完成",
+    failed: "失败",
+    stopped: "已停止",
+  };
+  return (
+    <span className={`job-status ${value}`}>{labels[value] ?? value}</span>
+  );
+}
+function actionLabel(action?: string) {
+  return (
+    (
+      {
+        txlist: "普通 ETH",
+        txlistinternal: "内部 ETH",
+        tokentx: "ERC-20",
+      } as Record<string, string>
+    )[action ?? ""] ?? "准备请求"
+  );
+}
+function formatNumber(value?: number) {
+  return (value ?? 0).toLocaleString("zh-CN");
+}
+function FactTable({
+  facts,
+  detailed = false,
+  hasMore,
+  loadingMore,
+  onMore,
+}: {
+  facts: Transfer[];
+  detailed?: boolean;
+  hasMore?: boolean;
+  loadingMore?: boolean;
+  onMore: () => void;
+}) {
+  if (!facts.length) return <Empty text="当前查询没有事实边" />;
+  return (
+    <div className="fact-table">
+      <div className="table-head">
+        <span>区块 / 时间</span>
+        <span>方向</span>
+        <span>资产</span>
+        <span>金额</span>
+        <span>交易</span>
+      </div>
+      {facts.map((f, i) => {
+        const symbol = f.symbol || f.asset;
+        return (
+          <div className="table-row" key={`${f.txHash}-${f.logIndex}-${i}`}>
+            <span>
+              #{f.blockNumber}
+              {detailed && f.blockTime ? (
+                <small>{new Date(f.blockTime).toLocaleString("zh-CN")}</small>
+              ) : null}
+            </span>
+            <span>
+              <code>{shortAddress(f.from)}</code> →{" "}
+              <code>{shortAddress(f.to)}</code>
+            </span>
+            <span>
+              {symbol}
+              <small>
+                {f.source}
+                {f.transferKind && ` · ${f.transferKind}`}
+              </small>
+            </span>
+            <span>
+              {formatAssetAmount(
+                f.amount || f.tokenValue,
+                displayDecimals(
+                  f.assetType,
+                  f.asset,
+                  f.decimals,
+                  f.tokenMetadataComplete,
+                ),
+                symbol,
+                DETAIL_AMOUNT_FRACTION_DIGITS,
+              )}
+            </span>
+            <code>{shortAddress(f.txHash, 8)}</code>
+          </div>
+        );
+      })}
+      {hasMore && (
+        <button className="load-more" disabled={loadingMore} onClick={onMore}>
+          {loadingMore ? "加载中" : "加载更多事实边"}
+        </button>
+      )}
+    </div>
+  );
+}
+function Empty({ text }: { text: string }) {
+  return <div className="tab-empty">{text}</div>;
+}
