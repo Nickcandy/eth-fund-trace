@@ -71,7 +71,17 @@ export function DetailsPanel({
             <span className={`chain-badge ${node.chain}`}>
               {chainLabel(node.chain)}
             </span>
-            <code>{node.address}</code>
+            {node.chain === "bitcoin" ? (
+              <a
+                href={`https://mempool.space/address/${node.address}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <code>{node.address}</code>
+              </a>
+            ) : (
+              <code>{node.address}</code>
+            )}
             {node.roles?.map((role) => (
               <strong key={role}>{roleName(role)}</strong>
             ))}
@@ -81,36 +91,47 @@ export function DetailsPanel({
               </small>
             )}
             {node.terminal && <small>{stopReasonLabel(node.stopReason)}</small>}
-            <button
-              className="text-command"
-              onClick={() => onFocus(node.chain, node.address)}
-            >
-              以此地址分析 <ChevronRight size={15} />
-            </button>
+            {node.chain === "ethereum" && (
+              <button
+                className="text-command"
+                onClick={() => onFocus(node.chain, node.address)}
+              >
+                以此地址分析 <ChevronRight size={15} />
+              </button>
+            )}
           </section>
-          <nav
-            className="details-tabs"
-            role="tablist"
-            aria-label="地址详情视图"
-          >
-            <button
-              role="tab"
-              aria-selected={tab === "overview"}
-              className={tab === "overview" ? "active" : ""}
-              onClick={() => setTab("overview")}
+          {node.chain === "ethereum" && (
+            <nav
+              className="details-tabs"
+              role="tablist"
+              aria-label="地址详情视图"
             >
-              概览
-            </button>
-            <button
-              role="tab"
-              aria-selected={tab === "labels"}
-              className={tab === "labels" ? "active" : ""}
-              onClick={() => setTab("labels")}
-            >
-              标签
-            </button>
-          </nav>
-          {tab === "overview" ? (
+              <button
+                role="tab"
+                aria-selected={tab === "overview"}
+                className={tab === "overview" ? "active" : ""}
+                onClick={() => setTab("overview")}
+              >
+                概览
+              </button>
+              <button
+                role="tab"
+                aria-selected={tab === "labels"}
+                className={tab === "labels" ? "active" : ""}
+                onClick={() => setTab("labels")}
+              >
+                标签
+              </button>
+            </nav>
+          )}
+          {node.chain !== "ethereum" ? (
+            <section>
+              <h3>确认状态</h3>
+              <div className="evidence-card">
+                <strong>Bitcoin 链上已确认</strong>
+              </div>
+            </section>
+          ) : tab === "overview" ? (
             <>
               <section>
                 <h3>实时余额</h3>
@@ -305,10 +326,32 @@ export function DetailsPanel({
               <div className="evidence-card">
                 <div>
                   <strong>{thorchainActionLabel(edge.protocolAction)}</strong>
-                  <span>已确认</span>
+                  <span>
+                    {edge.conversionStatus === "partial"
+                      ? "验证暂不可用"
+                      : "已确认"}
+                  </span>
                 </div>
-                {edge.txHash && <code>{edge.txHash}</code>}
+                {edge.txHash &&
+                (edge.targetChain === "bitcoin" || edge.chain === "bitcoin") ? (
+                  <a
+                    href={`https://mempool.space/tx/${edge.txHash}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <code>{edge.txHash}</code>
+                  </a>
+                ) : edge.txHash ? (
+                  <code>{edge.txHash}</code>
+                ) : null}
                 {edge.protocolMemo && <p>{edge.protocolMemo}</p>}
+                {edge.sourceTxHash && (
+                  <p>
+                    Ethereum 入站 <code>{edge.sourceTxHash}</code>
+                    {edge.sourceAmount &&
+                      ` · ${formatAssetAmount(edge.sourceAmount, 18, edge.sourceAsset ?? "ETH", DETAIL_AMOUNT_FRACTION_DIGITS)}`}
+                  </p>
+                )}
               </div>
             </section>
           )}
@@ -361,6 +404,7 @@ function roleName(role: string) {
   if (role === "router") return "THORChain Router";
   if (role === "thorchain_vault") return "THORChain Vault";
   if (role === "cross_chain_bridge") return "跨链桥终点";
+  if (role === "cross_chain_recipient") return "跨链收款地址";
   if (role === "kyberswap_router") return "KyberSwap Router";
   if (role === "kyberswap_executor") return "KyberSwap Executor";
   if (role === "pool") return "流动性池";

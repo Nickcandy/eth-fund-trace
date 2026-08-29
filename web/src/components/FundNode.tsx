@@ -118,16 +118,18 @@ export function FundNode({ data, selected }: NodeProps<FundFlowNode>) {
             </span>
           )}
       </div>
-      <button
-        className="node-focus"
-        title="以此地址重新分析"
-        onClick={(event) => {
-          event.stopPropagation();
-          data.onFocus(data.chain, data.address);
-        }}
-      >
-        <Focus size={14} />
-      </button>
+      {data.chain === "ethereum" && (
+        <button
+          className="node-focus"
+          title="以此地址重新分析"
+          onClick={(event) => {
+            event.stopPropagation();
+            data.onFocus(data.chain, data.address);
+          }}
+        >
+          <Focus size={14} />
+        </button>
+      )}
       <ExpansionButton
         side="left"
         control={data.leftExpansion}
@@ -201,6 +203,7 @@ function ExpansionButton({
 function roleLabel(role: string) {
   if (role === "router") return "THORChain Router";
   if (role === "thorchain_vault") return "THORChain Vault";
+  if (role === "cross_chain_recipient") return "跨链收款地址";
   if (role === "kyberswap_router") return "KyberSwap Router";
   if (role === "kyberswap_executor") return "KyberSwap Executor";
   if (role === "pool") return "流动性池";

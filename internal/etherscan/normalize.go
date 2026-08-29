@@ -30,6 +30,7 @@ type rawTransfer struct {
 	LogIndex        string `json:"logIndex"`
 	IsError         string `json:"isError"`
 	ReceiptStatus   string `json:"txreceipt_status"`
+	Input           string `json:"input"`
 }
 
 func normalize(items []json.RawMessage, action string) ([]store.Transfer, error) {
@@ -99,6 +100,7 @@ func normalizeOne(raw rawTransfer, action string, missingLogIndex int64) (store.
 		AssetType:        "eth",
 		Asset:            "ETH",
 		Amount:           raw.Value,
+		Input:            raw.Input,
 		Source:           action,
 		TraceID:          raw.TraceID,
 		ObservedAt:       time.Now().UTC(),

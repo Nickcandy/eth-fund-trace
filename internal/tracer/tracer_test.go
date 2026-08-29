@@ -2,6 +2,7 @@ package tracer
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
@@ -971,6 +972,155 @@ func TestTraceRejectsUnverifiedTHORChainVaultMigration(t *testing.T) {
 	if len(result.Edges) != 1 || len(result.Nodes) != 2 || !result.Nodes[1].Terminal || result.Nodes[1].StopReason != "ambiguous_conversion" {
 		t.Fatalf("result=%+v", result)
 	}
+}
+
+func TestTraceAddsConfirmedTHORChainBitcoinEndpoint(t *testing.T) {
+	seed := "0x1476be0c524e15c735a1b3927bba993f03a59790"
+	vault := "0x3986fd2fd3669fd32584b960cda8f82e0f772c35"
+	btcRecipient := "bc1phghtqqpfwgw3jzaefey0z0epesyd77nyncllcer9s9rs0t4t4ttqhcpgd4"
+	txHash := "0xd6cc09af0fe3b51225cc8db073eb4353ba657cf7041be6877c78c993e383a4c2"
+	memo := "=:b:" + btcRecipient + ":725679114/1/0:-_/bgw:20/30"
+	vaultMetadata := completeEOAAddress(0, 100)
+	vaultMetadata.Protocol = "thorchain"
+	vaultMetadata.Roles = []string{"thorchain_vault"}
+	repository := &fakeRepository{
+		addresses: map[string]store.Address{seed: completeEOAAddress(0, 100), vault: vaultMetadata},
+		labels:    map[string][]store.Label{},
+		transfers: []store.Transfer{{Chain: "ethereum", TxHash: txHash, BlockNumber: 10, From: seed, To: vault, AssetType: "eth", Asset: "ETH", Amount: "200650000000000000000"}},
+	}
+	analyzer := transactionAnalyzerStub{analysis: store.TransactionAnalysis{
+		Chain: "ethereum", TxHash: txHash, From: seed, To: vault, Value: "200650000000000000000", Input: "0x" + hex.EncodeToString([]byte(memo)), Succeeded: true,
+		ProtocolAction: "router_inbound", ProtocolMemo: memo, ProtocolDestination: btcRecipient, ProtocolAsset: "BTC.BTC", Quality: store.AnalysisQuality{Status: "complete"},
+	}}
+	verifier := crossChainVerifierStub{outbound: VerifiedCrossChainTransfer{
+		SourceChain: "ethereum", TargetChain: "bitcoin", From: vault, To: btcRecipient, Asset: "BTC", Amount: "729777955",
+		TxHash: "f9e417b7db1d7128327387c0971e377e5a694d28758fea4d43c64d3fae098634", BlockNumber: 917213,
+	}}
+
+	result, err := New(repository).WithTransactionAnalyzer(analyzer).WithCrossChainVerifier(verifier).Trace(context.Background(), Query{Chain: "ethereum", Address: seed, Direction: "out", Depth: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Edges) != 2 || len(result.Nodes) != 3 {
+		t.Fatalf("result=%+v, want ETH inbound and verified BTC endpoint", result)
+	}
+	outbound := result.Edges[1]
+	if outbound.SourceChain != "ethereum" || outbound.TargetChain != "bitcoin" || outbound.From != vault || outbound.To != btcRecipient || outbound.Asset != "BTC" || outbound.TotalAmount != "729777955" || outbound.Kind != "thorchain_cross_chain_outbound" || outbound.SourceTxHash != txHash || outbound.SourceAmount != "200650000000000000000" {
+		t.Fatalf("outbound=%+v", outbound)
+	}
+	var endpoint *Node
+	var vaultNode *Node
+	for index := range result.Nodes {
+		if result.Nodes[index].Chain == "bitcoin" {
+			endpoint = &result.Nodes[index]
+		}
+		if result.Nodes[index].Chain == "ethereum" && result.Nodes[index].Address == vault {
+			vaultNode = &result.Nodes[index]
+		}
+	}
+	if endpoint == nil || endpoint.Address != btcRecipient || !endpoint.Terminal || endpoint.Protocol != "thorchain" || !containsRole(endpoint.Roles, "cross_chain_recipient") {
+		t.Fatalf("endpoint=%+v", endpoint)
+	}
+	if identity := repository.identities[vault]; identity.Protocol != "thorchain" || !containsRole(identity.Roles, "thorchain_vault") {
+		t.Fatalf("vault identity=%+v", identity)
+	}
+	if vaultNode == nil || vaultNode.Protocol != "thorchain" || !containsRole(vaultNode.Roles, "thorchain_vault") {
+		t.Fatalf("vault node=%+v", vaultNode)
+	}
+}
+
+func TestTraceDoesNotAddUnverifiedTHORChainBitcoinEndpoint(t *testing.T) {
+	seed := "0x1476be0c524e15c735a1b3927bba993f03a59790"
+	vault := "0x3986fd2fd3669fd32584b960cda8f82e0f772c35"
+	btcRecipient := "bc1phghtqqpfwgw3jzaefey0z0epesyd77nyncllcer9s9rs0t4t4ttqhcpgd4"
+	txHash := "0xd6cc09af0fe3b51225cc8db073eb4353ba657cf7041be6877c78c993e383a4c2"
+	memo := "=:b:" + btcRecipient + ":725679114/1/0:-_/bgw:20/30"
+	vaultMetadata := completeEOAAddress(0, 100)
+	vaultMetadata.IsTerminal = true
+	repository := &fakeRepository{addresses: map[string]store.Address{seed: completeEOAAddress(0, 100), vault: vaultMetadata}, labels: map[string][]store.Label{}, transfers: []store.Transfer{{Chain: "ethereum", TxHash: txHash, BlockNumber: 10, From: seed, To: vault, AssetType: "eth", Asset: "ETH", Amount: "200650000000000000000", Input: "0x" + hex.EncodeToString([]byte(memo))}}}
+	analyzer := transactionAnalyzerStub{analysis: store.TransactionAnalysis{Chain: "ethereum", TxHash: txHash, From: seed, To: vault, Value: "200650000000000000000", Succeeded: true, ProtocolAction: "router_inbound", ProtocolMemo: memo, ProtocolDestination: btcRecipient, ProtocolAsset: "BTC.BTC", Quality: store.AnalysisQuality{Status: "complete"}}}
+
+	result, err := New(repository).WithTransactionAnalyzer(analyzer).WithCrossChainVerifier(crossChainVerifierStub{}).Trace(context.Background(), Query{Chain: "ethereum", Address: seed, Direction: "out", Depth: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, node := range result.Nodes {
+		if node.Chain == "bitcoin" {
+			t.Fatalf("unverified memo produced Bitcoin endpoint: %+v", result)
+		}
+	}
+	if len(result.Edges) != 1 {
+		t.Fatalf("edges=%+v, want only original Ethereum transfer", result.Edges)
+	}
+}
+
+func TestTraceKeepsEthereumGraphWhenTHORChainVerificationIsUnavailable(t *testing.T) {
+	seed := "0x1476be0c524e15c735a1b3927bba993f03a59790"
+	vault := "0x3986fd2fd3669fd32584b960cda8f82e0f772c35"
+	btc := "bc1phghtqqpfwgw3jzaefey0z0epesyd77nyncllcer9s9rs0t4t4ttqhcpgd4"
+	memo := "=:b:" + btc
+	txHash := "0xd6cc09af0fe3b51225cc8db073eb4353ba657cf7041be6877c78c993e383a4c2"
+	vaultMetadata := completeEOAAddress(0, 100)
+	vaultMetadata.IsTerminal = true
+	repository := &fakeRepository{addresses: map[string]store.Address{seed: completeEOAAddress(0, 100), vault: vaultMetadata}, labels: map[string][]store.Label{}, transfers: []store.Transfer{{Chain: "ethereum", TxHash: txHash, BlockNumber: 10, From: seed, To: vault, AssetType: "eth", Asset: "ETH", Amount: "100", Input: "0x" + hex.EncodeToString([]byte(memo))}}}
+	analyzer := transactionAnalyzerStub{analysis: store.TransactionAnalysis{Chain: "ethereum", TxHash: txHash, From: seed, To: vault, Value: "100", Succeeded: true, ProtocolAction: "router_inbound", ProtocolMemo: memo, ProtocolDestination: btc, ProtocolAsset: "BTC.BTC"}}
+	result, err := New(repository).WithTransactionAnalyzer(analyzer).WithCrossChainVerifier(crossChainVerifierStub{err: errors.New("status API unavailable")}).Trace(context.Background(), Query{Chain: "ethereum", Address: seed, Direction: "out", Depth: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.DataStatus != "partial" || len(result.Edges) != 1 || result.Edges[0].ConversionStatus != "partial" || len(result.Nodes) != 2 {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestTraceKeepsVaultDepositsTransactionSpecific(t *testing.T) {
+	seed := "0x1476be0c524e15c735a1b3927bba993f03a59790"
+	vault := "0x3986fd2fd3669fd32584b960cda8f82e0f772c35"
+	btc := "bc1phghtqqpfwgw3jzaefey0z0epesyd77nyncllcer9s9rs0t4t4ttqhcpgd4"
+	memo := "=:b:" + btc
+	input := "0x" + hex.EncodeToString([]byte(memo))
+	tx1, tx2 := "0x01", "0x02"
+	repository := &fakeRepository{addresses: map[string]store.Address{seed: completeEOAAddress(0, 100), vault: completeEOAAddress(0, 100)}, labels: map[string][]store.Label{}, transfers: []store.Transfer{
+		{Chain: "ethereum", TxHash: tx1, BlockNumber: 10, From: seed, To: vault, AssetType: "eth", Asset: "ETH", Amount: "100", Input: input},
+		{Chain: "ethereum", TxHash: tx2, BlockNumber: 11, From: seed, To: vault, AssetType: "eth", Asset: "ETH", Amount: "200", Input: input},
+	}}
+	analyzer := &transactionAnalyzerMap{analyses: map[string]store.TransactionAnalysis{
+		tx1: {Chain: "ethereum", TxHash: tx1, From: seed, To: vault, Value: "100", Succeeded: true, ProtocolAction: "router_inbound", ProtocolMemo: memo, ProtocolDestination: btc, ProtocolAsset: "BTC.BTC"},
+		tx2: {Chain: "ethereum", TxHash: tx2, From: seed, To: vault, Value: "200", Succeeded: true, ProtocolAction: "router_inbound", ProtocolMemo: memo, ProtocolDestination: btc, ProtocolAsset: "BTC.BTC"},
+	}}
+	verifier := crossChainVerifierMap{values: map[string]VerifiedCrossChainTransfer{tx2: {SourceChain: "ethereum", TargetChain: "bitcoin", From: vault, To: btc, Asset: "BTC", Amount: "50", TxHash: "btctx", BlockNumber: 20}}}
+	result, err := New(repository).WithTransactionAnalyzer(analyzer).WithCrossChainVerifier(verifier).Trace(context.Background(), Query{Chain: "ethereum", Address: seed, Direction: "out", Depth: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Edges) != 3 || result.Edges[0].TxHash != tx1 || result.Edges[0].ProtocolAction != "" || result.Edges[1].TxHash != tx2 || result.Edges[1].ProtocolAction != "router_inbound" || result.Edges[2].TxHash != "btctx" {
+		t.Fatalf("edges=%+v", result.Edges)
+	}
+}
+
+type crossChainVerifierStub struct {
+	outbound VerifiedCrossChainTransfer
+	ok       bool
+	err      error
+}
+
+func (s crossChainVerifierStub) Verify(context.Context, store.TransactionAnalysis) (VerifiedCrossChainTransfer, bool, error) {
+	if s.err != nil {
+		return VerifiedCrossChainTransfer{}, false, s.err
+	}
+	if s.outbound.To != "" {
+		return s.outbound, true, nil
+	}
+	return VerifiedCrossChainTransfer{}, s.ok, nil
+}
+
+type crossChainVerifierMap struct {
+	values map[string]VerifiedCrossChainTransfer
+}
+
+func (s crossChainVerifierMap) Verify(_ context.Context, analysis store.TransactionAnalysis) (VerifiedCrossChainTransfer, bool, error) {
+	value, ok := s.values[analysis.TxHash]
+	return value, ok, nil
 }
 
 func TestTraceAnalyzesEachAnchoredContractTransaction(t *testing.T) {

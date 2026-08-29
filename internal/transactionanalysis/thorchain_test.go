@@ -2,6 +2,7 @@ package transactionanalysis
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"math/big"
 	"strings"
@@ -82,6 +83,22 @@ func TestAnalyzeTHORChainMigrationMarksMismatchedEvidencePartial(t *testing.T) {
 		t.Fatal(err)
 	}
 	if analysis.ProtocolAmount != "25" || analysis.Quality.Status != "partial" || !strings.Contains(strings.Join(analysis.Quality.Issues, " "), "evidence mismatch") {
+		t.Fatalf("analysis=%+v", analysis)
+	}
+}
+
+func TestAnalyzeDecodesTHORChainInboundMemoIntent(t *testing.T) {
+	destination := "bc1phghtqqpfwgw3jzaefey0z0epesyd77nyncllcer9s9rs0t4t4ttqhcpgd4"
+	memo := "=:b:" + destination + ":725679114/1/0:-_/bgw:20/30"
+	source := &sourceStub{
+		tx:      etherscan.RPCTransaction{Hash: testHash, From: testUser, To: "0x3986fd2fd3669fd32584b960cda8f82e0f772c35", Value: "0xad087b9651eb8e0000", Input: "0x" + hex.EncodeToString([]byte(memo))},
+		receipt: etherscan.RPCReceipt{TransactionHash: testHash, BlockNumber: "0x10", Status: "0x1"},
+	}
+	analysis, err := New(source, newRepoStub(), time.Now).Analyze(context.Background(), "ethereum", testHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if analysis.ProtocolAction != "router_inbound" || analysis.ProtocolMemo != memo || analysis.ProtocolDestination != destination || analysis.ProtocolAsset != "BTC.BTC" {
 		t.Fatalf("analysis=%+v", analysis)
 	}
 }

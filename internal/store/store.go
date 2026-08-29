@@ -639,7 +639,7 @@ func (s *Store) TopCounterparties(ctx context.Context, query CounterpartyQuery) 
 		return nil, errors.New("invalid counterparty query")
 	}
 	filter, counterparty := counterpartyFilter(query)
-	projection := bson.D{{Key: "chain", Value: 1}, {Key: "chainId", Value: 1}, {Key: "txHash", Value: 1}, {Key: "blockNumber", Value: 1}, {Key: "blockTime", Value: 1}, {Key: "from", Value: 1}, {Key: "to", Value: 1}, {Key: "assetType", Value: 1}, {Key: "asset", Value: 1}, {Key: "symbol", Value: 1}, {Key: "decimals", Value: 1}, {Key: "tokenMetadataComplete", Value: 1}, {Key: "amount", Value: 1}, {Key: "tokenValue", Value: 1}, {Key: "transferKind", Value: 1}, {Key: "source", Value: 1}, {Key: "traceId", Value: 1}, {Key: "logIndex", Value: 1}}
+	projection := bson.D{{Key: "chain", Value: 1}, {Key: "chainId", Value: 1}, {Key: "txHash", Value: 1}, {Key: "blockNumber", Value: 1}, {Key: "blockTime", Value: 1}, {Key: "from", Value: 1}, {Key: "to", Value: 1}, {Key: "assetType", Value: 1}, {Key: "asset", Value: 1}, {Key: "symbol", Value: 1}, {Key: "decimals", Value: 1}, {Key: "tokenMetadataComplete", Value: 1}, {Key: "amount", Value: 1}, {Key: "input", Value: 1}, {Key: "tokenValue", Value: 1}, {Key: "transferKind", Value: 1}, {Key: "source", Value: 1}, {Key: "traceId", Value: 1}, {Key: "logIndex", Value: 1}}
 	cursor, err := s.db.Collection(TransfersCollection).Find(ctx, filter, options.Find().SetSort(bson.D{{Key: counterparty, Value: 1}}).SetProjection(projection).SetHint(counterpartyIndexName(query)).SetBatchSize(1000))
 	if err != nil {
 		return nil, err

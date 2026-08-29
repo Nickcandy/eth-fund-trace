@@ -464,6 +464,16 @@ func TestNormalizeSkipsIncompleteTransactionRows(t *testing.T) {
 	}
 }
 
+func TestNormalizeRetainsTransactionInput(t *testing.T) {
+	transfers, err := normalize([]json.RawMessage{json.RawMessage(`{"blockNumber":"8","timeStamp":"1","hash":"0xvalid","from":"0xfrom","to":"0xto","value":"2","input":"0x3d3a623a626331"}`)}, "txlist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(transfers) != 1 || transfers[0].Input != "0x3d3a623a626331" {
+		t.Fatalf("transfers=%+v", transfers)
+	}
+}
+
 func TestClientReturnsLatestBlock(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("module") != "proxy" || r.URL.Query().Get("action") != "eth_blockNumber" {

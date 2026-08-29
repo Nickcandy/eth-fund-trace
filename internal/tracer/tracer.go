@@ -19,7 +19,7 @@ var ErrInvalidQuery = errors.New("invalid trace query")
 var ErrAddressNotSynced = errors.New("address is not synced")
 
 const (
-	traceRuleVersion       = "trace-v1"
+	traceRuleVersion       = "trace-v2"
 	traceTransferRecordCap = 50_000
 )
 
@@ -42,6 +42,12 @@ type TransactionAnalyzer interface {
 	Analyze(context.Context, string, string) (store.TransactionAnalysis, error)
 }
 
+type CrossChainVerifier interface {
+	Verify(context.Context, store.TransactionAnalysis) (VerifiedCrossChainTransfer, bool, error)
+}
+
+type VerifiedCrossChainTransfer = store.VerifiedCrossChainTransfer
+
 // AddressInspector resolves chain-confirmed account types before graph expansion.
 type AddressInspector interface {
 	InspectAddress(context.Context, string, string) (store.AddressIdentity, error)
@@ -63,6 +69,8 @@ type Node struct {
 }
 type Edge struct {
 	Chain                 string               `bson:"chain" json:"chain"`
+	SourceChain           string               `bson:"sourceChain,omitempty" json:"sourceChain,omitempty"`
+	TargetChain           string               `bson:"targetChain,omitempty" json:"targetChain,omitempty"`
 	From                  string               `bson:"from" json:"from"`
 	To                    string               `bson:"to" json:"to"`
 	AssetType             string               `bson:"assetType" json:"assetType"`
@@ -76,6 +84,9 @@ type Edge struct {
 	Depth                 int                  `bson:"depth" json:"depth"`
 	Path                  []string             `bson:"path" json:"path"`
 	TxHash                string               `bson:"txHash,omitempty" json:"txHash,omitempty"`
+	SourceTxHash          string               `bson:"sourceTxHash,omitempty" json:"sourceTxHash,omitempty"`
+	SourceAmount          string               `bson:"sourceAmount,omitempty" json:"sourceAmount,omitempty"`
+	SourceAsset           string               `bson:"sourceAsset,omitempty" json:"sourceAsset,omitempty"`
 	FirstBlock            int64                `bson:"firstBlock,omitempty" json:"firstBlock,omitempty"`
 	FirstTime             time.Time            `bson:"firstTime,omitempty" json:"firstTime,omitempty"`
 	LatestBlock           int64                `bson:"latestBlock,omitempty" json:"latestBlock,omitempty"`
@@ -142,6 +153,7 @@ const maxTraceNodes = 5000
 type Graph struct {
 	repository           Repository
 	analyzer             TransactionAnalyzer
+	crossChainVerifier   CrossChainVerifier
 	inspector            AddressInspector
 	requiredStartBlocks  map[string]int64
 	existingDataOnly     bool
@@ -152,6 +164,11 @@ func New(repository Repository) *Graph { return &Graph{repository: repository} }
 
 func (g *Graph) WithTransactionAnalyzer(analyzer TransactionAnalyzer) *Graph {
 	g.analyzer = analyzer
+	return g
+}
+
+func (g *Graph) WithCrossChainVerifier(verifier CrossChainVerifier) *Graph {
+	g.crossChainVerifier = verifier
 	return g
 }
 
@@ -391,13 +408,32 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 				if err := g.annotateTHORChainRouterCall(ctx, q.Chain, identity, summary.Representative, &result.Edges[edgeIndex]); err != nil {
 					return err
 				}
+				crossChainResolved, crossChainErr := g.appendVerifiedCrossChainEndpoints(ctx, q.Chain, state, identity, summary, depth+1, path, &result)
+				if crossChainErr != nil {
+					return crossChainErr
+				}
+				if crossChainResolved {
+					identity.Protocol = "thorchain"
+					if !containsRole(identity.Roles, "thorchain_vault") {
+						identity.Roles = append(identity.Roles, "thorchain_vault")
+					}
+					if err := g.repository.SetAddressIdentity(ctx, q.Chain, other, identity); err != nil {
+						return err
+					}
+					for index := range result.Nodes {
+						if result.Nodes[index].Chain == q.Chain && strings.EqualFold(result.Nodes[index].Address, other) {
+							result.Nodes[index].Protocol = identity.Protocol
+							result.Nodes[index].Roles = identity.Roles
+						}
+					}
+				}
 				requiredFrom, requiredThrough := g.requiredStartBlocks[q.Chain], dataThroughBlock
 				if state.Direction == "out" {
 					requiredFrom = summary.Representative.BlockNumber
 				} else {
 					requiredThrough = summary.Representative.BlockNumber
 				}
-				if !contract && !otherHighFrequency && dependencyStopReason == "" && (!otherFound || !g.addressCovered(otherMetadata, requiredFrom, requiredThrough)) {
+				if !crossChainResolved && !contract && !otherHighFrequency && dependencyStopReason == "" && (!otherFound || !g.addressCovered(otherMetadata, requiredFrom, requiredThrough)) {
 					dependency := AddressNotSyncedError{Chain: q.Chain, Address: other}
 					if state.Direction == "out" {
 						dependency.StartBlock = summary.Representative.BlockNumber
@@ -429,7 +465,7 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 				result.branchStates = append(result.branchStates, nextState)
 				isNewNode := !visitedNodes[other]
 				visitedNodes[other] = true
-				if !terminal {
+				if !terminal && !crossChainResolved {
 					next = append(next, nextState)
 				}
 				if isNewNode {
@@ -861,6 +897,91 @@ func (g *Graph) conversionTransfer(ctx context.Context, chain string, state bran
 	}
 	transfer, ok, err := legacyConversionTransfer(analysis, state)
 	return analyzedConversion{Transfer: transfer, Evidence: ConversionEvidence{TxHash: analysis.TxHash, Protocol: "uniswap", Version: "v3", Status: "complete", TokenIn: state.Asset, TokenOut: transfer.Asset, Evidence: []string{"verified Uniswap V3 pool logs"}}}, ok, err
+}
+
+func (g *Graph) appendVerifiedCrossChainEndpoints(ctx context.Context, chain string, state branchState, identity store.AddressIdentity, summary store.CounterpartySummary, depth int, path []string, result *Result) (bool, error) {
+	if state.Direction != "out" || chain != "ethereum" || g.analyzer == nil || g.crossChainVerifier == nil || summary.AssetType != "eth" {
+		return false, nil
+	}
+	// New sync rows carry calldata. Legacy rows are lazily re-read only for a
+	// Vault already established by chain-confirmed THORChain evidence.
+	if len(strings.TrimSpace(summary.Representative.Input)) <= 2 && !isTHORChainVault(identity) {
+		return false, nil
+	}
+	transfers := []store.Transfer{summary.Representative}
+	if summary.TransferCount > 1 {
+		var err error
+		transfers, err = g.repository.QueryTransfers(ctx, store.TransferQuery{Chain: chain, Addresses: []string{state.Address}, Direction: "out", AssetMode: "eth", FromBlock: summary.EarliestBlock, ToBlock: summary.LatestBlock, Limit: traceTransferRecordCap})
+		if err != nil {
+			return false, fmt.Errorf("list possible THORChain inbounds: %w", err)
+		}
+	}
+	resolved := false
+	for _, transfer := range transfers {
+		if !strings.EqualFold(transfer.From, summary.From) || !strings.EqualFold(transfer.To, summary.To) {
+			continue
+		}
+		ok, err := g.appendVerifiedCrossChainEndpoint(ctx, chain, transfer, depth, path, result, summary.TransferCount == 1)
+		if err != nil {
+			return false, err
+		}
+		resolved = resolved || ok
+	}
+	return resolved, nil
+}
+
+func (g *Graph) appendVerifiedCrossChainEndpoint(ctx context.Context, chain string, transfer store.Transfer, depth int, path []string, result *Result, annotateInbound bool) (bool, error) {
+	analysis, err := g.analyzer.Analyze(ctx, chain, transfer.TxHash)
+	if err != nil {
+		return false, fmt.Errorf("analyze possible THORChain inbound: %w", err)
+	}
+	if !strings.EqualFold(analysis.Chain, chain) || !strings.EqualFold(analysis.TxHash, transfer.TxHash) || analysis.ProtocolAction != "router_inbound" || analysis.ProtocolMemo == "" || analysis.ProtocolDestination == "" || !analysis.Succeeded || !strings.EqualFold(analysis.From, transfer.From) || !strings.EqualFold(analysis.To, transfer.To) || analysis.Value != transfer.Amount {
+		return false, nil
+	}
+	outbound, ok, err := g.crossChainVerifier.Verify(ctx, analysis)
+	if err != nil {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		result.DataStatus = "partial"
+		if annotateInbound && len(result.Edges) > 0 {
+			inbound := &result.Edges[len(result.Edges)-1]
+			inbound.Protocol = "thorchain"
+			inbound.ProtocolAction = "router_inbound"
+			inbound.ProtocolMemo = analysis.ProtocolMemo
+			inbound.ConversionStatus = "partial"
+			inbound.ConversionScanned = 1
+		}
+		return false, nil
+	}
+	if !ok || outbound.SourceChain != "ethereum" || outbound.TargetChain != "bitcoin" || !strings.EqualFold(outbound.From, transfer.To) || !strings.EqualFold(outbound.To, analysis.ProtocolDestination) || !strings.EqualFold(outbound.Asset, "BTC") || outbound.Amount == "" || outbound.TxHash == "" {
+		return false, nil
+	}
+	if annotateInbound && len(result.Edges) > 0 {
+		inbound := &result.Edges[len(result.Edges)-1]
+		inbound.Protocol = "thorchain"
+		inbound.ProtocolAction = "router_inbound"
+		inbound.ProtocolMemo = analysis.ProtocolMemo
+		inbound.ConversionStatus = "complete"
+		inbound.ConversionScanned = 1
+	}
+	target := strings.ToLower(outbound.To)
+	crossChainPath := append(append([]string(nil), path...), target)
+	result.Edges = append(result.Edges, Edge{
+		Chain: "bitcoin", SourceChain: "ethereum", TargetChain: "bitcoin", From: strings.ToLower(outbound.From), To: target,
+		AssetType: "native", Asset: "BTC", Symbol: "BTC", Decimals: 8, TotalAmount: outbound.Amount, TransferCount: 1,
+		Kind: "thorchain_cross_chain_outbound", Depth: depth + 1, Path: crossChainPath, TxHash: strings.ToLower(outbound.TxHash),
+		SourceTxHash: strings.ToLower(transfer.TxHash), SourceAmount: transfer.Amount, SourceAsset: "ETH",
+		FirstBlock: outbound.BlockNumber, LatestBlock: outbound.BlockNumber, Protocol: "thorchain", ProtocolAction: "cross_chain_swap", ProtocolMemo: analysis.ProtocolMemo,
+	})
+	for _, node := range result.Nodes {
+		if node.Chain == "bitcoin" && strings.EqualFold(node.Address, target) {
+			return true, nil
+		}
+	}
+	result.Nodes = append(result.Nodes, Node{Chain: "bitcoin", Address: target, Depth: depth + 1, Terminal: true, AddressType: "unknown", Protocol: "thorchain", Roles: []string{"cross_chain_recipient"}, StopReason: "verified_cross_chain_endpoint"})
+	result.Paths = append(result.Paths, crossChainPath)
+	return true, nil
 }
 
 func (g *Graph) markTHORChainVault(ctx context.Context, chain, address string, nodes []Node, states []branchState) (store.AddressIdentity, error) {

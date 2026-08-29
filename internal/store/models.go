@@ -103,6 +103,17 @@ type AddressIdentity struct {
 	Roles       []string `bson:"roles,omitempty" json:"roles,omitempty"`
 }
 
+type VerifiedCrossChainTransfer struct {
+	SourceChain string
+	TargetChain string
+	From        string
+	To          string
+	Asset       string
+	Amount      string
+	TxHash      string
+	BlockNumber int64
+}
+
 type Transfer struct {
 	Chain                 string    `bson:"chain" json:"chain"`
 	ChainID               int64     `bson:"chainId" json:"chainId"`
@@ -116,6 +127,7 @@ type Transfer struct {
 	Symbol                string    `bson:"symbol,omitempty" json:"symbol,omitempty"`
 	Decimals              int32     `bson:"decimals,omitempty" json:"decimals"`
 	Amount                string    `bson:"amount,omitempty" json:"amount,omitempty"`
+	Input                 string    `bson:"input,omitempty" json:"input,omitempty"`
 	TokenValue            string    `bson:"tokenValue,omitempty" json:"tokenValue,omitempty"`
 	TokenName             string    `bson:"tokenName,omitempty" json:"tokenName,omitempty"`
 	TransferKind          string    `bson:"transferKind" json:"transferKind"`

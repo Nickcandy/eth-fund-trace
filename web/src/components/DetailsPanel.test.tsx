@@ -157,6 +157,36 @@ describe("DetailsPanel labels", () => {
     expect(screen.getByText(/不代表该金额来自查询中心/)).toBeVisible();
   });
 
+  it("does not present an unavailable THORChain verification as confirmed", () => {
+    const edge: GraphEdgeModel = {
+      id: "thorchain-pending",
+      source: "ethereum:0x1",
+      target: "ethereum:0x2",
+      chain: "ethereum",
+      asset: "ETH",
+      assetSymbol: "ETH",
+      sourceType: "aggregate",
+      kind: "transfer",
+      count: 1,
+      totalAmount: "100",
+      protocol: "thorchain",
+      protocolAction: "router_inbound",
+      protocolMemo: "=:b:bc1ptest",
+      conversionStatus: "partial",
+    };
+    render(
+      <DetailsPanel
+        edge={edge}
+        labels={[]}
+        onLabel={vi.fn()}
+        onClose={() => undefined}
+        onFocus={() => undefined}
+      />,
+    );
+    expect(screen.getByText("验证暂不可用")).toBeVisible();
+    expect(screen.queryByText("已确认")).not.toBeInTheDocument();
+  });
+
   it("shows contract roles and Kyber swap evidence", () => {
     const node: GraphNodeModel = {
       id: "ethereum:0x1",

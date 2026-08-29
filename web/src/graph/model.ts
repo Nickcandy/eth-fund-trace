@@ -32,6 +32,8 @@ export interface GraphEdgeModel {
   source: string;
   target: string;
   chain: string;
+  sourceChain?: string;
+  targetChain?: string;
   assetType?: string;
   asset: string;
   assetSymbol: string;
@@ -41,6 +43,9 @@ export interface GraphEdgeModel {
   totalAmount: string;
   decimals?: number;
   txHash?: string;
+  sourceTxHash?: string;
+  sourceAmount?: string;
+  sourceAsset?: string;
   bidirectional?: boolean;
   swapLegs?: GraphEdgeLeg[];
   firstBlock?: number;
@@ -81,17 +86,19 @@ function signedHops(result: TraceResult, seed: NodeRef): Map<string, number> {
   const queue = [...hops.keys()];
   while (queue.length > 0) {
     const current = queue.shift()!;
-    const [chain, address] = current.split(":");
     const currentHop = hops.get(current)!;
     for (const edge of result.edges) {
-      if (edge.chain !== chain) continue;
+      const sourceChain = edge.sourceChain ?? edge.chain;
+      const targetChain = edge.targetChain ?? edge.chain;
+      const source = nodeID(sourceChain, edge.from);
+      const target = nodeID(targetChain, edge.to);
       let next: string | undefined;
       let hop = currentHop;
-      if (edge.to.toLowerCase() === address && currentHop <= 0) {
-        next = nodeID(chain, edge.from);
+      if (target === current && currentHop <= 0) {
+        next = source;
         hop = currentHop - 1;
-      } else if (edge.from.toLowerCase() === address && currentHop >= 0) {
-        next = nodeID(chain, edge.to);
+      } else if (source === current && currentHop >= 0) {
+        next = target;
         hop = currentHop + 1;
       }
       if (next && !hops.has(next)) {
@@ -176,7 +183,8 @@ export function buildGraphModel(
   const grouped = new Map<string, GraphEdgeModel>();
   result.edges.forEach((edge) => {
     const key = [
-      edge.chain,
+      edge.sourceChain ?? edge.chain,
+      edge.targetChain ?? edge.chain,
       edge.txHash ?? "",
       edge.from.toLowerCase(),
       edge.to.toLowerCase(),
@@ -187,13 +195,17 @@ export function buildGraphModel(
       edge.latestBlock ?? 0,
       edge.path.join(">"),
     ].join("|");
-    const source = nodeID(edge.chain, edge.from);
-    const target = nodeID(edge.chain, edge.to);
+    const sourceChain = edge.sourceChain ?? edge.chain;
+    const targetChain = edge.targetChain ?? edge.chain;
+    const source = nodeID(sourceChain, edge.from);
+    const target = nodeID(targetChain, edge.to);
     grouped.set(key, {
       id: key,
       source,
       target,
       chain: edge.chain,
+      sourceChain,
+      targetChain,
       assetType: edge.assetType,
       asset: edge.asset,
       assetSymbol: edge.symbol || edge.asset,
@@ -202,6 +214,9 @@ export function buildGraphModel(
       count: edge.transferCount,
       totalAmount: edge.totalAmount,
       txHash: edge.txHash,
+      sourceTxHash: edge.sourceTxHash,
+      sourceAmount: edge.sourceAmount,
+      sourceAsset: edge.sourceAsset,
       flow: flow(source, target),
       decimals: displayDecimals(
         edge.assetType,

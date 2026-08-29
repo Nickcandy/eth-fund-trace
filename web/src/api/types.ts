@@ -1,4 +1,4 @@
-export type Chain = "ethereum";
+export type Chain = "ethereum" | "bitcoin";
 export type Direction = "in" | "out" | "both";
 export type JobStatus =
   | "queued"
@@ -38,6 +38,8 @@ export interface Transfer {
 
 export interface TraceEdge {
   chain: Chain;
+  sourceChain?: Chain;
+  targetChain?: Chain;
   from: string;
   to: string;
   assetType: string;
@@ -51,6 +53,9 @@ export interface TraceEdge {
   depth: number;
   path: string[];
   txHash?: string;
+  sourceTxHash?: string;
+  sourceAmount?: string;
+  sourceAsset?: string;
   firstBlock?: number;
   firstTime?: string;
   latestBlock?: number;

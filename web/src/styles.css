@@ -222,9 +222,9 @@ textarea {
   top: 0;
   background: rgba(255, 255, 255, 0.008);
 }
-.base-lane {
+.bitcoin-lane {
   top: 50%;
-  background: rgba(52, 108, 231, 0.035);
+  background: rgba(247, 147, 26, 0.025);
 }
 .react-flow {
   z-index: 1;

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Nickcandy/eth-fund-trace/internal/etherscan"
 	"github.com/Nickcandy/eth-fund-trace/internal/store"
@@ -17,7 +18,7 @@ import (
 
 const (
 	// AnalysisVersion invalidates cached analyses when semantic rules change.
-	AnalysisVersion   = "transaction-analysis-v6"
+	AnalysisVersion   = "transaction-analysis-v7"
 	EthereumV3Factory = "0x1f98431c8ad98523631ae4a59f267346ea31f984"
 	EthereumWETH      = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
 	// KyberSwapRouter is the Ethereum MetaAggregation Router supported by the RFQ adapter.
@@ -223,6 +224,8 @@ func (s *Service) Analyze(ctx context.Context, chain, txHash string) (store.Tran
 		} else if isTHORChainTransferOutAction(analysis.ProtocolAction) {
 			analysis.Quality.Evidence = append(analysis.Quality.Evidence, "verified THORChain transferOut")
 		}
+	case analysis.Succeeded && parseTHORChainInboundMemo(&analysis):
+		analysis.Quality.Evidence = append(analysis.Quality.Evidence, "decoded THORChain inbound memo intent")
 	case analysis.To == KyberSwapRouter:
 		s.finalizeKyberRFQ(&analysis, internalErr)
 	default:
@@ -233,6 +236,40 @@ func (s *Service) Analyze(ctx context.Context, chain, txHash string) (store.Tran
 		return store.TransactionAnalysis{}, fmt.Errorf("save transaction analysis: %w", err)
 	}
 	return analysis, nil
+}
+
+func parseTHORChainInboundMemo(analysis *store.TransactionAnalysis) bool {
+	input := strings.TrimPrefix(strings.TrimSpace(analysis.Input), "0x")
+	if !analysis.Succeeded || input == "" || len(input)%2 != 0 || len(input) > 2048 {
+		return false
+	}
+	raw, err := hex.DecodeString(input)
+	if err != nil || !utf8.Valid(raw) {
+		return false
+	}
+	memo := string(raw)
+	parts := strings.Split(memo, ":")
+	if len(parts) < 3 {
+		return false
+	}
+	action := strings.ToUpper(strings.TrimSpace(parts[0]))
+	if action != "=" && action != "S" && action != "SWAP" {
+		return false
+	}
+	asset := strings.ToUpper(strings.TrimSpace(parts[1]))
+	if asset != "B" && asset != "BTC" && asset != "BTC.BTC" {
+		return false
+	}
+	destination := strings.ToLower(strings.TrimSpace(parts[2]))
+	if !strings.HasPrefix(destination, "bc1") || len(destination) < 14 || len(destination) > 90 {
+		return false
+	}
+	analysis.ProtocolAction = "router_inbound"
+	analysis.ProtocolMemo = memo
+	analysis.ProtocolDestination = destination
+	analysis.ProtocolAsset = "BTC.BTC"
+	analysis.ProtocolAmount = analysis.Value
+	return true
 }
 
 func parseTHORChainCall(analysis *store.TransactionAnalysis) bool {

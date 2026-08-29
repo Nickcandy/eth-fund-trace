@@ -58,6 +58,48 @@ function result(): TraceResult {
 }
 
 describe("buildGraphModel", () => {
+  it("connects a THORChain outbound from an Ethereum vault to a Bitcoin terminal", () => {
+    const value = result();
+    const vault = downstream;
+    const btc =
+      "bc1phghtqqpfwgw3jzaefey0z0epesyd77nyncllcer9s9rs0t4t4ttqhcpgd4";
+    value.nodes.push({
+      chain: "bitcoin",
+      address: btc,
+      depth: 2,
+      terminal: true,
+      protocol: "thorchain",
+      roles: ["cross_chain_recipient"],
+    });
+    value.edges.push({
+      chain: "bitcoin",
+      sourceChain: "ethereum",
+      targetChain: "bitcoin",
+      from: vault,
+      to: btc,
+      assetType: "native",
+      asset: "BTC",
+      symbol: "BTC",
+      decimals: 8,
+      totalAmount: "729777955",
+      transferCount: 1,
+      kind: "thorchain_cross_chain_outbound",
+      depth: 2,
+      path: [seed, vault, btc],
+    });
+
+    const model = buildGraphModel(value, { chain: "ethereum", address: seed });
+    expect(model.edges.at(-1)).toMatchObject({
+      source: `ethereum:${vault}`,
+      target: `bitcoin:${btc}`,
+      decimals: 8,
+    });
+    expect(model.nodes.find((node) => node.chain === "bitcoin")).toMatchObject({
+      terminal: true,
+      hop: 2,
+    });
+  });
+
   it("places upstream and downstream on opposite signed hops", () => {
     const model = buildGraphModel(result(), {
       chain: "ethereum",

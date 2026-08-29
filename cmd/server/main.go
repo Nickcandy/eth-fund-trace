@@ -18,6 +18,7 @@ import (
 	"github.com/Nickcandy/eth-fund-trace/internal/profile"
 	"github.com/Nickcandy/eth-fund-trace/internal/store"
 	"github.com/Nickcandy/eth-fund-trace/internal/syncer"
+	"github.com/Nickcandy/eth-fund-trace/internal/thorchain"
 	"github.com/Nickcandy/eth-fund-trace/internal/tracer"
 	"github.com/Nickcandy/eth-fund-trace/internal/transactionanalysis"
 	"github.com/labstack/echo/v4"
@@ -81,6 +82,10 @@ func run(parent context.Context) error {
 		},
 	})
 	transactionAnalyzer := transactionanalysis.New(ethereumClient, appStore, time.Now)
+	crossChainVerifier := thorchain.New(thorchain.Config{
+		StatusBaseURL: cfg.THORChainStatusURL, BitcoinBaseURL: cfg.BitcoinAPIURL, ClientID: cfg.THORChainClientID,
+		HTTPClient: &http.Client{Timeout: time.Duration(cfg.CrossChainHTTPTimeoutSeconds) * time.Second},
+	})
 
 	e := echo.New()
 	e.HideBanner = true
@@ -98,6 +103,7 @@ func run(parent context.Context) error {
 	e.GET("/api/v1/edges", httpapi.NewEdgeHandler(fundgraph.New(appStore)).Get)
 	traceGraph := tracer.New(appStore).
 		WithTransactionAnalyzer(transactionAnalyzer).
+		WithCrossChainVerifier(crossChainVerifier).
 		WithAddressInspector(transactionAnalyzer).
 		WithRequiredStartBlocks(map[string]int64{"ethereum": cfg.EthereumSyncStartBlock}).
 		WithExistingDataOnly(cfg.TraceExistingDataOnly)

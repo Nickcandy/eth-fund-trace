@@ -58,9 +58,7 @@ export default function App() {
 }
 function Console() {
   const extensionApplied = useRef<string | undefined>(undefined);
-  const syncJobCache = useRef(
-    new Map<string, import("./api/types").SyncJob>(),
-  );
+  const syncJobCache = useRef(new Map<string, import("./api/types").SyncJob>());
   const queryClient = useQueryClient();
   const requestGeneration = useRef(0);
   const initialQuery = useRef(readTraceQuery(location.search));
@@ -179,7 +177,10 @@ function Console() {
     history.replaceState(null, "", writeTraceQuery(draft, latestTrace.data.id));
   }, [latestTrace.data, jobID, draft]);
   const result =
-    job.data?.result?.ruleVersion === "trace-v1" ? job.data.result : undefined;
+    job.data?.result &&
+    ["trace-v1", "trace-v2"].includes(job.data.result.ruleVersion)
+      ? job.data.result
+      : undefined;
   const model = useMemo(
     () =>
       result && active
@@ -200,23 +201,23 @@ function Console() {
   const address = useQuery({
     queryKey: ["address", detailChain, detailAddress],
     queryFn: ({ signal }) => api.address(detailChain!, detailAddress!, signal),
-    enabled: seedReady && !!detailNode,
+    enabled: seedReady && detailNode?.chain === "ethereum",
   });
   const balance = useQuery({
     queryKey: ["balance", detailChain, detailAddress],
     queryFn: ({ signal }) => api.balance(detailChain!, detailAddress!, signal),
-    enabled: seedReady && !!detailNode,
+    enabled: seedReady && detailNode?.chain === "ethereum",
     staleTime: 15_000,
   });
   const profile = useQuery({
     queryKey: ["profile", detailChain, detailAddress],
     queryFn: ({ signal }) => api.profile(detailChain!, detailAddress!, signal),
-    enabled: seedReady && !!detailNode,
+    enabled: seedReady && detailNode?.chain === "ethereum",
   });
   const labels = useQuery({
     queryKey: ["labels", detailChain, detailAddress],
     queryFn: ({ signal }) => api.labels(detailChain!, detailAddress!, signal),
-    enabled: seedReady && !!detailNode,
+    enabled: seedReady && detailNode?.chain === "ethereum",
   });
   const facts = useInfiniteQuery({
     queryKey: ["edges", active],
@@ -315,6 +316,7 @@ function Console() {
     startTrace(draft);
   };
   const focus = (chain: string, addressValue: string) => {
+    if (chain !== "ethereum") return;
     const q = {
       ...draft,
       chain: chain as TraceQuery["chain"],

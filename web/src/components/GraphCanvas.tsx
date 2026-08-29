@@ -64,7 +64,7 @@ type InteractiveEdge = Edge<InteractiveEdgeData, "interactive">;
 const nodeTypes = { fund: FundNode };
 const edgeTypes = { interactive: InteractiveGraphEdge };
 const DENSE_GRAPH_EDGE_LIMIT = 20;
-export type AssetFilter = "all" | "ETH" | "USDT" | "erc20";
+export type AssetFilter = "all" | "ETH" | "BTC" | "USDT" | "erc20";
 
 export function labelsVisibleByDefault(edgeCount: number) {
   return edgeCount <= DENSE_GRAPH_EDGE_LIMIT;
@@ -110,6 +110,7 @@ function matchesAsset(
       assetType === "native" ||
       asset.toUpperCase() === "ETH"
     );
+  if (filter === "BTC") return symbol.toUpperCase() === "BTC";
   if (filter === "USDT") return symbol.toUpperCase() === "USDT";
   return assetType === "erc20" && symbol.toUpperCase() !== "USDT";
 }
@@ -546,6 +547,9 @@ function Canvas({
       <div className="swimlane ethereum-lane">
         <span>ETHEREUM</span>
       </div>
+      <div className="swimlane bitcoin-lane">
+        <span>BITCOIN</span>
+      </div>
       <ReactFlow<FundFlowNode, InteractiveEdge>
         nodes={nodes}
         edges={edges}
@@ -607,6 +611,7 @@ function Canvas({
                 <>
                   <option value="all">全部资产</option>
                   <option value="ETH">ETH</option>
+                  <option value="BTC">BTC</option>
                   <option value="USDT">USDT</option>
                   <option value="erc20">其他 ERC-20</option>
                 </>

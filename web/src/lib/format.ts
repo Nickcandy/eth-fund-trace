@@ -73,6 +73,7 @@ export function displayDecimals(
   decimals: number | undefined,
   metadataComplete: boolean | undefined,
 ): number | undefined {
+  if (asset?.toUpperCase() === "BTC") return 8;
   if (
     assetType === "eth" ||
     assetType === "native" ||
@@ -92,7 +93,11 @@ export function formatBlock(block: number): string {
 }
 
 export function chainLabel(chain: string): string {
-  return chain === "ethereum" ? "Ethereum" : chain;
+  return chain === "ethereum"
+    ? "Ethereum"
+    : chain === "bitcoin"
+      ? "Bitcoin"
+      : chain;
 }
 
 export function stopReasonLabel(reason?: string): string {
@@ -106,6 +111,7 @@ export function stopReasonLabel(reason?: string): string {
         missing_data: "数据缺失，停止追踪",
         no_matching_transfers: "当前覆盖范围无匹配后续",
         node_limit: "达到任务节点上限",
+        verified_cross_chain_endpoint: "已由 THORChain 与 Bitcoin 链上交易确认",
       } as Record<string, string>
     )[reason ?? ""] ?? "终点"
   );
