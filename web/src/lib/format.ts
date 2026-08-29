@@ -105,6 +105,7 @@ export function stopReasonLabel(reason?: string): string {
         ambiguous_conversion: "转换证据不足",
         missing_data: "数据缺失，停止追踪",
         no_matching_transfers: "当前覆盖范围无匹配后续",
+        node_limit: "达到任务节点上限",
       } as Record<string, string>
     )[reason ?? ""] ?? "终点"
   );

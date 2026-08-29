@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { activeTraceJob, describeTraceJob, mergeSyncJobs } from "./job";
+import {
+  activeTraceJob,
+  describeTraceJob,
+  mergeSyncJobs,
+  syncJobIDsToRefresh,
+} from "./job";
 
 describe("describeTraceJob", () => {
   it("maps waiting sync progress to a user-visible state", () => {
@@ -85,5 +90,19 @@ describe("activeTraceJob", () => {
       status: "stopped",
     } as import("./types").TraceJob;
     expect(activeTraceJob(root, extension)).toBe(root);
+  });
+});
+
+describe("syncJobIDsToRefresh", () => {
+  it("reuses completed jobs and polls only active or unseen jobs", () => {
+    const cached = [
+      { jobId: "done", status: "succeeded" },
+      { jobId: "partial", status: "partial" },
+      { jobId: "active", status: "running" },
+    ] as import("./types").SyncJob[];
+
+    expect(
+      syncJobIDsToRefresh(["done", "partial", "active", "new"], cached),
+    ).toEqual(["active", "new"]);
   });
 });

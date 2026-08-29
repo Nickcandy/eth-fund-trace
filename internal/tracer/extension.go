@@ -88,6 +88,18 @@ func (g *Graph) ExtendBranch(ctx context.Context, root Result, request Extension
 		}
 		for _, transfer := range transfers {
 			summary := transferSummary(transfer)
+			if !supportedSummaryAsset(summary) {
+				continue
+			}
+			canonicalizeSummaryAsset(request.Chain, &summary)
+			other := strings.ToLower(summary.To)
+			if request.Direction == "in" {
+				other = strings.ToLower(summary.From)
+			}
+			if other == "" {
+				continue
+			}
+			cycle := pathContains(anchor.Path, other)
 			amount, valid := new(big.Int).SetString(summary.TotalAmount, 10)
 			if !valid || amount.Sign() <= 0 || budget.Sign() <= 0 {
 				continue
@@ -97,11 +109,15 @@ func (g *Graph) ExtendBranch(ctx context.Context, root Result, request Extension
 			}
 			summary.TotalAmount = amount.String()
 			budget.Sub(budget, amount)
-			other := strings.ToLower(summary.To)
-			if request.Direction == "in" {
-				other = strings.ToLower(summary.From)
-			}
-			if other == "" || pathContains(anchor.Path, other) || !traceableSummaryAmount(request.Chain, summary) {
+			path := append(append([]string(nil), anchor.Path...), other)
+			if cycle {
+				result.Edges = append(result.Edges, edgeFromSummary(summary, anchorNode.Depth+1, path))
+				result.Paths = append(result.Paths, path)
+				result.MoneyTransfers = append(result.MoneyTransfers, moneyTransfer(summary, store.StopCycle))
+				result.MoneyStates = append(result.MoneyStates,
+					store.MoneyState{Chain: summary.Chain, Address: strings.ToLower(summary.From), Direction: "out", AssetType: summary.AssetType, Asset: summary.Asset, Amount: summary.TotalAmount, RemainingAmount: summary.TotalAmount, EntryTxHash: summary.Representative.TxHash, EntryBlock: summary.Representative.BlockNumber, Path: path, Evidence: "transfer", Inferred: true},
+					store.MoneyState{Chain: summary.Chain, Address: strings.ToLower(summary.To), Direction: "in", AssetType: summary.AssetType, Asset: summary.Asset, Amount: summary.TotalAmount, RemainingAmount: summary.TotalAmount, EntryTxHash: summary.Representative.TxHash, EntryBlock: summary.Representative.BlockNumber, Path: path, Evidence: "transfer", Inferred: true},
+				)
 				continue
 			}
 			metadata, exists, metadataErr := g.repository.FindAddress(ctx, request.Chain, other)
@@ -133,7 +149,6 @@ func (g *Graph) ExtendBranch(ctx context.Context, root Result, request Extension
 			if dependencyStopReason != "" {
 				result.DataStatus = "partial"
 			}
-			path := append(append([]string(nil), anchor.Path...), other)
 			result.Edges = append(result.Edges, edgeFromSummary(summary, anchorNode.Depth+1, path))
 			result.Nodes = appendNode(result.Nodes, Node{Chain: request.Chain, Address: other, Depth: anchorNode.Depth + 1, Terminal: terminal, AddressType: identity.AddressType, Protocol: identity.Protocol, Roles: identity.Roles, StopReason: dependencyStopReason})
 			result.Paths = append(result.Paths, path)
@@ -146,7 +161,7 @@ func (g *Graph) ExtendBranch(ctx context.Context, root Result, request Extension
 	}
 	if len(result.Edges) == 0 && !result.Nodes[0].Terminal {
 		result.Nodes[0].Terminal = true
-		result.Nodes[0].StopReason = "no_matching_transfers"
+		result.Nodes[0].StopReason = string(store.StopNoMatchingTransfers)
 	}
 	return result, nil
 }

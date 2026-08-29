@@ -261,12 +261,8 @@ function TraceProgressCard({
       <div className="job-metrics">
         <Metric label="已完成同步" value={`${completedSyncs} 个地址`} />
         <Metric
-          label="追踪深度"
-          value={
-            waiting
-              ? `准备中 / ${job.depth}`
-              : `${job.currentDepth} / ${job.depth}`
-          }
+          label="自动追踪"
+          value={waiting ? "准备数据" : `已到第 ${job.currentDepth} 层`}
         />
         <Metric
           label="节点 / 事实边"

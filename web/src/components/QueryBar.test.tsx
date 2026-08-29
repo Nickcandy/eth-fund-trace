@@ -7,7 +7,7 @@ const query = {
   chain: "ethereum" as const,
   address: "",
   direction: "both" as const,
-  depth: 3,
+  depth: 0,
   asset: "ETH",
 };
 afterEach(cleanup);
@@ -37,6 +37,7 @@ describe("QueryBar", () => {
       />,
     );
     expect(screen.queryByLabelText("资产")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("深度")).not.toBeInTheDocument();
   });
 
   it("switches to transaction hash mode", async () => {

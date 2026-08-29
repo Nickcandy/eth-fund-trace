@@ -136,6 +136,9 @@ type branchState struct {
 	Identity      store.AddressIdentity
 	Path          []string
 }
+
+const maxTraceNodes = 5000
+
 type Graph struct {
 	repository           Repository
 	analyzer             TransactionAnalyzer
@@ -288,11 +291,13 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 			result.branchStates = append(result.branchStates, state)
 		}
 	}
-	for depth := 0; depth < q.Depth && len(frontier) > 0 && len(visitedNodes) < 5000; depth++ {
+	for depth := 0; len(frontier) > 0 && len(visitedNodes) < maxTraceNodes; depth++ {
 		sort.Slice(frontier, func(i, j int) bool {
 			return branchStateKey(frontier[i]) < branchStateKey(frontier[j])
 		})
 		next := make([]branchState, 0)
+		processedAddresses := make(map[string]bool)
+		expandedAddresses := make(map[string]bool)
 		expand := func(state branchState, candidates []store.CounterpartySummary, conversionEvidence map[string][]ConversionEvidence) error {
 			sort.SliceStable(candidates, func(i, j int) bool {
 				if state.Direction == "out" {
@@ -305,20 +310,21 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 				budget, _ = new(big.Int).SetString(state.Amount, 10)
 			}
 			for _, summary := range candidates {
-				if token, ok := knownTokenFor(q.Chain, summary.Asset); ok {
-					summary.AssetType = "erc20"
-					summary.Asset = token.Contract
-					summary.Symbol = token.Symbol
-					summary.Decimals = token.Decimals
-					summary.TokenMetadataComplete = true
+				if err := ctx.Err(); err != nil {
+					return err
 				}
+				if !supportedSummaryAsset(summary) {
+					continue
+				}
+				canonicalizeSummaryAsset(q.Chain, &summary)
 				other := strings.ToLower(summary.To)
 				if state.Direction == "in" {
 					other = strings.ToLower(summary.From)
 				}
-				if other == "" || pathContains(state.Path, other) {
+				if other == "" {
 					continue
 				}
+				cycle := pathContains(state.Path, other)
 				amount, amountOK := new(big.Int).SetString(summary.TotalAmount, 10)
 				if !amountOK || amount.Sign() <= 0 || budget != nil && budget.Sign() <= 0 {
 					continue
@@ -331,21 +337,31 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 				}
 				summary.TotalAmount = amount.String()
 				path := append(append([]string(nil), state.Path...), other)
-				if !traceableSummaryAmount(q.Chain, summary) {
-					result.MoneyTransfers = append(result.MoneyTransfers, moneyTransfer(summary, store.StopSmallAmount))
+				if !visitedNodes[other] && len(visitedNodes) >= maxTraceNodes {
+					result.DataStatus = "partial"
+					setNodeTerminal(result.Nodes, state.Address, string(store.StopNodeLimit))
 					continue
 				}
 				edge := edgeFromSummary(summary, depth+1, path)
 				edge.ConversionEvidence = conversionEvidence[conversionKey(summary.From, summary.To, summary.Asset)]
 				result.Edges = append(result.Edges, edge)
+				expandedAddresses[strings.ToLower(state.Address)] = true
 				edgeIndex := len(result.Edges) - 1
-				result.MoneyTransfers = append(result.MoneyTransfers, moneyTransfer(summary, ""))
+				stopReason := store.StopReason("")
+				if cycle {
+					stopReason = store.StopCycle
+				}
+				result.MoneyTransfers = append(result.MoneyTransfers, moneyTransfer(summary, stopReason))
 				result.MoneyStates = append(result.MoneyStates,
 					store.MoneyState{Chain: summary.Chain, Address: strings.ToLower(summary.From), Direction: "out", AssetType: summary.AssetType, Asset: summary.Asset, Amount: summary.TotalAmount, RemainingAmount: summary.TotalAmount, EntryTxHash: summary.Representative.TxHash, EntryBlock: summary.Representative.BlockNumber, Path: path, Evidence: "transfer", Inferred: state.Amount != ""},
 					store.MoneyState{Chain: summary.Chain, Address: strings.ToLower(summary.To), Direction: "in", AssetType: summary.AssetType, Asset: summary.Asset, Amount: summary.TotalAmount, RemainingAmount: summary.TotalAmount, EntryTxHash: summary.Representative.TxHash, EntryBlock: summary.Representative.BlockNumber, Path: path, Evidence: "transfer", Inferred: state.Amount != ""},
 				)
+				if cycle {
+					result.Paths = append(result.Paths, path)
+					continue
+				}
 				if other == zeroAddress {
-					if !visitedNodes[other] && len(visitedNodes) < 5000 {
+					if !visitedNodes[other] && len(visitedNodes) < maxTraceNodes {
 						visitedNodes[other] = true
 						result.Nodes = append(result.Nodes, Node{Chain: q.Chain, Address: other, Depth: depth + 1, Terminal: true})
 					}
@@ -397,7 +413,7 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 				relation := store.CounterpartyQuery{Chain: q.Chain, Address: state.Address, Counterparty: other, Direction: state.Direction, AssetMode: assetMode, Asset: asset}
 				nextState := branchState{Address: other, Direction: state.Direction, AssetMode: assetMode, Asset: asset, AnchorBlock: summary.Representative.BlockNumber, EnteringQuery: relation, EnteringTx: summary.Representative, EnteringEdge: edgeIndex, Amount: summary.TotalAmount, Contract: contract, Identity: identity, Path: path}
 				stateKey := branchStateKey(nextState)
-				if visitedStates[stateKey] || len(visitedNodes) >= 5000 {
+				if visitedStates[stateKey] || len(visitedNodes) >= maxTraceNodes {
 					continue
 				}
 				otherLabels, labelsErr := g.repository.ListLabels(ctx, q.Chain, other)
@@ -432,9 +448,13 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 			return nil
 		}
 		for _, state := range frontier {
+			if err := ctx.Err(); err != nil {
+				return Result{}, err
+			}
 			if nodeTerminal(result.Nodes, state.Address) {
 				continue
 			}
+			processedAddresses[strings.ToLower(state.Address)] = true
 			if state.EnteringQuery.Address != "" && state.Contract && !isTHORChainVault(state.Identity) && g.existingDataOnly {
 				setNodeTerminal(result.Nodes, state.Address, "unsupported_contract")
 				continue
@@ -526,7 +546,18 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 				return Result{}, err
 			}
 		}
+		for address := range processedAddresses {
+			if !expandedAddresses[address] && !nodeTerminal(result.Nodes, address) {
+				setNodeTerminal(result.Nodes, address, string(store.StopNoMatchingTransfers))
+			}
+		}
 		frontier = next
+	}
+	if len(frontier) > 0 {
+		result.DataStatus = "partial"
+		for _, state := range frontier {
+			setNodeTerminal(result.Nodes, state.Address, string(store.StopNodeLimit))
+		}
 	}
 	result.Risk = risk.Analyze(seed, nil, seedLabels)
 	consumeMoneyStates(result.MoneyStates)
@@ -1120,12 +1151,10 @@ func normalize(q Query) (Query, error) {
 		return q, ErrInvalidQuery
 	}
 	q.Chain = chain.Name
-	if q.Depth == 0 {
-		q.Depth = 3
-	}
-	if q.Depth < 1 || q.Depth > 5 {
+	if q.Depth < 0 {
 		return q, ErrInvalidQuery
 	}
+	q.Depth = 0
 	d := strings.ToLower(q.Direction)
 	if d == "" {
 		d = "both"

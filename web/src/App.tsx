@@ -22,6 +22,7 @@ import {
   collapseSyncJobsByAddress,
   describeTraceJob,
   mergeSyncJobs,
+  syncJobIDsToRefresh,
 } from "./api/job";
 import type { GraphEdgeModel } from "./graph/model";
 import { buildGraphModel } from "./graph/model";
@@ -57,6 +58,9 @@ export default function App() {
 }
 function Console() {
   const extensionApplied = useRef<string | undefined>(undefined);
+  const syncJobCache = useRef(
+    new Map<string, import("./api/types").SyncJob>(),
+  );
   const queryClient = useQueryClient();
   const requestGeneration = useRef(0);
   const initialQuery = useRef(readTraceQuery(location.search));
@@ -235,7 +239,19 @@ function Console() {
   ];
   const syncQueries = useQuery({
     queryKey: ["sync-jobs", jobID, syncIDs],
-    queryFn: ({ signal }) => api.syncJobs(syncIDs, signal),
+    queryFn: async ({ signal }) => {
+      const refreshIDs = syncJobIDsToRefresh(
+        syncIDs,
+        syncJobCache.current.values(),
+      );
+      const refreshed = await api.syncJobs(refreshIDs, signal);
+      for (const syncJob of refreshed)
+        syncJobCache.current.set(syncJob.jobId, syncJob);
+      return syncIDs.flatMap((id) => {
+        const syncJob = syncJobCache.current.get(id);
+        return syncJob ? [syncJob] : [];
+      });
+    },
     enabled: syncIDs.length > 0,
     placeholderData: (previousData) => previousData,
     refetchInterval:

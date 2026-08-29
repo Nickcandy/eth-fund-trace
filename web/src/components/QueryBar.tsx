@@ -97,19 +97,6 @@ export function QueryBar({
               <option value="out">下游</option>
             </select>
           </label>
-          <label className="number-field">
-            <span>深度</span>
-            <input
-              aria-label="深度"
-              type="number"
-              min={1}
-              max={5}
-              value={value.depth}
-              onChange={(event) =>
-                onChange({ ...value, depth: Number(event.target.value) })
-              }
-            />
-          </label>
         </>
       )}
       <button className="primary-command" type="submit" disabled={busy}>

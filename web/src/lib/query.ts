@@ -8,8 +8,6 @@ export function validateTraceQuery(query: TraceQuery): string | undefined {
   if (query.chain !== "ethereum") return "不支持的网络";
   if (!(["in", "out", "both"] as string[]).includes(query.direction))
     return "不支持的追踪方向";
-  if (!Number.isInteger(query.depth) || query.depth < 1 || query.depth > 5)
-    return "深度必须在 1 到 5 之间";
   if (query.asset !== "ETH") return "追踪必须从 ETH 开始";
 }
 
@@ -20,12 +18,11 @@ export function readTraceQuery(search: string): TraceQuery {
     directionValue === "in" || directionValue === "out"
       ? directionValue
       : "both";
-  const depth = Number(params.get("depth") || 3);
   return {
     chain: "ethereum" as Chain,
     address: params.get("address") ?? "",
     direction,
-    depth: Number.isInteger(depth) && depth >= 1 && depth <= 5 ? depth : 3,
+    depth: 0,
     asset: "ETH",
   };
 }
@@ -40,9 +37,9 @@ export function writeTraceQuery(
   traceJobID?: string,
 ): string {
   const params = new URLSearchParams();
-  Object.entries(query).forEach(([key, value]) =>
-    params.set(key, String(value)),
-  );
+  Object.entries(query).forEach(([key, value]) => {
+    if (key !== "depth") params.set(key, String(value));
+  });
   if (traceJobID) params.set("traceJobId", traceJobID);
   return `?${params.toString()}`;
 }

@@ -11,7 +11,7 @@ import (
 	"github.com/Nickcandy/eth-fund-trace/internal/store"
 )
 
-func TestTraceUsesConcreteTransfersAndFiltersSmallAmounts(t *testing.T) {
+func TestTraceUsesConcreteTransfersIncludingSmallAmounts(t *testing.T) {
 	seed := "0x0000000000000000000000000000000000000001"
 	a := "0x0000000000000000000000000000000000000002"
 	b := "0x0000000000000000000000000000000000000003"
@@ -32,18 +32,89 @@ func TestTraceUsesConcreteTransfersAndFiltersSmallAmounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Edges) != 5 || len(result.Nodes) != 4 {
-		t.Fatalf("edges=%+v nodes=%+v, want five concrete transfers and no small recipient", result.Edges, result.Nodes)
+	if len(result.Edges) != 6 || len(result.Nodes) != 5 {
+		t.Fatalf("edges=%+v nodes=%+v, want every positive transfer and recipient", result.Edges, result.Nodes)
 	}
 	if result.Edges[0].TransferCount != 1 || result.Edges[0].TotalAmount != "500000000000000000" {
 		t.Fatalf("first edge=%+v, want one concrete transfer", result.Edges[0])
 	}
-	foundSmall := false
 	for _, transfer := range result.MoneyTransfers {
-		foundSmall = foundSmall || transfer.StopReason == store.StopSmallAmount
+		if transfer.StopReason != "" {
+			t.Fatalf("money transfers=%+v, every positive amount must remain traceable", result.MoneyTransfers)
+		}
 	}
-	if !foundSmall {
-		t.Fatalf("money transfers=%+v, want small amount terminal", result.MoneyTransfers)
+}
+
+func TestTraceAutoModeContinuesBeyondFiveHopsToTerminal(t *testing.T) {
+	addresses := make([]string, 8)
+	repository := &fakeRepository{addresses: map[string]store.Address{}, labels: map[string][]store.Label{}}
+	for i := range addresses {
+		addresses[i] = fmt.Sprintf("0x%040x", i+1)
+		repository.addresses[addresses[i]] = completeAddress(0, 100)
+		if i > 0 {
+			repository.transfers = append(repository.transfers, store.Transfer{
+				Chain: "ethereum", TxHash: fmt.Sprintf("0x%d", i), BlockNumber: int64(i),
+				From: addresses[i-1], To: addresses[i], AssetType: "eth", Asset: "ETH", Amount: "1",
+			})
+		}
+	}
+	terminal := repository.addresses[addresses[len(addresses)-1]]
+	terminal.IsTerminal = true
+	repository.addresses[addresses[len(addresses)-1]] = terminal
+
+	result, err := New(repository).Trace(context.Background(), Query{Address: addresses[0], Direction: "out", Depth: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Edges) != 7 || len(result.Nodes) != 8 || !result.Nodes[7].Terminal {
+		t.Fatalf("result=%+v, want seven hops ending at terminal", result)
+	}
+}
+
+func TestTraceMarksAddressWithoutMatchingTransfersAsTerminal(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	repository := &fakeRepository{addresses: map[string]store.Address{seed: completeAddress(0, 100)}, labels: map[string][]store.Label{}}
+
+	result, err := New(repository).Trace(context.Background(), Query{Address: seed, Direction: "out", Depth: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Nodes) != 1 || !result.Nodes[0].Terminal || result.Nodes[0].StopReason != string(store.StopNoMatchingTransfers) {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestTraceHonorsCancellationDuringAutomaticExpansion(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	repository := &fakeRepository{addresses: map[string]store.Address{seed: completeAddress(0, 100)}, labels: map[string][]store.Label{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := New(repository).Trace(ctx, Query{Address: seed, Direction: "out", Depth: 0})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v, want context cancellation", err)
+	}
+}
+
+func TestTracePreservesCycleEdgeWithoutRequeueingIt(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	next := "0x0000000000000000000000000000000000000002"
+	repository := &fakeRepository{addresses: map[string]store.Address{
+		seed: completeAddress(0, 100), next: completeAddress(0, 100),
+	}, labels: map[string][]store.Label{}, transfers: []store.Transfer{
+		{Chain: "ethereum", TxHash: "0xout", BlockNumber: 10, From: seed, To: next, AssetType: "eth", Asset: "ETH", Amount: "10"},
+		{Chain: "ethereum", TxHash: "0xback", BlockNumber: 11, From: next, To: seed, AssetType: "eth", Asset: "ETH", Amount: "10"},
+	}}
+
+	result, err := New(repository).Trace(context.Background(), Query{Address: seed, Direction: "out", Depth: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Edges) != 2 || len(result.Nodes) != 2 {
+		t.Fatalf("result=%+v, want the cycle edge without another node", result)
+	}
+	if len(result.MoneyTransfers) != 2 || result.MoneyTransfers[1].StopReason != store.StopCycle {
+		t.Fatalf("money transfers=%+v, want explicit cycle stop evidence", result.MoneyTransfers)
 	}
 }
 
@@ -139,7 +210,7 @@ func TestMergeResultsKeepsTHORChainVaultIdentity(t *testing.T) {
 	}
 }
 
-func TestTraceRootIncludesOfficialEthereumTokensAndRejectsSymbolSpoof(t *testing.T) {
+func TestTraceRootIncludesERC20ByContractWithoutTrustingSymbol(t *testing.T) {
 	seed := "0x0000000000000000000000000000000000000001"
 	ethRecipient := "0x0000000000000000000000000000000000000002"
 	usdtRecipient := "0x0000000000000000000000000000000000000003"
@@ -156,20 +227,27 @@ func TestTraceRootIncludesOfficialEthereumTokensAndRejectsSymbolSpoof(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Edges) != 2 {
-		t.Fatalf("edges=%+v, want ETH and official USDT only", result.Edges)
+	if len(result.Edges) != 3 {
+		t.Fatalf("edges=%+v, want ETH and both ERC-20 contract assets", result.Edges)
 	}
 	var usdtEdge *Edge
+	var spoofEdge *Edge
 	for index := range result.Edges {
 		if result.Edges[index].Asset == ethereumUSDT {
 			usdtEdge = &result.Edges[index]
+		}
+		if result.Edges[index].Asset == "0x0000000000000000000000000000000000000099" {
+			spoofEdge = &result.Edges[index]
 		}
 	}
 	if usdtEdge == nil || usdtEdge.TotalAmount != "1000000000000" || usdtEdge.Symbol != "USDT" || usdtEdge.Decimals != 6 {
 		t.Fatalf("USDT edge=%+v", usdtEdge)
 	}
-	if len(r.calls) != 1 || r.calls[0].AssetMode != "all" {
-		t.Fatalf("root queries=%+v, want one concrete all-asset query", r.calls)
+	if spoofEdge == nil || spoofEdge.Asset == ethereumUSDT || spoofEdge.Symbol != "" {
+		t.Fatalf("spoof edge=%+v, symbol must not replace contract identity", spoofEdge)
+	}
+	if len(r.calls) < 1 || r.calls[0].AssetMode != "all" {
+		t.Fatalf("root queries=%+v, want the root to use one concrete all-asset query", r.calls)
 	}
 }
 
@@ -324,7 +402,7 @@ func TestTraceBatchesFrontierAndPrunesTerminal(t *testing.T) {
 func TestTraceRejectsInvalidAndUnsyncedQueries(t *testing.T) {
 	seed := "0x0000000000000000000000000000000000000001"
 	r := &fakeRepository{addresses: map[string]store.Address{seed: {SyncStatus: "discovered"}}}
-	if _, err := New(r).Trace(context.Background(), Query{Address: seed, Depth: 6}); err != ErrInvalidQuery {
+	if _, err := New(r).Trace(context.Background(), Query{Address: seed, Depth: -1}); err != ErrInvalidQuery {
 		t.Fatalf("err=%v", err)
 	}
 	if _, err := New(r).Trace(context.Background(), Query{Address: seed}); !errors.Is(err, ErrAddressNotSynced) {
@@ -511,12 +589,12 @@ func TestTraceStopsAtKnownBridgeWithoutCrossChainAnalysis(t *testing.T) {
 	}
 }
 
-func TestTraceRootExcludesTokenMint(t *testing.T) {
+func TestTraceRootShowsTokenMintAsZeroAddressTerminal(t *testing.T) {
 	seed := "0x0000000000000000000000000000000000000001"
 	zero := "0x0000000000000000000000000000000000000000"
 	r := &fakeRepository{addresses: map[string]store.Address{seed: completeAddress(0, 100)}, transfers: []store.Transfer{{Chain: "ethereum", TxHash: "0xmint", From: zero, To: seed, AssetType: "erc20", Asset: "0x0000000000000000000000000000000000000010", TokenValue: "1"}}, labels: map[string][]store.Label{}}
 	result, err := New(r).Trace(context.Background(), Query{Address: seed, Direction: "in", Depth: 2})
-	if err != nil || len(result.Edges) != 0 || len(result.Nodes) != 1 {
+	if err != nil || len(result.Edges) != 1 || len(result.Nodes) != 2 || !result.Nodes[1].Terminal || result.Nodes[1].Address != zero {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
@@ -591,7 +669,7 @@ func TestTraceUsesMonotonicBlockWindows(t *testing.T) {
 	}
 }
 
-func TestTraceBothExpandsSameAddressInBothDirections(t *testing.T) {
+func TestTraceBothStopsDirectionalBudgetsAtCycles(t *testing.T) {
 	seed := "0x0000000000000000000000000000000000000001"
 	shared := "0x0000000000000000000000000000000000000002"
 	parent := "0x0000000000000000000000000000000000000003"
@@ -610,12 +688,17 @@ func TestTraceBothExpandsSameAddressInBothDirections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	seen := map[string]bool{}
-	for _, node := range result.Nodes {
-		seen[node.Address] = true
+	if len(result.Nodes) != 2 {
+		t.Fatalf("nodes=%+v, unrelated parent and child must not consume exhausted cycle budgets", result.Nodes)
 	}
-	if !seen[parent] || !seen[child] {
-		t.Fatalf("both directional states were not expanded: %+v", result.Nodes)
+	cycleStops := 0
+	for _, transfer := range result.MoneyTransfers {
+		if transfer.StopReason == store.StopCycle {
+			cycleStops++
+		}
+	}
+	if cycleStops != 2 {
+		t.Fatalf("money transfers=%+v, want one cycle stop in each direction", result.MoneyTransfers)
 	}
 }
 
@@ -640,10 +723,10 @@ func TestTraceRootKeepsConcreteTransfers(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(result.Edges) != 2 || result.Edges[0].To != large || result.Edges[0].TotalAmount != "100000000000000000000" || result.Edges[1].To != small {
-		t.Fatalf("root edges=%+v, want concrete ETH transfers", result.Edges)
+		t.Fatalf("root edges=%+v, want every valid concrete transfer", result.Edges)
 	}
-	if len(r.calls) != 1 || r.calls[0].AssetMode != "all" {
-		t.Fatalf("root query=%+v, want one all-asset query", r.calls)
+	if len(r.calls) < 1 || r.calls[0].AssetMode != "all" {
+		t.Fatalf("root query=%+v, want the root to use one all-asset query", r.calls)
 	}
 }
 
@@ -816,7 +899,7 @@ func TestTraceContinuesThroughVerifiedTHORChainProtocolOutbound(t *testing.T) {
 	}
 }
 
-func TestTraceAnnotatesTHORChainRouterCallAtDepthBoundary(t *testing.T) {
+func TestTraceAutomaticallyFollowsTHORChainProtocolOutbound(t *testing.T) {
 	vault := "0x0000000000000000000000000000000000000001"
 	router := "0xd37bbe5744d730a1d98d8dc97c42f0ca46ad7146"
 	recipient := "0x0000000000000000000000000000000000000003"
@@ -837,8 +920,11 @@ func TestTraceAnnotatesTHORChainRouterCallAtDepthBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Edges) != 1 || result.Edges[0].Protocol != "thorchain" || result.Edges[0].ProtocolAction != "protocol_outbound" || result.Edges[0].ProtocolMemo != "OUT:ABC123" {
-		t.Fatalf("edge=%+v, want THORChain semantics before the router is expanded", result.Edges)
+	if len(result.Edges) != 2 || result.Edges[0].Protocol != "thorchain" || result.Edges[0].ProtocolAction != "protocol_outbound" || result.Edges[0].ProtocolMemo != "OUT:ABC123" {
+		t.Fatalf("edges=%+v, want annotated THORChain entry and protocol outbound", result.Edges)
+	}
+	if result.Edges[1].To != recipient || result.Edges[1].Kind != "thorchain_protocol_outbound" {
+		t.Fatalf("outbound=%+v, want final THORChain recipient", result.Edges[1])
 	}
 }
 

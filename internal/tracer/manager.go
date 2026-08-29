@@ -334,7 +334,7 @@ func (m *Manager) process(ctx context.Context, id primitive.ObjectID) {
 		job.Status = "partial"
 	}
 	job.Result = result
-	job.CurrentDepth = job.Depth
+	job.CurrentDepth = resultDepth(result.Nodes)
 	job.VisitedNodes = len(result.Nodes)
 	job.EdgeCount = len(result.Edges)
 	job.DataThroughBlock = result.DataThroughBlock
@@ -474,6 +474,16 @@ func extensionSyncBounds(anchors []extensionAnchor) (int64, int64) {
 		}
 	}
 	return start, end
+}
+
+func resultDepth(nodes []Node) int {
+	depth := 0
+	for _, node := range nodes {
+		if node.Depth > depth {
+			depth = node.Depth
+		}
+	}
+	return depth
 }
 
 func decodeResult(value any) (Result, error) {

@@ -73,3 +73,21 @@ export function collapseSyncJobsByAddress(jobs: SyncJob[]): SyncJob[] {
 
   return collapsed;
 }
+
+const terminalSyncStatuses = new Set([
+  "succeeded",
+  "partial",
+  "failed",
+  "stopped",
+]);
+
+export function syncJobIDsToRefresh(
+  ids: string[],
+  cached: Iterable<SyncJob>,
+): string[] {
+  const jobs = new Map(Array.from(cached, (job) => [job.jobId, job]));
+  return ids.filter((id) => {
+    const job = jobs.get(id);
+    return !job || !terminalSyncStatuses.has(job.status);
+  });
+}

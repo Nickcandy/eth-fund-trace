@@ -58,7 +58,7 @@ components:
         address: {type: string}
         depth: {type: integer}
         terminal: {type: boolean}
-        stopReason: {type: string, enum: [terminal, cross_chain_bridge, unsupported_contract, high_frequency, small_amount, ambiguous_conversion, missing_data, cycle]}
+        stopReason: {type: string, enum: [terminal, cross_chain_bridge, unsupported_contract, high_frequency, ambiguous_conversion, missing_data, cycle, no_matching_transfers, node_limit]}
         addressType: {type: string, enum: [unknown, eoa, contract]}
         protocol: {type: string}
         roles: {type: array, items: {type: string}}
@@ -182,7 +182,7 @@ paths:
         - {$ref: '#/components/parameters/Chain'}
         - {name: address, in: query, required: true, schema: {type: string}}
         - {name: direction, in: query, schema: {type: string, enum: [in, out, both]}}
-        - {name: depth, in: query, schema: {type: integer, minimum: 1}}
+        - {name: depth, in: query, deprecated: true, schema: {type: integer, minimum: 0}, description: Automatic terminal tracing; legacy positive values are accepted but normalized to 0.}
         - {name: asset, in: query, schema: {type: string}}
       responses: {'202': {description: Trace accepted, content: {application/json: {schema: {$ref: '#/components/schemas/AsyncJob'}}}}}
   /api/v1/trace-jobs/latest:

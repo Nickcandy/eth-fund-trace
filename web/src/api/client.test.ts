@@ -58,11 +58,11 @@ describe("API authentication", () => {
       chain: "ethereum",
       address: "0x0000000000000000000000000000000000000001",
       direction: "both",
-      depth: 3,
+      depth: 0,
       asset: "all",
     });
     expect(fetchMock.mock.calls[0][0]).toBe(
-      "/api/v1/trace-jobs/latest?chain=ethereum&address=0x0000000000000000000000000000000000000001&direction=both&depth=3&asset=all",
+      "/api/v1/trace-jobs/latest?chain=ethereum&address=0x0000000000000000000000000000000000000001&direction=both&depth=0&asset=all",
     );
   });
 
