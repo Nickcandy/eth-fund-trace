@@ -62,6 +62,7 @@ type Config struct {
 	QueueSize            int
 	MaxRecordsPerAction  int64
 	StartBlocks          map[string]int64
+	EndBlocks            map[string]int64
 	Clock                func() time.Time
 	AfterAddressSynced   func(context.Context, string, string) error
 	OnTransfersPersisted func(context.Context, string, []store.Transfer)
@@ -111,6 +112,9 @@ func (m *Manager) Enqueue(ctx context.Context, request Request) (store.SyncJob, 
 	request.Chain = chain.Name
 	if request.StartBlock == 0 {
 		request.StartBlock = m.config.StartBlocks[request.Chain]
+	}
+	if request.EndBlock == 0 {
+		request.EndBlock = m.config.EndBlocks[request.Chain]
 	}
 	normalizedAddress, err := ethaddr.Normalize(request.Address)
 	request.Address = normalizedAddress
@@ -362,8 +366,13 @@ func (m *Manager) syncAddress(ctx context.Context, source Source, chainID int64,
 	internalCached := hasCommonCoverage && coverageContains(haveInternalFrom, haveInternalTo, request.StartBlock, coveredThrough)
 	tokenCached := hasCommonCoverage && coverageContains(haveTokenFrom, haveTokenTo, request.StartBlock, coveredThrough)
 	fullCache := address.SyncStatus == "synced" && normalCached && internalCached && tokenCached
+	fixedSnapshotCache := request.EndBlock > 0 && address.SyncStatus == "synced" &&
+		coverageContains(haveNormalFrom, haveNormalTo, request.StartBlock, request.EndBlock) &&
+		coverageContains(haveInternalFrom, haveInternalTo, request.StartBlock, request.EndBlock) &&
+		coverageContains(haveTokenFrom, haveTokenTo, request.StartBlock, request.EndBlock)
 	partialCache := address.SyncStatus == "partial" && m.config.MaxRecordsPerAction > 0 && address.SyncMaxRecordsPerAction == m.config.MaxRecordsPerAction
-	if !m.config.DisableCache && exists && (fullCache || partialCache) && now.Sub(address.LastSyncedAt) < m.config.CacheTTL {
+	freshCache := (fullCache || partialCache) && now.Sub(address.LastSyncedAt) < m.config.CacheTTL
+	if !m.config.DisableCache && exists && (fixedSnapshotCache || freshCache) {
 		if fullCache && m.config.AfterAddressSynced != nil {
 			if err := m.config.AfterAddressSynced(ctx, request.Chain, request.Address); err != nil {
 				return addressResult{}, err

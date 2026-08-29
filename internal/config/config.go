@@ -31,6 +31,7 @@ type Config struct {
 	SyncMaxRecordsPerAction     int64
 	TraceExistingDataOnly       bool
 	EthereumSyncStartBlock      int64
+	EthereumSyncEndBlock        int64
 	EthereumRPCURL              string
 }
 
@@ -61,6 +62,7 @@ func Load() Config {
 		SyncMaxRecordsPerAction:     nonNegativeInt64Value("SYNC_MAX_RECORDS_PER_ACTION", 50_000),
 		TraceExistingDataOnly:       boolValue("TRACE_EXISTING_DATA_ONLY", false),
 		EthereumSyncStartBlock:      int64Value("ETHEREUM_SYNC_START_BLOCK", 21525891),
+		EthereumSyncEndBlock:        nonNegativeInt64Value("ETHEREUM_SYNC_END_BLOCK", 0),
 		EthereumRPCURL:              os.Getenv("ETHEREUM_RPC_URL"),
 	}
 }

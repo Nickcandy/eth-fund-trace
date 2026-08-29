@@ -41,7 +41,7 @@ func TestSyncHandlerAcceptsJob(t *testing.T) {
 	manager := &stubSyncManager{job: store.SyncJob{ID: id, Status: "queued", CreatedAt: time.Now()}}
 	handler := NewSyncHandler(manager)
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/sync", strings.NewReader(`{"address":"0x0000000000000000000000000000000000000001"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sync", strings.NewReader(`{"address":"0x0000000000000000000000000000000000000001","startBlock":21525891,"endBlock":25860787}`))
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	res := httptest.NewRecorder()
 	ctx := e.NewContext(req, res)
@@ -49,7 +49,7 @@ func TestSyncHandlerAcceptsJob(t *testing.T) {
 	if err := handler.Enqueue(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if res.Code != http.StatusAccepted || manager.request.Chain != "ethereum" || manager.request.NeighborLimit != 10 || !strings.Contains(res.Body.String(), id.Hex()) {
+	if res.Code != http.StatusAccepted || manager.request.Chain != "ethereum" || manager.request.StartBlock != 21525891 || manager.request.EndBlock != 25860787 || manager.request.NeighborLimit != 10 || !strings.Contains(res.Body.String(), id.Hex()) {
 		t.Fatalf("status=%d request=%+v body=%s", res.Code, manager.request, res.Body.String())
 	}
 }

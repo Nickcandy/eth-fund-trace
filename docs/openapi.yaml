@@ -128,6 +128,19 @@ paths:
   /api/v1/sync:
     post:
       summary: Queue an Ethereum address history sync
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [address]
+              properties:
+                chain: {type: string, enum: [ethereum], default: ethereum}
+                address: {type: string}
+                startBlock: {type: integer, default: 21525891}
+                endBlock: {type: integer, default: 25860787, description: Fixed production snapshot cutoff.}
+                neighborLimit: {type: integer, minimum: 0, maximum: 10}
       responses: {'202': {description: Sync accepted, content: {application/json: {schema: {$ref: '#/components/schemas/AsyncJob'}}}}}
   /api/v1/sync-jobs/latest:
     get:

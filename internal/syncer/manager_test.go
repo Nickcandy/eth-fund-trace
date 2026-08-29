@@ -473,6 +473,42 @@ func TestManagerSyncsSeedAndReusesFreshCache(t *testing.T) {
 	}
 }
 
+func TestManagerReusesCompleteFixedSnapshotAfterCacheTTL(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	source := &fakeSource{latest: 100}
+	repository := newMemoryRepository()
+	manager := New(source, repository, Config{
+		CacheTTL: time.Minute, Confirmations: 12, QueueSize: 10, Clock: func() time.Time { return now },
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = manager.Run(ctx) }()
+
+	request := Request{Chain: "ethereum", Address: "0x0000000000000000000000000000000000000001", StartBlock: 1, EndBlock: 80}
+	first, err := manager.Enqueue(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first = waitForJob(t, manager, first.ID.Hex())
+	if first.Status != "succeeded" || first.SafeHead != 88 || first.Fetched != 3 {
+		t.Fatalf("unexpected first job: %+v", first)
+	}
+
+	now = now.Add(24 * time.Hour)
+	source.latest = 200
+	second, err := manager.Enqueue(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second = waitForJob(t, manager, second.ID.Hex())
+	if second.Status != "succeeded" || second.CachedAddresses != 1 {
+		t.Fatalf("fixed snapshot was not reused: %+v", second)
+	}
+	if source.latestCalls != 1 || source.actionCalls != 3 {
+		t.Fatalf("latest calls = %d, action calls = %d, want 1 and 3", source.latestCalls, source.actionCalls)
+	}
+}
+
 func TestManagerSyncsSeedWithoutCache(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	source := &fakeSource{latest: 100}
@@ -603,6 +639,23 @@ func TestManagerUsesChainDefaultStartBlock(t *testing.T) {
 		if job.StartBlock != test.want {
 			t.Fatalf("chain %s start block = %d, want %d", test.chain, job.StartBlock, test.want)
 		}
+	}
+}
+
+func TestManagerUsesChainDefaultEndBlock(t *testing.T) {
+	repository := newMemoryRepository()
+	manager := NewMulti(map[string]Source{
+		"ethereum": &fakeSource{},
+	}, repository, Config{EndBlocks: map[string]int64{"ethereum": 25_860_787}})
+
+	job, err := manager.Enqueue(context.Background(), Request{
+		Chain: "ethereum", Address: "0x0000000000000000000000000000000000000001", StartBlock: 22_610_901,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.EndBlock != 25_860_787 {
+		t.Fatalf("end block = %d, want 25860787", job.EndBlock)
 	}
 }
 

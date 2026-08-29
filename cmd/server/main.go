@@ -74,6 +74,7 @@ func run(parent context.Context) error {
 		CacheTTL: time.Duration(cfg.SyncCacheTTLMinutes) * time.Minute, DisableCache: cfg.SyncCacheTTLMinutes == 0, Confirmations: int64(cfg.SyncConfirmations), QueueSize: cfg.SyncQueueSize,
 		MaxRecordsPerAction: cfg.SyncMaxRecordsPerAction,
 		StartBlocks:         map[string]int64{"ethereum": cfg.EthereumSyncStartBlock},
+		EndBlocks:           map[string]int64{"ethereum": cfg.EthereumSyncEndBlock},
 		AfterAddressSynced: func(ctx context.Context, chain, address string) error {
 			_, err := addressProfiler.Get(ctx, chain, address)
 			return err

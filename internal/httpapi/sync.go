@@ -29,6 +29,7 @@ type syncRequest struct {
 	Chain         string `json:"chain"`
 	Address       string `json:"address"`
 	StartBlock    int64  `json:"startBlock"`
+	EndBlock      int64  `json:"endBlock"`
 	NeighborLimit *int   `json:"neighborLimit"`
 }
 
@@ -44,7 +45,7 @@ func (h *SyncHandler) Enqueue(c echo.Context) error {
 	if body.Chain == "" {
 		body.Chain = "ethereum"
 	}
-	job, err := h.manager.Enqueue(c.Request().Context(), syncer.Request{Chain: body.Chain, Address: body.Address, StartBlock: body.StartBlock, NeighborLimit: limit})
+	job, err := h.manager.Enqueue(c.Request().Context(), syncer.Request{Chain: body.Chain, Address: body.Address, StartBlock: body.StartBlock, EndBlock: body.EndBlock, NeighborLimit: limit})
 	if err != nil {
 		return h.writeManagerError(c, err)
 	}

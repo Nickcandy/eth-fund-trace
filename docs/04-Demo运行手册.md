@@ -10,6 +10,8 @@ docker compose --profile app up -d --build
 
 服务默认监听 `http://localhost:8080`，健康检查为 `GET /healthz`。
 
+生产配置使用 `ETHEREUM_SYNC_START_BLOCK=21525891` 和 `ETHEREUM_SYNC_END_BLOCK=25860787`，对应北京时间 2025-01-01 至 2026-08-29。修改截止日期时应先把日期换算为 Ethereum 区块并更新 `ETHEREUM_SYNC_END_BLOCK`；已同步地址只补新增加的区间。
+
 ## 演示流程
 
 1. 输入 Ethereum 地址并选择方向、资产和初始深度。
