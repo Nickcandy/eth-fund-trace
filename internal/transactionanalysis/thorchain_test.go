@@ -103,6 +103,20 @@ func TestAnalyzeDecodesTHORChainInboundMemoIntent(t *testing.T) {
 	}
 }
 
+func TestParseTHORChainDepositWithExpiry(t *testing.T) {
+	destination := "bc1q2yjae3xdnlwwk6hxf7jxjdt0waupl8qglv3qs7"
+	memo := "=:b:" + destination + ":130523381/3/0:ns:5"
+	amount, _ := new(big.Int).SetString("37560000000000000000", 10)
+	input := thorchainDepositInput("0xf15782ac05733fe648e5a8c052b295c05ec4a961", amount, memo)
+	analysis := store.TransactionAnalysis{To: THORChainRouter, Input: input, Value: "37560000000000000000", Succeeded: true}
+	if !parseTHORChainDeposit(&analysis) {
+		t.Fatal("depositWithExpiry should be decoded")
+	}
+	if analysis.ProtocolAction != "router_inbound" || analysis.ProtocolMemo != memo || analysis.ProtocolDestination != destination || analysis.ProtocolVault != "0xf15782ac05733fe648e5a8c052b295c05ec4a961" || analysis.ProtocolAsset != "BTC.BTC" || analysis.ProtocolAmount != "37560000000000000000" {
+		t.Fatalf("analysis=%+v", analysis)
+	}
+}
+
 func TestParseTHORChainCallRejectsOversizedMemoWithoutPanic(t *testing.T) {
 	input := "0x574da717" +
 		"00000000000000000000000052425d6e839582BDDa85D4bcA83D347504de3ACd" +
@@ -137,4 +151,13 @@ func thorchainTransferOutInput(destination, asset string, amount *big.Int, memo 
 	memoHex := fmt.Sprintf("%x", []byte(memo))
 	memoHex += strings.Repeat("0", (64-len(memoHex)%64)%64)
 	return "0x574da717" + addressWord(destination) + addressWord(asset) + fmt.Sprintf("%064x", amount) + fmt.Sprintf("%064x", 128) + fmt.Sprintf("%064x", len(memo)) + memoHex
+}
+
+func thorchainDepositInput(vault string, amount *big.Int, memo string) string {
+	addressWord := func(value string) string {
+		return fmt.Sprintf("%064s", strings.TrimPrefix(strings.ToLower(value), "0x"))
+	}
+	memoHex := fmt.Sprintf("%x", []byte(memo))
+	memoHex += strings.Repeat("0", (64-len(memoHex)%64)%64)
+	return "0x44bc937b" + addressWord(vault) + strings.Repeat("0", 64) + fmt.Sprintf("%064x", amount) + fmt.Sprintf("%064x", 160) + strings.Repeat("0", 64) + fmt.Sprintf("%064x", len(memo)) + memoHex
 }

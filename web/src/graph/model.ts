@@ -43,6 +43,7 @@ export interface GraphEdgeModel {
   totalAmount: string;
   decimals?: number;
   txHash?: string;
+  txHashes?: string[];
   sourceTxHash?: string;
   sourceAmount?: string;
   sourceAsset?: string;
@@ -185,20 +186,31 @@ export function buildGraphModel(
     const key = [
       edge.sourceChain ?? edge.chain,
       edge.targetChain ?? edge.chain,
-      edge.txHash ?? "",
       edge.from.toLowerCase(),
       edge.to.toLowerCase(),
       edge.asset.toLowerCase(),
       edge.kind,
-      edge.totalAmount,
-      edge.firstBlock ?? 0,
-      edge.latestBlock ?? 0,
+      edge.protocol ?? "",
+      edge.protocolAction ?? "",
+      protocolRouteKey(edge.protocolMemo),
       edge.path.join(">"),
     ].join("|");
     const sourceChain = edge.sourceChain ?? edge.chain;
     const targetChain = edge.targetChain ?? edge.chain;
     const source = nodeID(sourceChain, edge.from);
     const target = nodeID(targetChain, edge.to);
+    const existing = grouped.get(key);
+    if (existing) {
+      const left = BigInt(existing.totalAmount || "0");
+      const right = BigInt(edge.totalAmount || "0");
+      existing.totalAmount = (left + right).toString();
+      existing.count += edge.transferCount;
+      existing.txHashes = [...(existing.txHashes ?? []), ...(edge.txHash ? [edge.txHash] : [])];
+      existing.firstBlock = Math.min(existing.firstBlock ?? edge.firstBlock ?? 0, edge.firstBlock ?? existing.firstBlock ?? 0);
+      existing.latestBlock = Math.max(existing.latestBlock ?? edge.latestBlock ?? 0, edge.latestBlock ?? existing.latestBlock ?? 0);
+      existing.latestTime = edge.latestTime ?? existing.latestTime;
+      return;
+    }
     grouped.set(key, {
       id: key,
       source,
@@ -214,6 +226,7 @@ export function buildGraphModel(
       count: edge.transferCount,
       totalAmount: edge.totalAmount,
       txHash: edge.txHash,
+      txHashes: edge.txHash ? [edge.txHash] : [],
       sourceTxHash: edge.sourceTxHash,
       sourceAmount: edge.sourceAmount,
       sourceAsset: edge.sourceAsset,
@@ -240,6 +253,14 @@ export function buildGraphModel(
     nodes: applyTHORChainVaultRoles(nodes, [...grouped.values()]),
     edges: combineSwapEdges([...grouped.values()]),
   };
+}
+
+function protocolRouteKey(memo?: string): string {
+  if (!memo) return "";
+  const parts = memo.split(":");
+  return parts.length >= 3
+    ? parts.slice(0, 3).map((part) => part.toLowerCase()).join(":")
+    : memo.toLowerCase();
 }
 
 function combineSwapEdges(edges: GraphEdgeModel[]): GraphEdgeModel[] {

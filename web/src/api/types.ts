@@ -425,6 +425,7 @@ export interface TransactionAnalysis {
     | "vault_migration"
     | "protocol_outbound"
     | "cross_chain_swap"
+    | "bittorrent_bridge_inbound"
     | "refund"
     | "protocol_internal";
   protocolMemo?: string;

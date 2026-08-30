@@ -131,7 +131,11 @@ func (v *Verifier) Verify(ctx context.Context, analysis store.TransactionAnalysi
 }
 
 func (v *Verifier) matchesInbound(analysis store.TransactionAnalysis, hash string, status transactionStatus) bool {
-	if !strings.EqualFold(status.Tx.ID, hash) || status.Tx.Chain != "ETH" || !strings.EqualFold(status.Tx.FromAddress, analysis.From) || !strings.EqualFold(status.Tx.ToAddress, analysis.To) || status.Tx.Memo != analysis.ProtocolMemo {
+	expectedTo := analysis.To
+	if analysis.ProtocolVault != "" {
+		expectedTo = analysis.ProtocolVault
+	}
+	if !strings.EqualFold(status.Tx.ID, hash) || status.Tx.Chain != "ETH" || !strings.EqualFold(status.Tx.FromAddress, analysis.From) || !strings.EqualFold(status.Tx.ToAddress, expectedTo) || status.Tx.Memo != analysis.ProtocolMemo {
 		return false
 	}
 	if !status.Stages.InboundObserved.Completed || !status.Stages.InboundFinalised.Completed || status.Stages.SwapStatus.Pending || !status.Stages.SwapFinalised.Completed || !status.Stages.OutboundSigned.Completed {

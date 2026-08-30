@@ -7,6 +7,23 @@ import { DetailsPanel } from "./DetailsPanel";
 afterEach(cleanup);
 
 describe("DetailsPanel labels", () => {
+	 it("shows contract identity for contract nodes", () => {
+		const node: GraphNodeModel = {
+			id: "ethereum:0x1",
+			chain: "ethereum",
+			address: "0x0000000000000000000000000000000000000001",
+			hop: 1,
+			terminal: true,
+			seed: false,
+			risk: "normal",
+			hotWallet: false,
+			labelTypes: [],
+			addressType: "contract",
+		};
+		render(<DetailsPanel node={node} labels={[]} onLabel={vi.fn()} onClose={() => undefined} onFocus={() => undefined} />);
+		expect(screen.getByText("合约")).toBeVisible();
+	});
+
   it("shows the selected address native balance at an explicit block", () => {
     const node: GraphNodeModel = {
       id: "ethereum:0x1",

@@ -58,8 +58,10 @@ export function TransactionView({ analysis, onTrace }: Props) {
                 ? "THORChain Vault 迁移"
                 : analysis.protocolAction === "protocol_outbound"
                   ? "THORChain 协议出站"
-                  : analysis.protocolAction === "cross_chain_swap"
-                    ? "THORChain 跨链兑换"
+                : analysis.protocolAction === "cross_chain_swap"
+                  ? "THORChain 跨链兑换"
+                  : analysis.protocolAction === "bittorrent_bridge_inbound"
+                    ? "BitTorrent Bridge 入桥"
                     : analysis.protocolAction
             }
             detail={analysis.protocolMemo}
@@ -153,7 +155,11 @@ export function TransactionView({ analysis, onTrace }: Props) {
           </h3>
           {analysis.protocolDestination && (
             <div className="wrap-row">
-              <strong>THORChain 目标地址</strong>
+              <strong>
+                {analysis.protocolAction === "bittorrent_bridge_inbound"
+                  ? "BitTorrent Chain 目标地址"
+                  : "THORChain 目标地址"}
+              </strong>
               <a
                 href={explorer("address", analysis.protocolDestination)}
                 target="_blank"

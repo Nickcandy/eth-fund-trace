@@ -19,7 +19,7 @@ var ErrInvalidQuery = errors.New("invalid trace query")
 var ErrAddressNotSynced = errors.New("address is not synced")
 
 const (
-	traceRuleVersion       = "trace-v2"
+	traceRuleVersion       = "trace-v6"
 	traceTransferRecordCap = 50_000
 )
 
@@ -334,6 +334,9 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 					continue
 				}
 				canonicalizeSummaryAsset(q.Chain, &summary)
+				if !aboveTraceThreshold(summary) {
+					continue
+				}
 				other := strings.ToLower(summary.To)
 				if state.Direction == "in" {
 					other = strings.ToLower(summary.From)
@@ -457,7 +460,7 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 					return labelsErr
 				}
 				result.Labels = appendLabels(result.Labels, otherLabels)
-				terminal := otherMetadata.IsTerminal || otherHighFrequency && !contract || dependencyStopReason != "" || hasTerminalLabel(otherLabels) || isCrossChainBridge(identity)
+				terminal := crossChainResolved || otherMetadata.IsTerminal || otherHighFrequency && !contract || dependencyStopReason != "" || hasTerminalLabel(otherLabels) || isCrossChainBridge(identity)
 				if dependencyStopReason != "" {
 					result.DataStatus = "partial"
 				}
@@ -470,7 +473,9 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 				}
 				if isNewNode {
 					node := Node{Chain: q.Chain, Address: other, Depth: depth + 1, Terminal: terminal, AddressType: identity.AddressType, Protocol: identity.Protocol, Roles: identity.Roles}
-					if otherHighFrequency && !contract {
+					if crossChainResolved {
+						node.StopReason = "cross_chain_bridge"
+					} else if otherHighFrequency && !contract {
 						node.StopReason = "high_frequency"
 					} else if dependencyStopReason != "" {
 						node.StopReason = dependencyStopReason
@@ -756,6 +761,11 @@ func aggregateConversions(conversions []analyzedConversion) map[string][]convers
 	byAsset := make(map[string]map[string]*conversionAggregate)
 	for _, conversion := range conversions {
 		transfer := conversion.Transfer
+		summary := transferSummary(transfer)
+		canonicalizeSummaryAsset(transfer.Chain, &summary)
+		if !aboveTraceThreshold(summary) {
+			continue
+		}
 		assetKey := strings.ToLower(transfer.Asset)
 		if byAsset[assetKey] == nil {
 			byAsset[assetKey] = make(map[string]*conversionAggregate)
@@ -966,6 +976,7 @@ func (g *Graph) appendVerifiedCrossChainEndpoint(ctx context.Context, chain stri
 		inbound.ConversionScanned = 1
 	}
 	target := strings.ToLower(outbound.To)
+	setVerifiedCrossChainSource(result.Nodes, analysis.To)
 	crossChainPath := append(append([]string(nil), path...), target)
 	result.Edges = append(result.Edges, Edge{
 		Chain: "bitcoin", SourceChain: "ethereum", TargetChain: "bitcoin", From: strings.ToLower(outbound.From), To: target,
@@ -982,6 +993,15 @@ func (g *Graph) appendVerifiedCrossChainEndpoint(ctx context.Context, chain stri
 	result.Nodes = append(result.Nodes, Node{Chain: "bitcoin", Address: target, Depth: depth + 1, Terminal: true, AddressType: "unknown", Protocol: "thorchain", Roles: []string{"cross_chain_recipient"}, StopReason: "verified_cross_chain_endpoint"})
 	result.Paths = append(result.Paths, crossChainPath)
 	return true, nil
+}
+
+func setVerifiedCrossChainSource(nodes []Node, address string) {
+	for index := range nodes {
+		if strings.EqualFold(nodes[index].Chain, "ethereum") && strings.EqualFold(nodes[index].Address, address) {
+			nodes[index].Terminal = true
+			nodes[index].StopReason = "cross_chain_bridge"
+		}
+	}
 }
 
 func (g *Graph) markTHORChainVault(ctx context.Context, chain, address string, nodes []Node, states []branchState) (store.AddressIdentity, error) {
@@ -1041,7 +1061,18 @@ func (g *Graph) annotateTHORChainRouterCall(ctx context.Context, chain string, i
 	if err != nil {
 		return fmt.Errorf("analyze THORChain router call: %w", err)
 	}
-	if !strings.EqualFold(analysis.To, edge.To) || !verifiedTHORChainTransferOutAnalysis(analysis) {
+	if !strings.EqualFold(analysis.To, edge.To) || !analysis.Succeeded || analysis.Quality.Status != "complete" || analysis.ProtocolMemo == "" {
+		return nil
+	}
+	if analysis.ProtocolAction == "router_inbound" {
+		if !strings.EqualFold(analysis.From, transfer.From) || analysis.Value != transfer.Amount {
+			return nil
+		}
+		edge.ProtocolAction = analysis.ProtocolAction
+		edge.ProtocolMemo = analysis.ProtocolMemo
+		return nil
+	}
+	if !verifiedTHORChainTransferOutAnalysis(analysis) {
 		return nil
 	}
 	edge.ProtocolAction = analysis.ProtocolAction

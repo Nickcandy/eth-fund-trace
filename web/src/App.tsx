@@ -39,6 +39,15 @@ import { QueryBar } from "./components/QueryBar";
 import { TransactionView } from "./components/TransactionView";
 import type { LabelInput, TraceQuery } from "./api/types";
 
+const supportedTraceRuleVersions = [
+  "trace-v1",
+  "trace-v2",
+  "trace-v3",
+  "trace-v4",
+  "trace-v5",
+  "trace-v6",
+];
+
 const client = new QueryClient({
   defaultOptions: {
     queries: {
@@ -178,7 +187,7 @@ function Console() {
   }, [latestTrace.data, jobID, draft]);
   const result =
     job.data?.result &&
-    ["trace-v1", "trace-v2"].includes(job.data.result.ruleVersion)
+    supportedTraceRuleVersions.includes(job.data.result.ruleVersion)
       ? job.data.result
       : undefined;
   const model = useMemo(
@@ -523,7 +532,9 @@ function Console() {
                   status={status?.label}
                   error={
                     job.data?.result &&
-                    job.data.result.ruleVersion !== "trace-v1"
+                    !supportedTraceRuleVersions.includes(
+                      job.data.result.ruleVersion,
+                    )
                       ? "旧版追踪结果，请重新运行"
                       : job.data?.error
                   }

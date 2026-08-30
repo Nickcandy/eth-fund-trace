@@ -92,6 +92,9 @@ func (g *Graph) ExtendBranch(ctx context.Context, root Result, request Extension
 				continue
 			}
 			canonicalizeSummaryAsset(request.Chain, &summary)
+			if !aboveTraceThreshold(summary) {
+				continue
+			}
 			other := strings.ToLower(summary.To)
 			if request.Direction == "in" {
 				other = strings.ToLower(summary.From)

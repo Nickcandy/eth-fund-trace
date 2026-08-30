@@ -82,6 +82,11 @@ export function DetailsPanel({
             ) : (
               <code>{node.address}</code>
             )}
+            {node.addressType && node.addressType !== "unknown" && (
+              <small>
+                {node.addressType === "contract" ? "合约" : "普通地址"}
+              </small>
+            )}
             {node.roles?.map((role) => (
               <strong key={role}>{roleName(role)}</strong>
             ))}
@@ -297,6 +302,12 @@ export function DetailsPanel({
                 {edgeEndpoint(edge.target)}
               </code>
             </div>
+            {edge.txHashes && edge.txHashes.length > 1 && (
+              <div className="edge-meta">
+                <span>包含交易</span>
+                {edge.txHashes.map((hash) => <code key={hash}>{hash}</code>)}
+              </div>
+            )}
             {(edge.firstBlock ||
               edge.latestBlock ||
               edge.firstTime ||

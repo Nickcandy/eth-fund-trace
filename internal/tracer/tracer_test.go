@@ -211,7 +211,7 @@ func TestMergeResultsKeepsTHORChainVaultIdentity(t *testing.T) {
 	}
 }
 
-func TestTraceRootIncludesERC20ByContractWithoutTrustingSymbol(t *testing.T) {
+func TestTraceRootIncludesOnlyWhitelistedERC20ByContract(t *testing.T) {
 	seed := "0x0000000000000000000000000000000000000001"
 	ethRecipient := "0x0000000000000000000000000000000000000002"
 	usdtRecipient := "0x0000000000000000000000000000000000000003"
@@ -228,24 +228,20 @@ func TestTraceRootIncludesERC20ByContractWithoutTrustingSymbol(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Edges) != 3 {
-		t.Fatalf("edges=%+v, want ETH and both ERC-20 contract assets", result.Edges)
+	if len(result.Edges) != 2 {
+		t.Fatalf("edges=%+v, want ETH and whitelisted USDT only", result.Edges)
 	}
 	var usdtEdge *Edge
-	var spoofEdge *Edge
 	for index := range result.Edges {
 		if result.Edges[index].Asset == ethereumUSDT {
 			usdtEdge = &result.Edges[index]
-		}
-		if result.Edges[index].Asset == "0x0000000000000000000000000000000000000099" {
-			spoofEdge = &result.Edges[index]
 		}
 	}
 	if usdtEdge == nil || usdtEdge.TotalAmount != "1000000000000" || usdtEdge.Symbol != "USDT" || usdtEdge.Decimals != 6 {
 		t.Fatalf("USDT edge=%+v", usdtEdge)
 	}
-	if spoofEdge == nil || spoofEdge.Asset == ethereumUSDT || spoofEdge.Symbol != "" {
-		t.Fatalf("spoof edge=%+v, symbol must not replace contract identity", spoofEdge)
+	if slices.ContainsFunc(result.Edges, func(edge Edge) bool { return edge.To == spoofRecipient }) {
+		t.Fatalf("unknown ERC-20 edge=%+v, want it excluded", result.Edges)
 	}
 	if len(r.calls) < 1 || r.calls[0].AssetMode != "all" {
 		t.Fatalf("root queries=%+v, want the root to use one concrete all-asset query", r.calls)
@@ -593,7 +589,7 @@ func TestTraceStopsAtKnownBridgeWithoutCrossChainAnalysis(t *testing.T) {
 func TestTraceRootShowsTokenMintAsZeroAddressTerminal(t *testing.T) {
 	seed := "0x0000000000000000000000000000000000000001"
 	zero := "0x0000000000000000000000000000000000000000"
-	r := &fakeRepository{addresses: map[string]store.Address{seed: completeAddress(0, 100)}, transfers: []store.Transfer{{Chain: "ethereum", TxHash: "0xmint", From: zero, To: seed, AssetType: "erc20", Asset: "0x0000000000000000000000000000000000000010", TokenValue: "1"}}, labels: map[string][]store.Label{}}
+	r := &fakeRepository{addresses: map[string]store.Address{seed: completeAddress(0, 100)}, transfers: []store.Transfer{{Chain: "ethereum", TxHash: "0xmint", From: zero, To: seed, AssetType: "erc20", Asset: ethereumUSDT, TokenValue: "50000000"}}, labels: map[string][]store.Label{}}
 	result, err := New(r).Trace(context.Background(), Query{Address: seed, Direction: "in", Depth: 2})
 	if err != nil || len(result.Edges) != 1 || len(result.Nodes) != 2 || !result.Nodes[1].Terminal || result.Nodes[1].Address != zero {
 		t.Fatalf("result=%+v err=%v", result, err)
@@ -1024,7 +1020,7 @@ func TestTraceAddsConfirmedTHORChainBitcoinEndpoint(t *testing.T) {
 	if identity := repository.identities[vault]; identity.Protocol != "thorchain" || !containsRole(identity.Roles, "thorchain_vault") {
 		t.Fatalf("vault identity=%+v", identity)
 	}
-	if vaultNode == nil || vaultNode.Protocol != "thorchain" || !containsRole(vaultNode.Roles, "thorchain_vault") {
+	if vaultNode == nil || !vaultNode.Terminal || vaultNode.StopReason != "cross_chain_bridge" || vaultNode.Protocol != "thorchain" || !containsRole(vaultNode.Roles, "thorchain_vault") {
 		t.Fatalf("vault node=%+v", vaultNode)
 	}
 }
@@ -1134,7 +1130,7 @@ func TestTraceAnalyzesEachAnchoredContractTransaction(t *testing.T) {
 		hash := fmt.Sprintf("0x%02d", i)
 		amount := fmt.Sprintf("%d000000000000000000", i)
 		r.transfers = append(r.transfers, store.Transfer{Chain: "ethereum", TxHash: hash, From: seed, To: router, AssetType: "eth", Asset: "ETH", Amount: amount})
-		analyzer.analyses[hash] = store.TransactionAnalysis{Chain: "ethereum", TxHash: hash, From: seed, To: router, Succeeded: true, FinalOutputAddress: recipient, Swaps: []store.SwapEvent{{Verified: true, TokenIn: ethereumWETH, TokenOut: token, AmountIn: amount, AmountOut: "10000000"}}, Wraps: []store.WrapEvent{{Type: "deposit", Account: seed, Amount: amount}}, Quality: store.AnalysisQuality{Status: "complete"}}
+		analyzer.analyses[hash] = store.TransactionAnalysis{Chain: "ethereum", TxHash: hash, From: seed, To: router, Succeeded: true, FinalOutputAddress: recipient, Swaps: []store.SwapEvent{{Verified: true, TokenIn: ethereumWETH, TokenOut: token, AmountIn: amount, AmountOut: "100000000"}}, Wraps: []store.WrapEvent{{Type: "deposit", Account: seed, Amount: amount}}, Quality: store.AnalysisQuality{Status: "complete"}}
 	}
 
 	result, err := New(r).WithTransactionAnalyzer(analyzer).Trace(context.Background(), Query{Address: seed, Direction: "out", Depth: 2})

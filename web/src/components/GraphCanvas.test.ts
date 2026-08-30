@@ -4,7 +4,6 @@ import {
   edgeLabelVisible,
   expansionMode,
   expansionPathKeys,
-  labelsVisibleByDefault,
   matchesAssetFilter,
   revealedNodeIDs,
   thorchainEdgeLabel,
@@ -12,11 +11,6 @@ import {
 import type { GraphEdgeModel, GraphNodeModel } from "../graph/model";
 
 describe("GraphCanvas density defaults", () => {
-  it("shows labels for small graphs and hides them for dense graphs", () => {
-    expect(labelsVisibleByDefault(8)).toBe(true);
-    expect(labelsVisibleByDefault(74)).toBe(false);
-  });
-
   it("keeps direct seed edges labeled in dense graphs", () => {
     expect(edgeLabelVisible(false, false, true)).toBe(true);
     expect(edgeLabelVisible(false, false, false)).toBe(false);

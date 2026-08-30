@@ -360,6 +360,25 @@ func TestAnalyzeValidatesInput(t *testing.T) {
 	}
 }
 
+func TestAnalyzeBitTorrentBridgeETHDeposit(t *testing.T) {
+	user := "0xd2811518b89f30400c4633747189ba1216f539f7"
+	amount := "101296840289918400000"
+	source := &sourceStub{
+		tx: etherscan.RPCTransaction{From: user, To: BitTorrentRootChainManager, Value: "0x57dc6ab8cce103600", Input: "0x4faa8a26000000000000000000000000d2811518b89f30400c4633747189ba1216f539f7"},
+		receipt: etherscan.RPCReceipt{Status: "0x1", BlockNumber: "0x1", Logs: []etherscan.RPCLog{
+			{Address: BitTorrentEtherPredicate, Topics: []string{lockedEtherTopic, "0x000000000000000000000000" + user[2:], "0x000000000000000000000000" + user[2:]}, Data: "0x0000000000000000000000000000000000000000000000057dc6ab8cce103600", LogIndex: "0x1"},
+			{Address: "0xedf53026aea60f8f75fca25f8830b7e2d6200662", Topics: []string{stateSyncedTopic, "0x0000000000000000000000000000000000000000000000000000000000001732"}, LogIndex: "0x2"},
+		}},
+	}
+	analysis, err := New(source, newRepoStub(), time.Now).Analyze(context.Background(), "ethereum", testHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if analysis.ProtocolAction != "bittorrent_bridge_inbound" || analysis.ProtocolDestination != user || analysis.ProtocolAsset != "ETH" || analysis.ProtocolAmount != amount || analysis.ProtocolMemo != "StateSynced #5938" {
+		t.Fatalf("analysis=%+v", analysis)
+	}
+}
+
 func fixtureSource() *sourceStub {
 	return &sourceStub{
 		tx:      etherscan.RPCTransaction{Hash: testHash, From: testUser, To: testPool, Value: "0x0", BlockNumber: "0x10"},

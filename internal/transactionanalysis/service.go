@@ -18,19 +18,23 @@ import (
 
 const (
 	// AnalysisVersion invalidates cached analyses when semantic rules change.
-	AnalysisVersion   = "transaction-analysis-v7"
+	AnalysisVersion   = "transaction-analysis-v11"
 	EthereumV3Factory = "0x1f98431c8ad98523631ae4a59f267346ea31f984"
 	EthereumWETH      = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
 	// KyberSwapRouter is the Ethereum MetaAggregation Router supported by the RFQ adapter.
 	KyberSwapRouter = "0x6131b5fae19ea4f9d964eac0408e4408b66337b5"
 	// KyberSwapExecutor is the Ethereum Executor supported by the RFQ adapter.
-	KyberSwapExecutor = "0x6e4141d33021b52c91c28608403db4a0ffb50ec6"
-	THORChainRouter   = "0xd37bbe5744d730a1d98d8dc97c42f0ca46ad7146"
-	transferTopic     = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
-	depositTopic      = "0xe1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c"
-	withdrawalTopic   = "0x7fcf532c15f0a6db0bd6d0e038bea71d30d808c7d98cb3bf7268a95bf5081b65"
-	swapTopic         = "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67"
-	zeroAddress       = "0x0000000000000000000000000000000000000000"
+	KyberSwapExecutor          = "0x6e4141d33021b52c91c28608403db4a0ffb50ec6"
+	THORChainRouter            = "0xd37bbe5744d730a1d98d8dc97c42f0ca46ad7146"
+	BitTorrentRootChainManager = "0xd06029b23e9d4cd24bad01d436837fa02b8f0dd9"
+	BitTorrentEtherPredicate   = "0xa2611f4488c92e1a91eb4d2a8d30110eba9925b5"
+	lockedEtherTopic           = "0x3e799b2d61372379e767ef8f04d65089179b7a6f63f9be3065806456c7309f1b"
+	stateSyncedTopic           = "0x103fed9db65eac19c4d870f49ab7520fe03b99f1838e5996caf47e9e43308392"
+	transferTopic              = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+	depositTopic               = "0xe1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c"
+	withdrawalTopic            = "0x7fcf532c15f0a6db0bd6d0e038bea71d30d808c7d98cb3bf7268a95bf5081b65"
+	swapTopic                  = "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67"
+	zeroAddress                = "0x0000000000000000000000000000000000000000"
 )
 
 var (
@@ -45,21 +49,25 @@ var officialContracts = map[string]string{
 	"0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45": "Uniswap SwapRouter02",
 	"0xef1c6e67703c7bd7107eed8303fbe6ec2554bf6b": "Uniswap Universal Router",
 	"0x66a9893cc07d91d95644aedd05d03f95e1dba8af": "Uniswap Universal Router",
-	EthereumWETH:             "Wrapped Ether",
-	EthereumV3Factory:        "Uniswap V3 Factory",
-	KyberSwapRouter:          "KyberSwap MetaAggregation Router",
-	KyberSwapExecutor:        "KyberSwap Executor",
-	THORChainRouter:          "THORChain Router v4",
-	EthereumL1StandardBridge: "Base L1 Standard Bridge",
+	EthereumWETH:               "Wrapped Ether",
+	EthereumV3Factory:          "Uniswap V3 Factory",
+	KyberSwapRouter:            "KyberSwap MetaAggregation Router",
+	KyberSwapExecutor:          "KyberSwap Executor",
+	THORChainRouter:            "THORChain Router v4",
+	BitTorrentRootChainManager: "BitTorrent Chain RootChainManager",
+	BitTorrentEtherPredicate:   "BitTorrent Chain EtherPredicate",
+	EthereumL1StandardBridge:   "Base L1 Standard Bridge",
 }
 
 var contractIdentities = map[string]store.AddressIdentity{
-	KyberSwapRouter:          {AddressType: "contract", Protocol: "kyberswap", Roles: []string{"kyberswap_router"}},
-	KyberSwapExecutor:        {AddressType: "contract", Protocol: "kyberswap", Roles: []string{"kyberswap_executor"}},
-	THORChainRouter:          {AddressType: "contract", Protocol: "thorchain", Roles: []string{"router"}},
-	EthereumV3Factory:        {AddressType: "contract", Protocol: "uniswap", Roles: []string{"factory"}},
-	EthereumWETH:             {AddressType: "contract", Protocol: "weth", Roles: []string{"wrapped_native_token"}},
-	EthereumL1StandardBridge: {AddressType: "contract", Protocol: "bridge", Roles: []string{"cross_chain_bridge"}},
+	KyberSwapRouter:            {AddressType: "contract", Protocol: "kyberswap", Roles: []string{"kyberswap_router"}},
+	KyberSwapExecutor:          {AddressType: "contract", Protocol: "kyberswap", Roles: []string{"kyberswap_executor"}},
+	THORChainRouter:            {AddressType: "contract", Protocol: "thorchain", Roles: []string{"router"}},
+	BitTorrentRootChainManager: {AddressType: "contract", Protocol: "bittorrent_bridge", Roles: []string{"root_chain_manager", "cross_chain_bridge"}},
+	BitTorrentEtherPredicate:   {AddressType: "contract", Protocol: "bittorrent_bridge", Roles: []string{"ether_predicate", "cross_chain_bridge"}},
+	EthereumV3Factory:          {AddressType: "contract", Protocol: "uniswap", Roles: []string{"factory"}},
+	EthereumWETH:               {AddressType: "contract", Protocol: "weth", Roles: []string{"wrapped_native_token"}},
+	EthereumL1StandardBridge:   {AddressType: "contract", Protocol: "bridge", Roles: []string{"cross_chain_bridge"}},
 }
 
 // wooXIdentities contains the Ethereum addresses publicly labelled for WOO X.
@@ -214,8 +222,14 @@ func (s *Service) Analyze(ctx context.Context, chain, txHash string) (store.Tran
 		s.parseLogs(ctx, receipt.Logs, &analysis)
 	}
 	switch {
+	case analysis.Succeeded && analysis.To == BitTorrentRootChainManager:
+		if !parseBitTorrentBridge(&analysis, receipt.Logs) {
+			analysis.Quality.Status = "partial"
+			analysis.Quality.Issues = append(analysis.Quality.Issues, "unsupported or unverified BitTorrent Bridge calldata")
+		}
 	case analysis.Succeeded && analysis.To == THORChainRouter:
-		if !parseTHORChainCall(&analysis) {
+		parsed := parseTHORChainCall(&analysis) || parseTHORChainDeposit(&analysis)
+		if !parsed {
 			analysis.Quality.Status = "partial"
 			analysis.Quality.Issues = append(analysis.Quality.Issues, "unsupported or malformed THORChain calldata")
 		} else if isTHORChainTransferOutAction(analysis.ProtocolAction) && !verifiedTHORChainTransferOut(analysis) {
@@ -236,6 +250,104 @@ func (s *Service) Analyze(ctx context.Context, chain, txHash string) (store.Tran
 		return store.TransactionAnalysis{}, fmt.Errorf("save transaction analysis: %w", err)
 	}
 	return analysis, nil
+}
+
+// parseBitTorrentBridge verifies an ETH deposit into BitTorrent Chain. The
+// receipt must contain a matching LockedEther event emitted by the predicate;
+// calldata alone is not sufficient evidence that funds were locked.
+func parseBitTorrentBridge(analysis *store.TransactionAnalysis, logs []etherscan.RPCLog) bool {
+	input := strings.TrimPrefix(strings.TrimSpace(analysis.Input), "0x")
+	if !analysis.Succeeded || analysis.To != BitTorrentRootChainManager || len(input) != 72 || !strings.EqualFold(input[:8], "4faa8a26") {
+		return false
+	}
+	user, ok := normalizedAddress("0x"+input[32:72], false)
+	if !ok || user != analysis.From || analysis.Value == "0" {
+		return false
+	}
+	amount := ""
+	destination := ""
+	stateID := ""
+	for _, log := range logs {
+		if len(log.Topics) >= 3 && strings.EqualFold(log.Address, BitTorrentEtherPredicate) && strings.EqualFold(log.Topics[0], lockedEtherTopic) {
+			depositor, receiver := topicAddress(log.Topics[1]), topicAddress(log.Topics[2])
+			depositorOK, receiverOK := depositor != "", receiver != ""
+			value, valueOK := hexDecimal(log.Data)
+			if depositorOK && receiverOK && valueOK && depositor == analysis.From && receiver == user && value == analysis.Value {
+				amount, destination = value, receiver
+			}
+		}
+		if len(log.Topics) >= 2 && strings.EqualFold(log.Topics[0], stateSyncedTopic) {
+			stateID = strings.TrimPrefix(log.Topics[1], "0x")
+		}
+	}
+	if amount == "" || destination == "" {
+		return false
+	}
+	analysis.ProtocolAction = "bittorrent_bridge_inbound"
+	analysis.ProtocolDestination = destination
+	analysis.ProtocolAsset = "ETH"
+	analysis.ProtocolAmount = amount
+	analysis.Quality.Status = "partial"
+	analysis.Quality.Evidence = append(analysis.Quality.Evidence, "verified BitTorrent Bridge LockedEther and StateSynced")
+	analysis.Quality.Issues = append(analysis.Quality.Issues, "BTTC destination execution not yet verified")
+	if stateID != "" {
+		if id, err := hexInt64("0x" + stateID); err == nil {
+			analysis.ProtocolMemo = fmt.Sprintf("StateSynced #%d", id)
+		}
+	}
+	return true
+}
+
+// parseTHORChainDeposit decodes depositWithExpiry(address,address,uint256,string,uint256).
+// The memo is an ABI dynamic string at the offset in argument three.
+func parseTHORChainDeposit(analysis *store.TransactionAnalysis) bool {
+	if !analysis.Succeeded || analysis.To != THORChainRouter || len(analysis.Input) < 10 || !strings.EqualFold(analysis.Input[2:10], "44bc937b") {
+		return false
+	}
+	raw, err := hex.DecodeString(strings.TrimPrefix(analysis.Input[10:], "0x"))
+	if err != nil || len(raw) < 160 {
+		return false
+	}
+	word := func(index int) []byte { return raw[index*32 : (index+1)*32] }
+	vault := "0x" + hex.EncodeToString(word(0)[12:])
+	asset := "0x" + hex.EncodeToString(word(1)[12:])
+	amount := new(big.Int).SetBytes(word(2)).String()
+	offsetValue := new(big.Int).SetBytes(word(3))
+	if !offsetValue.IsInt64() {
+		return false
+	}
+	offset := offsetValue.Int64()
+	if offset < 0 || offset > int64(len(raw))-32 {
+		return false
+	}
+	lengthValue := new(big.Int).SetBytes(raw[offset : offset+32])
+	if !lengthValue.IsInt64() {
+		return false
+	}
+	length := lengthValue.Int64()
+	start := offset + 32
+	if length < 0 || length > int64(len(raw))-start {
+		return false
+	}
+	memo := string(raw[start : start+length])
+	parts := strings.Split(memo, ":")
+	if len(parts) < 3 || strings.ToUpper(strings.TrimSpace(parts[0])) != "=" {
+		return false
+	}
+	if asset != zeroAddress || !strings.EqualFold(strings.TrimSpace(parts[1]), "b") && !strings.EqualFold(strings.TrimSpace(parts[1]), "btc") && !strings.EqualFold(strings.TrimSpace(parts[1]), "btc.btc") {
+		return false
+	}
+	destination := strings.ToLower(strings.TrimSpace(parts[2]))
+	if !strings.HasPrefix(destination, "bc1") || len(destination) < 14 || len(destination) > 90 {
+		return false
+	}
+	analysis.ProtocolAction = "router_inbound"
+	analysis.ProtocolMemo = memo
+	analysis.ProtocolDestination = destination
+	analysis.ProtocolVault = vault
+	analysis.ProtocolAsset = "BTC.BTC"
+	analysis.ProtocolAmount = amount
+	return true
 }
 
 func parseTHORChainInboundMemo(analysis *store.TransactionAnalysis) bool {

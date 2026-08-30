@@ -27,7 +27,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   formatAssetAmount,
   GRAPH_AMOUNT_FRACTION_DIGITS,
-  shortAddress,
 } from "../lib/format";
 import { layoutGraph, NODE_HEIGHT, NODE_WIDTH } from "../graph/layout";
 import type {
@@ -63,12 +62,8 @@ interface InteractiveEdgeData extends Record<string, unknown> {
 type InteractiveEdge = Edge<InteractiveEdgeData, "interactive">;
 const nodeTypes = { fund: FundNode };
 const edgeTypes = { interactive: InteractiveGraphEdge };
-const DENSE_GRAPH_EDGE_LIMIT = 20;
 export type AssetFilter = "all" | "ETH" | "BTC" | "USDT" | "erc20";
 
-export function labelsVisibleByDefault(edgeCount: number) {
-  return edgeCount <= DENSE_GRAPH_EDGE_LIMIT;
-}
 export function edgeLabelVisible(
   showAll: boolean,
   selected: boolean,
@@ -88,6 +83,11 @@ export function thorchainEdgeLabel(action?: string) {
       } as Record<string, string>
     )[action ?? ""] ?? "THORChain 协议转移"
   );
+}
+
+function displayAssetSymbol(symbol: string | undefined): string | undefined {
+  if (!symbol || /^0x[0-9a-f]{40}$/i.test(symbol)) return undefined;
+  return symbol;
 }
 export function matchesAssetFilter(edge: GraphEdgeModel, filter: AssetFilter) {
   if (filter === "all") return true;
@@ -256,9 +256,7 @@ function Canvas({
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const showLowConfidence = true;
   const [assetFilter, setAssetFilter] = useState<AssetFilter>("all");
-  const [showEdgeLabels, setShowEdgeLabels] = useState(() =>
-    labelsVisibleByDefault(model.edges.length),
-  );
+  const [showEdgeLabels, setShowEdgeLabels] = useState(true);
   const [selectedEdgeID, setSelectedEdgeID] = useState<string>();
   const wrapper = useRef<HTMLDivElement>(null);
   const initialViewFitted = useRef(false);
@@ -274,7 +272,6 @@ function Canvas({
     };
   }, [model]);
   useEffect(() => {
-    setShowEdgeLabels(labelsVisibleByDefault(model.edges.length));
     setSelectedEdgeID(undefined);
   }, [model]);
   useEffect(() => {
@@ -446,17 +443,17 @@ function Canvas({
           const amount = formatAssetAmount(
             edge.totalAmount,
             edge.decimals,
-            shortAddress(edge.assetSymbol, 5),
+            displayAssetSymbol(edge.assetSymbol),
             GRAPH_AMOUNT_FRACTION_DIGITS,
           );
           const swapAmount = edge.swapLegs
             ?.map((leg) =>
-              formatAssetAmount(
-                leg.totalAmount,
-                leg.decimals,
-                shortAddress(leg.assetSymbol, 5),
-                GRAPH_AMOUNT_FRACTION_DIGITS,
-              ),
+                formatAssetAmount(
+                  leg.totalAmount,
+                  leg.decimals,
+                  displayAssetSymbol(leg.assetSymbol),
+                  GRAPH_AMOUNT_FRACTION_DIGITS,
+                ),
             )
             .join(" ⇄ ");
           const directionLabel =

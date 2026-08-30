@@ -346,6 +346,7 @@ type TransactionAnalysis struct {
 	ProtocolAction      string            `bson:"protocolAction,omitempty" json:"protocolAction,omitempty"`
 	ProtocolMemo        string            `bson:"protocolMemo,omitempty" json:"protocolMemo,omitempty"`
 	ProtocolDestination string            `bson:"protocolDestination,omitempty" json:"protocolDestination,omitempty"`
+	ProtocolVault       string            `bson:"protocolVault,omitempty" json:"protocolVault,omitempty"`
 	ProtocolAsset       string            `bson:"protocolAsset,omitempty" json:"protocolAsset,omitempty"`
 	ProtocolAmount      string            `bson:"protocolAmount,omitempty" json:"protocolAmount,omitempty"`
 	FinalOutputAddress  string            `bson:"finalOutputAddress,omitempty" json:"finalOutputAddress,omitempty"`

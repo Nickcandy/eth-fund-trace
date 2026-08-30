@@ -132,14 +132,16 @@ func (m *Manager) LatestExtension(ctx context.Context, rootID string) (store.Tra
 	if err != nil {
 		return store.TraceJob{}, err
 	}
-	return m.jobs.FindLatestTraceExtension(ctx, parsed)
+	job, err := m.jobs.FindLatestTraceExtension(ctx, parsed)
+	return normalizeStoredResult(job, err)
 }
 func (m *Manager) Job(ctx context.Context, id string) (store.TraceJob, error) {
 	parsed, err := primitive.ObjectIDFromHex(id)
 	if err != nil {
 		return store.TraceJob{}, err
 	}
-	return m.jobs.GetTraceJob(ctx, parsed)
+	job, err := m.jobs.GetTraceJob(ctx, parsed)
+	return normalizeStoredResult(job, err)
 }
 func (m *Manager) Stop(ctx context.Context, id string) (store.TraceJob, error) {
 	parsed, err := primitive.ObjectIDFromHex(id)
@@ -184,7 +186,8 @@ func (m *Manager) LatestJob(ctx context.Context, query Query) (store.TraceJob, e
 	if err != nil {
 		return store.TraceJob{}, ErrInvalidQuery
 	}
-	return m.jobs.FindLatestTraceJob(ctx, normalized.Chain, address, normalized.Direction, normalized.Depth, normalized.Asset, traceRuleVersion)
+	job, err := m.jobs.FindLatestTraceJob(ctx, normalized.Chain, address, normalized.Direction, normalized.Depth, normalized.Asset, traceRuleVersion)
+	return normalizeStoredResult(job, err)
 }
 func (m *Manager) Run(ctx context.Context) error {
 	if err := m.jobs.FailInterruptedTraceJobs(ctx, m.clock().UTC()); err != nil {
@@ -497,6 +500,22 @@ func decodeResult(value any) (Result, error) {
 	var result Result
 	err = json.Unmarshal(data, &result)
 	return result, err
+}
+
+// Results are stored in TraceJob.Result as any, so Mongo decodes nested
+// structs into maps and loses their JSON field tags. Rehydrate them before
+// returning jobs through the API so addressType/stopReason remain available
+// to the frontend.
+func normalizeStoredResult(job store.TraceJob, err error) (store.TraceJob, error) {
+	if err != nil || job.Result == nil {
+		return job, err
+	}
+	result, decodeErr := decodeResult(job.Result)
+	if decodeErr != nil {
+		return job, decodeErr
+	}
+	job.Result = result
+	return job, nil
 }
 func (m *Manager) fail(ctx context.Context, job *store.TraceJob, err error) {
 	lookupCtx := ctx
