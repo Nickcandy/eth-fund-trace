@@ -32,21 +32,13 @@ import {
   validateTraceQuery,
   writeTraceQuery,
 } from "./lib/query";
+import { isRenderableTraceResult } from "./lib/trace-result";
 import { BottomPanel } from "./components/BottomPanel";
 import { DetailsPanel } from "./components/DetailsPanel";
 import { GraphCanvas } from "./components/GraphCanvas";
 import { QueryBar } from "./components/QueryBar";
 import { TransactionView } from "./components/TransactionView";
 import type { LabelInput, TraceQuery } from "./api/types";
-
-const supportedTraceRuleVersions = [
-  "trace-v1",
-  "trace-v2",
-  "trace-v3",
-  "trace-v4",
-  "trace-v5",
-  "trace-v6",
-];
 
 const client = new QueryClient({
   defaultOptions: {
@@ -67,6 +59,7 @@ export default function App() {
 }
 function Console() {
   const extensionApplied = useRef<string | undefined>(undefined);
+  const automaticUpgradeAttempt = useRef<string | undefined>(undefined);
   const syncJobCache = useRef(new Map<string, import("./api/types").SyncJob>());
   const queryClient = useQueryClient();
   const requestGeneration = useRef(0);
@@ -173,21 +166,61 @@ function Console() {
     !validateTraceQuery(draft)
       ? draft
       : undefined;
+  const loadedTrace = useMemo<TraceQuery | undefined>(
+    () =>
+      mode === "address" && job.data
+        ? {
+            chain: job.data.chain,
+            address: job.data.seedAddress,
+            direction: job.data.direction,
+            depth: job.data.depth,
+            asset: job.data.asset,
+          }
+        : undefined,
+    [mode, job.data],
+  );
+  const traceToResolve = loadedTrace ?? recoverableTrace;
   const latestTrace = useQuery({
-    queryKey: ["latest-trace-job", recoverableTrace],
-    queryFn: ({ signal }) => api.latestTraceJob(recoverableTrace!, signal),
-    enabled: !!recoverableTrace,
+    queryKey: ["latest-trace-job", traceToResolve],
+    queryFn: ({ signal }) => api.latestTraceJob(traceToResolve!, signal),
+    enabled: !!traceToResolve && requestGeneration.current === 0,
     retry: false,
   });
   useEffect(() => {
-    if (!latestTrace.data || jobID || requestGeneration.current !== 0) return;
-    setActive(draft);
-    setJobID(latestTrace.data.id);
-    history.replaceState(null, "", writeTraceQuery(draft, latestTrace.data.id));
-  }, [latestTrace.data, jobID, draft]);
+    if (!latestTrace.data || !traceToResolve || requestGeneration.current !== 0)
+      return;
+    setActive(traceToResolve);
+    if (latestTrace.data.id !== jobID) setJobID(latestTrace.data.id);
+    history.replaceState(
+      null,
+      "",
+      writeTraceQuery(traceToResolve, latestTrace.data.id),
+    );
+  }, [latestTrace.data, jobID, traceToResolve]);
+  useEffect(() => {
+    if (
+      !job.data ||
+      !loadedTrace ||
+      requestGeneration.current !== 0 ||
+      !(latestTrace.error instanceof ApiError) ||
+      latestTrace.error.status !== 404 ||
+      automaticUpgradeAttempt.current === job.data.id
+    )
+      return;
+    automaticUpgradeAttempt.current = job.data.id;
+    requestGeneration.current += 1;
+    recoverSync.mutate(loadedTrace);
+    create.mutate({
+      query: loadedTrace,
+      generation: requestGeneration.current,
+    });
+  }, [job.data, latestTrace.error, loadedTrace]);
+  const resolvingInitialJob =
+    requestGeneration.current === 0 &&
+    !!job.data &&
+    latestTrace.data?.id !== job.data.id;
   const result =
-    job.data?.result &&
-    supportedTraceRuleVersions.includes(job.data.result.ruleVersion)
+    !resolvingInitialJob && isRenderableTraceResult(job.data?.result)
       ? job.data.result
       : undefined;
   const model = useMemo(
@@ -532,10 +565,8 @@ function Console() {
                   status={status?.label}
                   error={
                     job.data?.result &&
-                    !supportedTraceRuleVersions.includes(
-                      job.data.result.ruleVersion,
-                    )
-                      ? "旧版追踪结果，请重新运行"
+                    !isRenderableTraceResult(job.data.result)
+                      ? "追踪结果格式不兼容，请重新运行"
                       : job.data?.error
                   }
                   onRetry={job.data?.retryable ? submit : undefined}

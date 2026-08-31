@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>面试课：讲清 ETH 资金追踪</title>
+  <link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+<main>
+  <header>
+    <span class="tag">Lesson 0001</span><span class="tag">约 25 分钟</span>
+    <h1>从转账事实到可解释的资金图</h1>
+    <p class="lead">本课的目标不是背代码，而是能用一个统一模型回答：怎么搜、怎么扩、在哪里停、遇到合约怎么解释。</p>
+  </header>
+
+  <h2>先建立总模型</h2>
+  <div class="flow">
+    <div><strong>1. 采集</strong>Etherscan 地址历史与 Ethereum 单笔交易事实</div>
+    <div><strong>2. 标准化</strong>normal、internal、ERC-20 统一为 Transfer</div>
+    <div><strong>3. 搜索</strong>按资金状态做分层图扩展</div>
+    <div><strong>4. 解释</strong>合约节点回到 entry transaction 解析协议</div>
+    <div><strong>5. 停止</strong>终点、证据不足、缺数据或资源保护</div>
+  </div>
+  <p>面试开场可以先说：<strong>“这个项目不是从一个地址无限爬邻居，而是在固定数据覆盖内，对带资产、金额和时间边界的资金状态做确定性扩展。”</strong>这句话同时解释了为什么普通 BFS 不够。</p>
+
+  <h2>一、搜索：BFS 的节点其实是资金状态</h2>
+  <p>初始地址经过校验和覆盖检查后，生成一个或两个方向的状态。<code>direction=both</code> 会拆成 <code>in</code> 和 <code>out</code> 两条 frontier。代码按层处理当前 frontier，生成 next frontier，因此遍历形态是 BFS。</p>
+  <pre><code>state = {
+  address, direction,
+  assetMode, asset,
+  amount, anchorBlock,
+  enteringTx, path
+}</code></pre>
+  <p>真正重要的是状态维度：</p>
+  <ul>
+    <li><strong>asset</strong> 防止把 USDT 的来路接到 ETH 的去向。</li>
+    <li><strong>amount</strong> 是可归因预算，避免一笔 10 ETH 的收入解释出 100 ETH 的后续支出。</li>
+    <li><strong>anchorBlock</strong> 建立因果时间窗口：向下游只看进入之后，向上游只看进入之前。</li>
+    <li><strong>enteringTx</strong> 是合约语义解析锚点；同一个合约的不同交易不能混在一起。</li>
+    <li><strong>path</strong> 用于发现当前路径环路。</li>
+  </ul>
+  <p>候选事实经过四层过滤：资产受支持、金额为正、达到代码门槛、仍有分支预算。下游按区块从早到晚，上游从晚到早；每条边最多消费剩余预算。这近似 FIFO/反向 FIFO 的可重复归因。</p>
+  <div class="callout"><strong>边界：</strong>Ethereum 是账户余额模型，没有 UTXO 那样的“某一枚币”。这里得到的是有时间和金额约束的可审计归因，不是数学上唯一的逐币流向。</div>
+
+  <div class="question" data-quiz data-correct="yes" data-yes="正确：同一地址在不同资产、方向或进入交易下是不同搜索状态。" data-no="错误：只按地址去重会错误丢掉合法分支。">
+    <p><strong>检索 1：</strong><code>visited[address]</code> 足以完成本项目去重。</p>
+    <button data-answer="yes">错误</button><button data-answer="no">正确</button>
+    <div class="feedback"></div>
+  </div>
+
+  <h2>二、扩展：EOA 扫时间窗口，合约解析单笔交易</h2>
+  <h3>EOA 扩展</h3>
+  <p>先检查该地址的 normal/internal/token 三类覆盖是否包含所需时间窗口。如果没有，<code>Graph.Trace</code> 返回 <code>AddressNotSyncedError</code>；任务管理器捕获后创建同步任务，等待完成，再从根地址重跑。第二次仍无法取得覆盖，才把该依赖标为 <code>missing_data</code> 并返回 partial 结果。</p>
+  <p>同步写入采用批量 upsert；各 Etherscan action 的检查点只在事实写入成功后推进。这样重试不会重复制造边，也不会把“抓取过”误写成“数据完整”。</p>
+  <h3>合约扩展</h3>
+  <p>合约地址的全历史通常巨大而且语义混杂，因此不是继续查询“这个合约所有转账”。系统拿到进入边的 <code>txHash</code>，只分析那一笔 transaction：</p>
+  <pre><code>entry transfer
+  -> Analyze(chain, txHash)
+  -> verified conversion(tokenIn, amountIn -> tokenOut, amountOut, recipient)
+  -> 生成语义 Transfer
+  -> 切换资产后继续扩展 recipient</code></pre>
+  <p>只有 conversion 的状态、输入输出、金额和接收者都完整时才切换资产。否则终止为 <code>ambiguous_conversion</code>。这是避免“看到 Router 地址就猜它一定完成了 Swap”的关键设计。</p>
+  <h3>人工扩展</h3>
+  <p>前端对已有非终点节点发起一次单方向扩展。后端从根图入边恢复资产、总金额、最早/最晚区块和路径，只查询一跳，再把结果按节点键、边键和资金状态键合并。它适合调查员主动展开局部，不改变自动追踪的证据规则。</p>
+
+  <div class="question" data-quiz data-correct="yes" data-yes="正确：合约语义必须绑定进入交易，否则会串联无关用户的资金。" data-no="错误：扫合约历史既昂贵，也会混淆不同交易的协议语义。">
+    <p><strong>检索 2：</strong>到达 Swap Router 后，应优先解析进入它的单笔交易。</p>
+    <button data-answer="yes">正确</button><button data-answer="no">错误</button>
+    <div class="feedback"></div>
+  </div>
+
+  <h2>三、终点：业务终点、证据边界、数据边界、计算边界</h2>
+  <p>不要回答“没有下一笔交易就是终点”，这只覆盖一种情况。更准确的分类是：</p>
+  <table>
+    <tr><th>类别</th><th>判断</th><th>为什么停止</th></tr>
+    <tr><td>业务终点</td><td><code>IsTerminal</code>、交易所/热钱包标签、WOO X 钱包</td><td>资金已进入定义好的归宿，不继续扩大图</td></tr>
+    <tr><td>协议边界</td><td>已知 bridge 身份</td><td>目标链不在当前通用追踪范围</td></tr>
+    <tr><td>证据边界</td><td>未知合约或 conversion 不唯一</td><td>继续会把猜测伪装成事实</td></tr>
+    <tr><td>数据边界</td><td>补同步失败、高频地址</td><td>当前数据不足或成本过高</td></tr>
+    <tr><td>自然边界</td><td>窗口内无匹配 transfer、零地址</td><td>没有可继续消费的正金额事实</td></tr>
+    <tr><td>计算边界</td><td>路径环路、5,000 节点</td><td>保证任务有界；保留已确认的到达边</td></tr>
+  </table>
+  <p>一个节点可以因为工程保护成为终点，但这不意味着它具有风险。风险模块目前只看查询地址自身的确定性标签，不做“和坏地址交易过，所以也是坏地址”的传播。</p>
+
+  <div class="question" data-quiz data-correct="yes" data-yes="正确：terminal 描述计算边界，risk 描述风险判断，二者必须分开。" data-no="错误：高频只说明数据量大，不能推出地址恶意。">
+    <p><strong>检索 3：</strong><code>high_frequency</code> 是停止扩展原因，不是风险标签。</p>
+    <button data-answer="yes">正确</button><button data-answer="no">错误</button>
+    <div class="feedback"></div>
+  </div>
+
+  <h2>四、协议解析：topic 识别只是第一步</h2>
+  <p>解析器采用“事实 → 解码 → 身份验证 → 一致性验证 → 质量状态”的流水线。分析结果按 <code>(chain, txHash)</code> 缓存，并用 <code>AnalysisVersion</code> 使规则升级后旧缓存失效。</p>
+
+  <h3>Uniswap V3 示例</h3>
+  <ol>
+    <li>Receipt 必须成功，遍历 logs，按 <code>topic0</code> 识别 Transfer、WETH 和 V3-shaped Swap。</li>
+    <li><code>Swap</code> data 的前两个 word 按二进制补码解析为有符号 <code>int256</code>；一正一负才符合交换形态。</li>
+    <li>正值代表 Pool 收到的输入，负值绝对值代表 Pool 发出的输出。</li>
+    <li>不能仅凭相同 event topic 认定 Uniswap。对 log emitter 调用 <code>token0()</code>、<code>token1()</code>、<code>fee()</code>、<code>factory()</code>；factory 必须等于官方 V3 Factory。</li>
+    <li>再用 ERC-20 Transfer logs 从 Pool 输出沿交易内转发链寻找唯一接收者；分叉、循环、未知 Router 落点都会使 route ambiguous。</li>
+  </ol>
+  <p>官方定义明确指出，<code>amount0</code>/<code>amount1</code> 是 Pool 的 token0/token1 balance delta，而不是用户余额变化。这是符号方向的依据。</p>
+
+  <h3>其他协议</h3>
+  <ul>
+    <li><strong>WETH：</strong>同 topic 还不够，emitter 必须是官方 WETH 地址。</li>
+    <li><strong>KyberSwap RFQ：</strong>校验 Router/Executor、Transfer、internal ETH call 或 WETH withdrawal funding 的一致性。</li>
+    <li><strong>THORChain/MAYAChain：</strong>按 selector 和 ABI offset 解动态 memo，提取 vault、asset、amount、destination。THORChain 的特定跨 BTC 路径继续用协议 API 和 Bitcoin 输出验证真实出站。</li>
+    <li><strong>BitTorrent Bridge：</strong>同时匹配函数输入、LockedEther 与 StateSynced；因为目标链执行未验证，仍标 partial。</li>
+  </ul>
+  <div class="callout"><strong>通用扩展方式：</strong>新增协议时实现独立 adapter：声明支持的合约身份、事件/函数 ABI、必需证据、输出 conversion 和失败原因；不要把协议分支继续堆进通用 BFS。</div>
+
+  <h2>五分钟口述模板</h2>
+  <p><strong>第一分钟，数据层：</strong>“Ethereum RPC 没有按地址枚举完整历史的标准接口，所以地址历史通过 Etherscan 的 normal/internal/token 三类 API 同步；单笔协议语义再查 transaction、receipt、logs 和必要的 contract calls。写库是幂等的，三类覆盖和检查点独立维护。”</p>
+  <p><strong>第二分钟，搜索层：</strong>“搜索是分层 BFS，但状态不是单个地址，而是地址、方向、资产、可归因金额、进入区块和进入交易。下游只看进入后，上游只看进入前，按时间消费金额预算，避免资金被重复放大。”</p>
+  <p><strong>第三分钟，扩展层：</strong>“普通 EOA 缺数据时先同步需要的窗口再重跑；合约不扫全历史，而是解析进入它的交易。如果能从 receipt 和协议身份得到唯一 conversion，就切换到输出资产和接收地址继续，否则保留到达事实并停止。”</p>
+  <p><strong>第四分钟，终止层：</strong>“终点分业务、协议、证据、数据和资源五类，例如交易所标签、跨链桥、未知合约、高频地址、环路和 5,000 节点保护。终点是计算边界，不等于风险标签。”</p>
+  <p><strong>第五分钟，协议与 trade-off：</strong>“以 Uniswap V3 为例，我不仅匹配 Swap topic，还解有符号 amount0/amount1，再读取 pool 的 token0/token1/factory 验证官方身份，并用 Transfer logs 解唯一接收者。整个系统优先低误判和可审计性，代价是协议覆盖有限、账户模型归因不是逐币证明。”</p>
+
+  <h2>高概率追问</h2>
+  <table>
+    <tr><th>追问</th><th>回答要点</th></tr>
+    <tr><td>为什么不用 DFS？</td><td>BFS 便于按距离增量返回、统一节点预算和稳定复现；但真正正确性来自状态维度和金额/时间约束，不来自 BFS 本身。</td></tr>
+    <tr><td>复杂度是多少？</td><td>图算法部分约 <code>O(V + E log E)</code>，排序来自各 frontier/候选；空间 <code>O(V + E)</code>。实际瓶颈是外部 API、Mongo 查询和高扇出，不是内存队列。</td></tr>
+    <tr><td>怎么避免重复和环？</td><td>Transfer 唯一键幂等 upsert；状态键防重复入队；path 防当前路径闭环；结果合并有 node/edge/money-state key。</td></tr>
+    <tr><td>链重组怎么办？</td><td>当前依靠确认数或固定快照降低风险，但缺少生产级 reorg 回滚。生产应保存 block hash，在重组窗口内重验并回滚受影响事实和缓存分析。</td></tr>
+    <tr><td>如何新增协议？</td><td>用 adapter/registry 隔离 ABI、身份和证据规则；输出统一 conversion，不改搜索器。补 fixtures、失败交易、伪造 topic、代理/升级和多跳歧义测试。</td></tr>
+    <tr><td>项目最大局限？</td><td>索引数据不等于完整 execution trace；白名单资产和协议覆盖有限；资金归因是启发式；通用跨链目标链没有覆盖。</td></tr>
+  </table>
+
+  <h2>代码与文档不一致，如何回答</h2>
+  <p>直接说当前实现，不要替设计文档辩护：</p>
+  <ul>
+    <li>当前代码只自动保留 ETH 与 DAI/USDC/USDT/WETH，并过滤小于 0.01 ETH、50 USDT 的 Ethereum 主网边。</li>
+    <li>同步默认每 action 5 万条，另有 20 万条硬保护；Trace 单次查询上限为 5 万条。</li>
+    <li>当前 <code>depth</code> 被归一化为 0，不是固定跳数。</li>
+  </ul>
+  <p>可以补一句：“这暴露了文档与行为契约没有自动校验的问题；我会把阈值和支持矩阵放进配置/公开能力接口，并用契约测试生成文档。”</p>
+
+  <h2>今晚练习</h2>
+  <ol>
+    <li>不看材料，用 90 秒讲清搜索状态为什么不能只有地址。</li>
+    <li>画出 A → Router → Pool → B 的一次 Swap，逐项说出每条证据来自 transaction、receipt、log 还是 eth_call。</li>
+    <li>随机抽一个 stopReason，说清它属于业务、证据、数据还是资源边界。</li>
+    <li>最后完整讲一遍五分钟模板，录音后删掉所有“然后、就是、可能”。</li>
+  </ol>
+
+  <footer>
+    速查版：<a href="../reference/fund-trace-interview-cheatsheet.html">四个核心问题</a>。主要资料：
+    <a href="https://docs.etherscan.io/api-reference/endpoint/txlist">Etherscan</a>、
+    <a href="https://ethereum.org/developers/docs/apis/json-rpc/">Ethereum JSON-RPC</a>、
+    <a href="https://github.com/Uniswap/v3-core/blob/main/contracts/interfaces/pool/IUniswapV3PoolEvents.sol">Uniswap V3 Events</a>、
+    <a href="https://dev.thorchain.org/concepts/memos">THORChain Memos</a>。
+    有任何口述卡顿，继续向我提问或让我按面试官方式追问。
+  </footer>
+</main>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

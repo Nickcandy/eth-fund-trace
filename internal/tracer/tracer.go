@@ -920,9 +920,9 @@ func (g *Graph) appendVerifiedCrossChainEndpoints(ctx context.Context, chain str
 	if state.Direction != "out" || chain != "ethereum" || g.analyzer == nil || len(g.crossChainVerifiers) == 0 || summary.AssetType != "eth" {
 		return false, nil
 	}
-	// New sync rows carry calldata. Legacy rows are lazily re-read only for a
-	// Vault already established by chain-confirmed THORChain evidence.
-	if len(strings.TrimSpace(summary.Representative.Input)) <= 2 && !isTHORChainVault(identity) {
+	// New sync rows carry calldata. Legacy rows are lazily re-read for known
+	// cross-chain endpoints because the analyzer can recover calldata by hash.
+	if len(strings.TrimSpace(summary.Representative.Input)) <= 2 && !isCrossChainEndpoint(identity) && !isTHORChainVault(identity) {
 		return false, nil
 	}
 	transfers := []store.Transfer{summary.Representative}
@@ -1066,6 +1066,12 @@ func isTHORChainVault(identity store.AddressIdentity) bool {
 
 func isCrossChainBridge(identity store.AddressIdentity) bool {
 	return containsRole(identity.Roles, "cross_chain_bridge")
+}
+
+func isCrossChainEndpoint(identity store.AddressIdentity) bool {
+	return isCrossChainBridge(identity) ||
+		(identity.Protocol == "thorchain" && containsRole(identity.Roles, "router")) ||
+		(identity.Protocol == "mayachain" && containsRole(identity.Roles, "router"))
 }
 
 func (g *Graph) annotateTHORChainRouterCall(ctx context.Context, chain string, identity store.AddressIdentity, transfer store.Transfer, edge *Edge) error {

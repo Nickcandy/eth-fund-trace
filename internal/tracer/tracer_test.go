@@ -1081,7 +1081,7 @@ func TestTraceAddsConfirmedMAYAChainBitcoinEndpoint(t *testing.T) {
 	repository := &fakeRepository{
 		addresses: map[string]store.Address{seed: completeEOAAddress(0, 100), router: routerMetadata},
 		labels:    map[string][]store.Label{},
-		transfers: []store.Transfer{{Chain: "ethereum", TxHash: txHash, BlockNumber: 10, From: seed, To: router, AssetType: "eth", Asset: "ETH", Amount: "33000000000000000000", Input: "0x44bc937b"}},
+		transfers: []store.Transfer{{Chain: "ethereum", TxHash: txHash, BlockNumber: 10, From: seed, To: router, AssetType: "eth", Asset: "ETH", Amount: "33000000000000000000"}},
 	}
 	analyzer := transactionAnalyzerStub{analysis: store.TransactionAnalysis{
 		Chain: "ethereum", TxHash: txHash, From: seed, To: router, Value: "33000000000000000000", Succeeded: true,

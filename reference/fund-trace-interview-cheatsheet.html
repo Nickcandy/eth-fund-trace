@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ETH 资金追踪：面试速查</title>
+  <link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+<main>
+  <header>
+    <span class="tag">面试速查</span><span class="tag">当前代码口径</span>
+    <h1>ETH 资金追踪的四个核心问题</h1>
+    <p class="lead">一句话：先把链上转账事实标准化，再用“地址 + 方向 + 资产 + 金额预算 + 时间锚点”作为搜索状态，逐层扩展；合约节点不扫全历史，而是回到进入它的交易做协议级解释。</p>
+  </header>
+
+  <h2>1. 它怎么搜索</h2>
+  <p><strong>算法形态：</strong>按层推进的 BFS，但不是普通地址 BFS。队列元素是 <code>branchState</code>，唯一键包含地址、方向、资产模式、资产、锚定区块和进入交易哈希。</p>
+  <pre><code>seed
+  -> frontier（当前层）
+  -> QueryTransfers（方向 + 资产 + 时间窗口）
+  -> 按时间排序并消费 amount budget
+  -> 生成 edge / node / next state
+  -> next 成为下一层 frontier</code></pre>
+  <table>
+    <tr><th>方向</th><th>查询窗口</th><th>消费顺序</th><th>含义</th></tr>
+    <tr><td>out</td><td><code>block &gt;= entryBlock</code></td><td>早到晚</td><td>资金进入后，向后找去向</td></tr>
+    <tr><td>in</td><td><code>block &lt;= entryBlock</code></td><td>晚到早</td><td>资金支出前，向前找来源</td></tr>
+  </table>
+  <p><strong>归因规则：</strong>每个分支携带可归因金额，候选边金额会被预算截断，所有候选累计不能超过进入金额。它是确定性的工程归因，不是账户模型下的逐币证明。</p>
+
+  <h2>2. 它如何扩展</h2>
+  <table>
+    <tr><th>节点类型</th><th>扩展方式</th></tr>
+    <tr><td>EOA</td><td>检查所需区块覆盖；缺数据时任务管理器先同步该地址的所需时间窗口，再重跑 Trace。</td></tr>
+    <tr><td>已支持合约</td><td>不扫合约历史；以 <code>entryTxHash</code> 分析 Transaction、Receipt、logs 和 internal transactions，将输入资产转换为明确的输出资产后继续。</td></tr>
+    <tr><td>未知合约</td><td>保留到达边，停止为 <code>ambiguous_conversion</code> 或 <code>unsupported_contract</code>。</td></tr>
+    <tr><td>人工扩展</td><td>只能从已有、非终点节点出发，一次指定一个方向；根据入边聚合资产、金额和时间锚点，再查询一跳并与根结果去重合并。</td></tr>
+  </table>
+  <p><strong>去重不是只看地址：</strong><code>visitedNodes</code> 控制图节点数量；<code>visitedStates</code> 控制同一资金状态不重复入队；当前路径再次出现地址则保留闭环边，但不继续入队。</p>
+
+  <h2>3. 怎么判定终点</h2>
+  <table>
+    <tr><th>类别</th><th>典型 stopReason</th><th>性质</th></tr>
+    <tr><td>业务终点</td><td><code>terminal</code></td><td>地址元数据、交易所/热钱包标签、WOO X 已知钱包</td></tr>
+    <tr><td>协议边界</td><td><code>cross_chain_bridge</code></td><td>已知跨链桥；当前不追目标链</td></tr>
+    <tr><td>无法安全解释</td><td><code>ambiguous_conversion</code></td><td>合约交易没有唯一、完整的资产转换证据</td></tr>
+    <tr><td>数据边界</td><td><code>missing_data</code> / <code>high_frequency</code></td><td>补同步仍失败，或记录量触发保护</td></tr>
+    <tr><td>自然结束</td><td><code>no_matching_transfers</code></td><td>当前方向、资产、时间窗口内无符合条件的事实</td></tr>
+    <tr><td>计算保护</td><td><code>cycle</code> / <code>node_limit</code></td><td>环路不重复扩展；全图最多 5,000 节点</td></tr>
+  </table>
+  <p>关键区分：终点不是“坏地址”，而是“当前规则下不再扩展的边界”。风险标签、数据不完整和资源保护不能混成一个概念。</p>
+
+  <h2>4. 如何解析协议</h2>
+  <pre><code>Transaction(from/to/value/input)
+             + Receipt(status/logs)
+             + internal transactions
+             -> topic/ABI 解码
+             -> 合约身份验证
+             -> 证据一致性检查
+             -> TransactionAnalysis（缓存，带版本和质量）</code></pre>
+  <table>
+    <tr><th>协议/事实</th><th>解析与验证</th></tr>
+    <tr><td>ERC-20</td><td>按 <code>Transfer</code> topic 解 indexed from/to 与 data amount。</td></tr>
+    <tr><td>WETH</td><td>只接受 WETH 官方地址发出的 <code>Deposit</code>/<code>Withdrawal</code>，解释 ETH/WETH 切换。</td></tr>
+    <tr><td>Uniswap V3</td><td>解 <code>Swap</code> 的两个有符号 <code>int256</code>；正数是 Pool 收入、负数绝对值是输出。再用 <code>eth_call</code> 读取 pool 的 token0/token1/fee/factory，factory 必须等于官方 V3 Factory；最后用 Transfer logs 唯一解析最终接收地址。</td></tr>
+    <tr><td>KyberSwap RFQ</td><td>Router、Executor、Transfer、internal call 和 WETH 资金证据必须匹配，才生成完整 conversion。</td></tr>
+    <tr><td>THOR/MAYA</td><td>按函数 selector 解 Router calldata 和动态 memo；THORChain 跨到 BTC 还要调用协议 API 与 Bitcoin 交易输出核验，memo 只代表意图。</td></tr>
+    <tr><td>BitTorrent Bridge</td><td>calldata、<code>LockedEther</code> 与 <code>StateSynced</code> 同时匹配才承认入桥；目标链执行未验证，所以质量仍为 partial。</td></tr>
+  </table>
+
+  <h2>当前代码边界</h2>
+  <ul>
+    <li>仅自动追踪 ETH 和白名单 ERC-20：DAI、USDC、USDT、WETH。</li>
+    <li>Ethereum 主网 ETH 小于 0.01、USDT 小于 50 的边会被过滤；这与部分“无小额门槛”的设计文档不一致。</li>
+    <li>同步配置默认每个 Etherscan action 5 万条；同步器另有 20 万条任务级硬保护。Trace 查询自身也以 5 万条作为高频边界。</li>
+    <li><code>depth</code> 查询参数会被归一化为 0；自动 Trace 不是固定 N 跳，真正上限是终止规则和 5,000 节点。</li>
+    <li>跨链桥通常只作为边界；THORChain/MAYAChain 的特定 ETH→BTC 路径存在额外验证能力，不能概括成通用跨链追踪。</li>
+  </ul>
+
+  <footer>完整讲解：<a href="../lessons/0001-fund-trace-interview.html">资金追踪面试课</a></footer>
+</main>
+</body>
+</html>
