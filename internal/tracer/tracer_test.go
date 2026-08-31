@@ -72,6 +72,27 @@ func TestTraceAutoModeContinuesBeyondFiveHopsToTerminal(t *testing.T) {
 	}
 }
 
+func TestTraceStopsAtKnownWOOXWallet(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	wooX := "0x63dfe4e34a3bfc00eb0220786238a7c6cef8ffc4"
+	upstream := "0x0000000000000000000000000000000000000002"
+	wooXAddress := store.Address{AddressType: "eoa", Protocol: "woo_x", Roles: []string{"woo_x_wallet"}, SyncStatus: "discovered"}
+	repository := &fakeRepository{addresses: map[string]store.Address{
+		seed: completeAddress(0, 100), wooX: wooXAddress, upstream: completeAddress(0, 100),
+	}, labels: map[string][]store.Label{}, transfers: []store.Transfer{
+		{Chain: "ethereum", TxHash: "0xwoo", BlockNumber: 20, From: wooX, To: seed, AssetType: "eth", Asset: "ETH", Amount: "10"},
+		{Chain: "ethereum", TxHash: "0xupstream", BlockNumber: 10, From: upstream, To: wooX, AssetType: "eth", Asset: "ETH", Amount: "10"},
+	}}
+
+	result, err := New(repository).Trace(context.Background(), Query{Address: seed, Direction: "in", Depth: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Edges) != 1 || len(result.Nodes) != 2 || result.Nodes[1].Address != wooX || !result.Nodes[1].Terminal || result.Nodes[1].StopReason != string(store.StopTerminal) {
+		t.Fatalf("result=%+v, want WOO X wallet terminal", result)
+	}
+}
+
 func TestTraceMarksAddressWithoutMatchingTransfersAsTerminal(t *testing.T) {
 	seed := "0x0000000000000000000000000000000000000001"
 	repository := &fakeRepository{addresses: map[string]store.Address{seed: completeAddress(0, 100)}, labels: map[string][]store.Label{}}
@@ -161,6 +182,29 @@ func TestExtendBranchMarksNoMatchingTransfersTerminal(t *testing.T) {
 	}
 	if len(result.Edges) != 0 || len(result.Nodes) != 1 || !result.Nodes[0].Terminal || result.Nodes[0].StopReason != "no_matching_transfers" {
 		t.Fatalf("result=%+v, want an explicit no-matching-transfers terminal", result)
+	}
+}
+
+func TestExtendBranchMarksKnownWOOXWalletTerminal(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	anchor := "0x0000000000000000000000000000000000000002"
+	wooX := "0x63dfe4e34a3bfc00eb0220786238a7c6cef8ffc4"
+	wooXAddress := store.Address{AddressType: "eoa", Protocol: "woo_x", Roles: []string{"woo_x_wallet"}, SyncStatus: "discovered"}
+	repository := &fakeRepository{addresses: map[string]store.Address{
+		anchor: completeAddress(0, 100), wooX: wooXAddress,
+	}, labels: map[string][]store.Label{}, transfers: []store.Transfer{
+		{Chain: "ethereum", TxHash: "0xwoo", BlockNumber: 20, From: wooX, To: anchor, AssetType: "eth", Asset: "ETH", Amount: "10"},
+	}}
+	root := Result{Nodes: []Node{{Chain: "ethereum", Address: seed}, {Chain: "ethereum", Address: anchor, Depth: 1}}, DataThroughBlock: 100, Edges: []Edge{
+		{Chain: "ethereum", From: anchor, To: seed, AssetType: "eth", Asset: "ETH", TotalAmount: "10", FirstBlock: 30, LatestBlock: 30, Path: []string{seed, anchor}},
+	}}
+
+	result, err := New(repository).ExtendBranch(context.Background(), root, ExtensionRequest{Chain: "ethereum", Address: anchor, Direction: "in", Depth: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Nodes) != 2 || result.Nodes[1].Address != wooX || !result.Nodes[1].Terminal || result.Nodes[1].StopReason != string(store.StopTerminal) {
+		t.Fatalf("result=%+v, want WOO X wallet terminal", result)
 	}
 }
 
@@ -1022,6 +1066,50 @@ func TestTraceAddsConfirmedTHORChainBitcoinEndpoint(t *testing.T) {
 	}
 	if vaultNode == nil || !vaultNode.Terminal || vaultNode.StopReason != "cross_chain_bridge" || vaultNode.Protocol != "thorchain" || !containsRole(vaultNode.Roles, "thorchain_vault") {
 		t.Fatalf("vault node=%+v", vaultNode)
+	}
+}
+
+func TestTraceAddsConfirmedMAYAChainBitcoinEndpoint(t *testing.T) {
+	seed := "0x9951544f600e95c2ca5f967c0567b9bf50de72d0"
+	router := "0xe3985e6b61b814f7cdb188766562ba71b446b46d"
+	btc := "bc1q2yjae3xdnlwwk6hxf7jxjdt0waupl8qglv3qs7"
+	txHash := "0x2b6fa2acfb7e87f3ca39331b071f3479ee6cff8a2967d0fddbb6459172a03afc"
+	memo := "=:b:" + btc + ":115252390/3/0:ns:5"
+	routerMetadata := completeContractAddress(0, 100)
+	routerMetadata.Protocol = "mayachain"
+	routerMetadata.Roles = []string{"router"}
+	repository := &fakeRepository{
+		addresses: map[string]store.Address{seed: completeEOAAddress(0, 100), router: routerMetadata},
+		labels:    map[string][]store.Label{},
+		transfers: []store.Transfer{{Chain: "ethereum", TxHash: txHash, BlockNumber: 10, From: seed, To: router, AssetType: "eth", Asset: "ETH", Amount: "33000000000000000000", Input: "0x44bc937b"}},
+	}
+	analyzer := transactionAnalyzerStub{analysis: store.TransactionAnalysis{
+		Chain: "ethereum", TxHash: txHash, From: seed, To: router, Value: "33000000000000000000", Succeeded: true,
+		ProtocolAction: "router_inbound", ProtocolMemo: memo, ProtocolDestination: btc, ProtocolVault: "0x55c302924d5616f1f571425c6cf0762c25ebae81", ProtocolAsset: "BTC.BTC", Quality: store.AnalysisQuality{Status: "complete"},
+	}}
+	verifier := crossChainVerifierStub{outbound: VerifiedCrossChainTransfer{
+		Protocol: "mayachain", SourceChain: "ethereum", TargetChain: "bitcoin", From: router, To: btc, Asset: "BTC", Amount: "120934527",
+		TxHash: "046992e1705d36a84dc5c36322e6272e94f1ba2dcd49c6be7295ae51f0769901", BlockNumber: 917224,
+	}}
+
+	result, err := New(repository).WithTransactionAnalyzer(analyzer).WithCrossChainVerifier(verifier).Trace(context.Background(), Query{Chain: "ethereum", Address: seed, Direction: "out", Depth: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Edges) != 2 || result.Edges[0].Protocol != "mayachain" || result.Edges[1].Kind != "mayachain_cross_chain_outbound" || result.Edges[1].To != btc || result.Edges[1].TotalAmount != "120934527" {
+		t.Fatalf("edges=%+v", result.Edges)
+	}
+	var routerNode, btcNode *Node
+	for index := range result.Nodes {
+		if result.Nodes[index].Chain == "ethereum" && result.Nodes[index].Address == router {
+			routerNode = &result.Nodes[index]
+		}
+		if result.Nodes[index].Chain == "bitcoin" && result.Nodes[index].Address == btc {
+			btcNode = &result.Nodes[index]
+		}
+	}
+	if len(result.Nodes) != 3 || routerNode == nil || routerNode.Protocol != "mayachain" || !routerNode.Terminal || btcNode == nil || btcNode.Protocol != "mayachain" || !btcNode.Terminal {
+		t.Fatalf("nodes=%+v", result.Nodes)
 	}
 }
 

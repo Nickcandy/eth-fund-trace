@@ -127,6 +127,8 @@ func (g *Graph) ExtendBranch(ctx context.Context, root Result, request Extension
 			if metadataErr != nil {
 				return Result{}, metadataErr
 			}
+			identity := addressIdentity(metadata)
+			knownWalletTerminal := isKnownWalletTerminal(identity)
 			requiredFrom, requiredThrough := g.requiredStartBlocks[request.Chain], root.DataThroughBlock
 			if request.Direction == "out" {
 				requiredFrom = transfer.BlockNumber
@@ -134,7 +136,7 @@ func (g *Graph) ExtendBranch(ctx context.Context, root Result, request Extension
 				requiredThrough = transfer.BlockNumber
 			}
 			dependencyStopReason := g.dependencyStopReason(request.Chain, other)
-			if dependencyStopReason == "" && (!exists || !isHighFrequencyAddress(metadata) && !g.addressCovered(metadata, requiredFrom, requiredThrough)) {
+			if !knownWalletTerminal && dependencyStopReason == "" && (!exists || !isHighFrequencyAddress(metadata) && !g.addressCovered(metadata, requiredFrom, requiredThrough)) {
 				dependency := AddressNotSyncedError{Chain: request.Chain, Address: other}
 				if request.Direction == "out" {
 					dependency.StartBlock = transfer.BlockNumber
@@ -147,13 +149,16 @@ func (g *Graph) ExtendBranch(ctx context.Context, root Result, request Extension
 			if labelErr != nil {
 				return Result{}, labelErr
 			}
-			identity := addressIdentity(metadata)
-			terminal := metadata.IsTerminal || isHighFrequencyAddress(metadata) || dependencyStopReason != "" || hasTerminalLabel(labels)
+			terminal := metadata.IsTerminal || isHighFrequencyAddress(metadata) || dependencyStopReason != "" || hasTerminalLabel(labels) || knownWalletTerminal
 			if dependencyStopReason != "" {
 				result.DataStatus = "partial"
 			}
+			stopReason := dependencyStopReason
+			if knownWalletTerminal {
+				stopReason = string(store.StopTerminal)
+			}
 			result.Edges = append(result.Edges, edgeFromSummary(summary, anchorNode.Depth+1, path))
-			result.Nodes = appendNode(result.Nodes, Node{Chain: request.Chain, Address: other, Depth: anchorNode.Depth + 1, Terminal: terminal, AddressType: identity.AddressType, Protocol: identity.Protocol, Roles: identity.Roles, StopReason: dependencyStopReason})
+			result.Nodes = appendNode(result.Nodes, Node{Chain: request.Chain, Address: other, Depth: anchorNode.Depth + 1, Terminal: terminal, AddressType: identity.AddressType, Protocol: identity.Protocol, Roles: identity.Roles, StopReason: stopReason})
 			result.Paths = append(result.Paths, path)
 			result.MoneyTransfers = append(result.MoneyTransfers, moneyTransfer(summary, ""))
 			result.MoneyStates = append(result.MoneyStates,

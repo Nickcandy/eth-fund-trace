@@ -72,17 +72,22 @@ export function edgeLabelVisible(
   return showAll || selected || touchesSeed;
 }
 export function thorchainEdgeLabel(action?: string) {
-  return (
-    (
-      {
-        router_inbound: "进入 THORChain Router",
-        vault_migration: "THORChain Vault 迁移",
-        protocol_outbound: "THORChain 协议出站",
-        cross_chain_swap: "THORChain 跨链兑换",
-        refund: "THORChain 退款",
-      } as Record<string, string>
-    )[action ?? ""] ?? "THORChain 协议转移"
-  );
+	return crossChainEdgeLabel("thorchain", action);
+}
+
+export function crossChainEdgeLabel(protocol: string, action?: string) {
+	const name = protocol === "mayachain" ? "Maya Protocol" : "THORChain";
+	return (
+		(
+			{
+				router_inbound: `进入 ${name} Router`,
+				vault_migration: `${name} Vault 迁移`,
+				protocol_outbound: `${name} 协议出站`,
+				cross_chain_swap: `${name} 跨链兑换`,
+				refund: `${name} 退款`,
+			} as Record<string, string>
+		)[action ?? ""] ?? `${name} 协议转移`
+	);
 }
 
 function displayAssetSymbol(symbol: string | undefined): string | undefined {
@@ -463,8 +468,8 @@ function Canvas({
                 ? "流出"
                 : "逆向";
           const protocolKind =
-            edge.protocol === "thorchain"
-              ? `${thorchainEdgeLabel(edge.protocolAction)} · `
+				edge.protocol === "thorchain" || edge.protocol === "mayachain"
+					? `${crossChainEdgeLabel(edge.protocol, edge.protocolAction)} · `
               : "";
           const prefix = swap
             ? `${edge.chain} · Swap · `

@@ -327,7 +327,8 @@ textarea {
 }
 .node-signals {
   display: flex;
-  gap: 8px;
+  gap: 6px;
+  overflow: hidden;
 }
 .node-signals span {
   display: flex;
@@ -335,6 +336,7 @@ textarea {
   gap: 3px;
   font-size: 9px;
   color: #aeb8c2;
+  white-space: nowrap;
 }
 .seed .node-signals span {
   color: #4b5966;

@@ -104,6 +104,7 @@ type AddressIdentity struct {
 }
 
 type VerifiedCrossChainTransfer struct {
+	Protocol    string
 	SourceChain string
 	TargetChain string
 	From        string

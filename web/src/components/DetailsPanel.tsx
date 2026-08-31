@@ -332,11 +332,11 @@ export function DetailsPanel({
               </div>
             )}
           </section>
-          {edge.protocol === "thorchain" && (
+		  {(edge.protocol === "thorchain" || edge.protocol === "mayachain") && (
             <section>
               <div className="evidence-card">
                 <div>
-                  <strong>{thorchainActionLabel(edge.protocolAction)}</strong>
+				  <strong>{crossChainActionLabel(edge.protocol, edge.protocolAction)}</strong>
                   <span>
                     {edge.conversionStatus === "partial"
                       ? "验证暂不可用"
@@ -412,9 +412,10 @@ function Metric({ label, value }: { label: string; value: string | number }) {
   );
 }
 function roleName(role: string) {
-  if (role === "router") return "THORChain Router";
-  if (role === "thorchain_vault") return "THORChain Vault";
-  if (role === "cross_chain_bridge") return "跨链桥终点";
+	if (role === "router") return "THORChain Router";
+	if (role === "root_chain_manager") return "主链管理";
+	if (role === "thorchain_vault") return "THORChain Vault";
+	if (role === "cross_chain_bridge") return "跨链桥";
   if (role === "cross_chain_recipient") return "跨链收款地址";
   if (role === "kyberswap_router") return "KyberSwap Router";
   if (role === "kyberswap_executor") return "KyberSwap Executor";
@@ -444,18 +445,20 @@ function edgeFlowLabel(flow?: GraphEdgeModel["flow"]) {
       ? "资金从查询中心流出"
       : "逆向或同层转账";
 }
-function thorchainActionLabel(action?: string) {
-  return (
-    (
-      {
-        router_inbound: "THORChain · 进入 Router",
-        vault_migration: "THORChain · Vault 迁移",
-        protocol_outbound: "THORChain · 协议出站",
-        cross_chain_swap: "THORChain · 跨链兑换出站",
-        refund: "THORChain · 退款",
-      } as Record<string, string>
-    )[action ?? ""] ?? "THORChain · 协议转移"
-  );
+
+function crossChainActionLabel(protocol: string, action?: string) {
+	const name = protocol === "mayachain" ? "Maya Protocol" : "THORChain";
+	return (
+		(
+			{
+				router_inbound: `${name} · 进入 Router`,
+				vault_migration: `${name} · Vault 迁移`,
+				protocol_outbound: `${name} · 协议出站`,
+				cross_chain_swap: `${name} · 跨链兑换出站`,
+				refund: `${name} · 退款`,
+			} as Record<string, string>
+		)[action ?? ""] ?? `${name} · 协议转移`
+	);
 }
 function formatEdgeTime(value: string) {
   const date = new Date(value);

@@ -35,6 +35,7 @@ type Config struct {
 	EthereumRPCURL               string
 	THORChainStatusURL           string
 	THORChainClientID            string
+	MAYAChainStatusURL           string
 	BitcoinAPIURL                string
 	CrossChainHTTPTimeoutSeconds int
 }
@@ -70,6 +71,7 @@ func Load() Config {
 		EthereumRPCURL:               os.Getenv("ETHEREUM_RPC_URL"),
 		THORChainStatusURL:           value("THORCHAIN_STATUS_URL", "https://gateway.liquify.com/chain/thorchain_api"),
 		THORChainClientID:            value("THORCHAIN_CLIENT_ID", "eth-fund-trace"),
+		MAYAChainStatusURL:           value("MAYACHAIN_STATUS_URL", "https://mayanode.mayachain.info"),
 		BitcoinAPIURL:                value("BITCOIN_API_URL", "https://mempool.space"),
 		CrossChainHTTPTimeoutSeconds: intValue("CROSS_CHAIN_HTTP_TIMEOUT_SECONDS", 15),
 	}

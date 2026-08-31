@@ -76,7 +76,7 @@ export function FundNode({ data, selected }: NodeProps<FundFlowNode>) {
       </div>
       <div className="node-signals">
         {data.roles?.map((role) => (
-          <span key={role}>{roleLabel(role)}</span>
+          <span key={role}>{roleLabel(role, data.protocol)}</span>
         ))}
         {data.risk === "high" && (
           <span>
@@ -102,7 +102,7 @@ export function FundNode({ data, selected }: NodeProps<FundFlowNode>) {
             高频交易点
           </span>
         )}
-        {data.category === "contract" && (
+        {data.category === "contract" && !data.roles?.length && (
           <span>
             <Landmark size={13} />
             合约点
@@ -200,8 +200,11 @@ function ExpansionButton({
   );
 }
 
-function roleLabel(role: string) {
-  if (role === "router") return "THORChain Router";
+function roleLabel(role: string, protocol?: string) {
+  if (role === "router")
+    return protocol === "mayachain" ? "Maya Router" : "THOR Router";
+  if (role === "root_chain_manager") return "主链管理";
+  if (role === "cross_chain_bridge") return "跨链桥";
   if (role === "thorchain_vault") return "THORChain Vault";
   if (role === "cross_chain_recipient") return "跨链收款地址";
   if (role === "kyberswap_router") return "KyberSwap Router";

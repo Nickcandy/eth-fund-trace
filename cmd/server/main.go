@@ -15,6 +15,7 @@ import (
 	"github.com/Nickcandy/eth-fund-trace/internal/etherscan"
 	"github.com/Nickcandy/eth-fund-trace/internal/fundgraph"
 	"github.com/Nickcandy/eth-fund-trace/internal/httpapi"
+	"github.com/Nickcandy/eth-fund-trace/internal/mayachain"
 	"github.com/Nickcandy/eth-fund-trace/internal/profile"
 	"github.com/Nickcandy/eth-fund-trace/internal/store"
 	"github.com/Nickcandy/eth-fund-trace/internal/syncer"
@@ -86,6 +87,10 @@ func run(parent context.Context) error {
 		StatusBaseURL: cfg.THORChainStatusURL, BitcoinBaseURL: cfg.BitcoinAPIURL, ClientID: cfg.THORChainClientID,
 		HTTPClient: &http.Client{Timeout: time.Duration(cfg.CrossChainHTTPTimeoutSeconds) * time.Second},
 	})
+	mayaChainVerifier := mayachain.New(mayachain.Config{
+		StatusBaseURL: cfg.MAYAChainStatusURL, BitcoinBaseURL: cfg.BitcoinAPIURL,
+		HTTPClient: &http.Client{Timeout: time.Duration(cfg.CrossChainHTTPTimeoutSeconds) * time.Second},
+	})
 
 	e := echo.New()
 	e.HideBanner = true
@@ -103,6 +108,7 @@ func run(parent context.Context) error {
 	e.GET("/api/v1/edges", httpapi.NewEdgeHandler(fundgraph.New(appStore)).Get)
 	traceGraph := tracer.New(appStore).
 		WithTransactionAnalyzer(transactionAnalyzer).
+		WithCrossChainVerifier(mayaChainVerifier).
 		WithCrossChainVerifier(crossChainVerifier).
 		WithAddressInspector(transactionAnalyzer).
 		WithRequiredStartBlocks(map[string]int64{"ethereum": cfg.EthereumSyncStartBlock}).

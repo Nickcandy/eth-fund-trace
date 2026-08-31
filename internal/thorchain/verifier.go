@@ -127,7 +127,7 @@ func (v *Verifier) Verify(ctx context.Context, analysis store.TransactionAnalysi
 	if !bitcoin.Status.Confirmed || !strings.EqualFold(bitcoin.TxID, outHash) || !hasBitcoinOutput(bitcoin, analysis.ProtocolDestination, plannedAmount) {
 		return store.VerifiedCrossChainTransfer{}, false, nil
 	}
-	return store.VerifiedCrossChainTransfer{SourceChain: "ethereum", TargetChain: "bitcoin", From: strings.ToLower(analysis.To), To: strings.ToLower(analysis.ProtocolDestination), Asset: "BTC", Amount: plannedAmount, TxHash: outHash, BlockNumber: bitcoin.Status.BlockHeight}, true, nil
+	return store.VerifiedCrossChainTransfer{Protocol: "thorchain", SourceChain: "ethereum", TargetChain: "bitcoin", From: strings.ToLower(analysis.To), To: strings.ToLower(analysis.ProtocolDestination), Asset: "BTC", Amount: plannedAmount, TxHash: outHash, BlockNumber: bitcoin.Status.BlockHeight}, true, nil
 }
 
 func (v *Verifier) matchesInbound(analysis store.TransactionAnalysis, hash string, status transactionStatus) bool {

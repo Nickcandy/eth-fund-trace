@@ -106,12 +106,12 @@ export function stopReasonLabel(reason?: string): string {
       {
         high_frequency: "高频交易终点",
         unsupported_contract: "暂不支持的合约终点",
-        cross_chain_bridge: "跨链桥终点",
+        cross_chain_bridge: "跨链终点",
         ambiguous_conversion: "转换证据不足",
         missing_data: "数据缺失，停止追踪",
         no_matching_transfers: "当前覆盖范围无匹配后续",
         node_limit: "达到任务节点上限",
-        verified_cross_chain_endpoint: "已由 THORChain 与 Bitcoin 链上交易确认",
+        verified_cross_chain_endpoint: "链上已确认",
       } as Record<string, string>
     )[reason ?? ""] ?? "终点"
   );

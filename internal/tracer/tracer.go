@@ -153,7 +153,7 @@ const maxTraceNodes = 5000
 type Graph struct {
 	repository           Repository
 	analyzer             TransactionAnalyzer
-	crossChainVerifier   CrossChainVerifier
+	crossChainVerifiers  []CrossChainVerifier
 	inspector            AddressInspector
 	requiredStartBlocks  map[string]int64
 	existingDataOnly     bool
@@ -168,7 +168,7 @@ func (g *Graph) WithTransactionAnalyzer(analyzer TransactionAnalyzer) *Graph {
 }
 
 func (g *Graph) WithCrossChainVerifier(verifier CrossChainVerifier) *Graph {
-	g.crossChainVerifier = verifier
+	g.crossChainVerifiers = append(g.crossChainVerifiers, verifier)
 	return g
 }
 
@@ -289,13 +289,15 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 	visitedNodes := map[string]bool{seed: true}
 	seedStopReason := g.dependencyStopReason(q.Chain, seed)
 	seedIdentity := addressIdentity(metadata)
-	seedTerminal := metadata.IsTerminal || highFrequency || seedStopReason != "" || hasTerminalLabel(seedLabels) || isCrossChainBridge(seedIdentity)
+	seedTerminal := metadata.IsTerminal || highFrequency || seedStopReason != "" || hasTerminalLabel(seedLabels) || isKnownWalletTerminal(seedIdentity) || isCrossChainBridge(seedIdentity)
 	seedNode := Node{Chain: q.Chain, Address: seed, Depth: 0, Terminal: seedTerminal, AddressType: seedIdentity.AddressType, Protocol: seedIdentity.Protocol, Roles: seedIdentity.Roles}
 	if highFrequency {
 		seedNode.StopReason = "high_frequency"
 	} else if seedStopReason != "" {
 		seedNode.StopReason = seedStopReason
 		result.DataStatus = "partial"
+	} else if isKnownWalletTerminal(seedIdentity) {
+		seedNode.StopReason = string(store.StopTerminal)
 	} else if isCrossChainBridge(seedIdentity) {
 		seedNode.StopReason = "cross_chain_bridge"
 	}
@@ -416,9 +418,11 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 					return crossChainErr
 				}
 				if crossChainResolved {
-					identity.Protocol = "thorchain"
-					if !containsRole(identity.Roles, "thorchain_vault") {
-						identity.Roles = append(identity.Roles, "thorchain_vault")
+					if identity.Protocol == "" {
+						identity.Protocol = "thorchain"
+						if !containsRole(identity.Roles, "thorchain_vault") {
+							identity.Roles = append(identity.Roles, "thorchain_vault")
+						}
 					}
 					if err := g.repository.SetAddressIdentity(ctx, q.Chain, other, identity); err != nil {
 						return err
@@ -436,7 +440,8 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 				} else {
 					requiredThrough = summary.Representative.BlockNumber
 				}
-				if !crossChainResolved && !contract && !otherHighFrequency && dependencyStopReason == "" && (!otherFound || !g.addressCovered(otherMetadata, requiredFrom, requiredThrough)) {
+				knownWalletTerminal := isKnownWalletTerminal(identity)
+				if !crossChainResolved && !contract && !otherHighFrequency && !knownWalletTerminal && dependencyStopReason == "" && (!otherFound || !g.addressCovered(otherMetadata, requiredFrom, requiredThrough)) {
 					dependency := AddressNotSyncedError{Chain: q.Chain, Address: other}
 					if state.Direction == "out" {
 						dependency.StartBlock = summary.Representative.BlockNumber
@@ -460,7 +465,7 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 					return labelsErr
 				}
 				result.Labels = appendLabels(result.Labels, otherLabels)
-				terminal := crossChainResolved || otherMetadata.IsTerminal || otherHighFrequency && !contract || dependencyStopReason != "" || hasTerminalLabel(otherLabels) || isCrossChainBridge(identity)
+				terminal := crossChainResolved || otherMetadata.IsTerminal || otherHighFrequency && !contract || dependencyStopReason != "" || hasTerminalLabel(otherLabels) || knownWalletTerminal || isCrossChainBridge(identity)
 				if dependencyStopReason != "" {
 					result.DataStatus = "partial"
 				}
@@ -479,6 +484,8 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 						node.StopReason = "high_frequency"
 					} else if dependencyStopReason != "" {
 						node.StopReason = dependencyStopReason
+					} else if knownWalletTerminal {
+						node.StopReason = string(store.StopTerminal)
 					} else if isCrossChainBridge(identity) {
 						node.StopReason = "cross_chain_bridge"
 					}
@@ -910,7 +917,7 @@ func (g *Graph) conversionTransfer(ctx context.Context, chain string, state bran
 }
 
 func (g *Graph) appendVerifiedCrossChainEndpoints(ctx context.Context, chain string, state branchState, identity store.AddressIdentity, summary store.CounterpartySummary, depth int, path []string, result *Result) (bool, error) {
-	if state.Direction != "out" || chain != "ethereum" || g.analyzer == nil || g.crossChainVerifier == nil || summary.AssetType != "eth" {
+	if state.Direction != "out" || chain != "ethereum" || g.analyzer == nil || len(g.crossChainVerifiers) == 0 || summary.AssetType != "eth" {
 		return false, nil
 	}
 	// New sync rows carry calldata. Legacy rows are lazily re-read only for a
@@ -931,7 +938,7 @@ func (g *Graph) appendVerifiedCrossChainEndpoints(ctx context.Context, chain str
 		if !strings.EqualFold(transfer.From, summary.From) || !strings.EqualFold(transfer.To, summary.To) {
 			continue
 		}
-		ok, err := g.appendVerifiedCrossChainEndpoint(ctx, chain, transfer, depth, path, result, summary.TransferCount == 1)
+		ok, err := g.appendVerifiedCrossChainEndpoint(ctx, chain, transfer, identity.Protocol, depth, path, result, summary.TransferCount == 1)
 		if err != nil {
 			return false, err
 		}
@@ -940,7 +947,7 @@ func (g *Graph) appendVerifiedCrossChainEndpoints(ctx context.Context, chain str
 	return resolved, nil
 }
 
-func (g *Graph) appendVerifiedCrossChainEndpoint(ctx context.Context, chain string, transfer store.Transfer, depth int, path []string, result *Result, annotateInbound bool) (bool, error) {
+func (g *Graph) appendVerifiedCrossChainEndpoint(ctx context.Context, chain string, transfer store.Transfer, protocol string, depth int, path []string, result *Result, annotateInbound bool) (bool, error) {
 	analysis, err := g.analyzer.Analyze(ctx, chain, transfer.TxHash)
 	if err != nil {
 		return false, fmt.Errorf("analyze possible THORChain inbound: %w", err)
@@ -948,7 +955,14 @@ func (g *Graph) appendVerifiedCrossChainEndpoint(ctx context.Context, chain stri
 	if !strings.EqualFold(analysis.Chain, chain) || !strings.EqualFold(analysis.TxHash, transfer.TxHash) || analysis.ProtocolAction != "router_inbound" || analysis.ProtocolMemo == "" || analysis.ProtocolDestination == "" || !analysis.Succeeded || !strings.EqualFold(analysis.From, transfer.From) || !strings.EqualFold(analysis.To, transfer.To) || analysis.Value != transfer.Amount {
 		return false, nil
 	}
-	outbound, ok, err := g.crossChainVerifier.Verify(ctx, analysis)
+	var outbound VerifiedCrossChainTransfer
+	var ok bool
+	for _, verifier := range g.crossChainVerifiers {
+		outbound, ok, err = verifier.Verify(ctx, analysis)
+		if err != nil || ok {
+			break
+		}
+	}
 	if err != nil {
 		if ctx.Err() != nil {
 			return false, ctx.Err()
@@ -956,7 +970,7 @@ func (g *Graph) appendVerifiedCrossChainEndpoint(ctx context.Context, chain stri
 		result.DataStatus = "partial"
 		if annotateInbound && len(result.Edges) > 0 {
 			inbound := &result.Edges[len(result.Edges)-1]
-			inbound.Protocol = "thorchain"
+			inbound.Protocol = protocol
 			inbound.ProtocolAction = "router_inbound"
 			inbound.ProtocolMemo = analysis.ProtocolMemo
 			inbound.ConversionStatus = "partial"
@@ -967,9 +981,15 @@ func (g *Graph) appendVerifiedCrossChainEndpoint(ctx context.Context, chain stri
 	if !ok || outbound.SourceChain != "ethereum" || outbound.TargetChain != "bitcoin" || !strings.EqualFold(outbound.From, transfer.To) || !strings.EqualFold(outbound.To, analysis.ProtocolDestination) || !strings.EqualFold(outbound.Asset, "BTC") || outbound.Amount == "" || outbound.TxHash == "" {
 		return false, nil
 	}
+	if outbound.Protocol != "" {
+		protocol = outbound.Protocol
+	}
+	if protocol == "" {
+		protocol = "thorchain"
+	}
 	if annotateInbound && len(result.Edges) > 0 {
 		inbound := &result.Edges[len(result.Edges)-1]
-		inbound.Protocol = "thorchain"
+		inbound.Protocol = protocol
 		inbound.ProtocolAction = "router_inbound"
 		inbound.ProtocolMemo = analysis.ProtocolMemo
 		inbound.ConversionStatus = "complete"
@@ -981,16 +1001,16 @@ func (g *Graph) appendVerifiedCrossChainEndpoint(ctx context.Context, chain stri
 	result.Edges = append(result.Edges, Edge{
 		Chain: "bitcoin", SourceChain: "ethereum", TargetChain: "bitcoin", From: strings.ToLower(outbound.From), To: target,
 		AssetType: "native", Asset: "BTC", Symbol: "BTC", Decimals: 8, TotalAmount: outbound.Amount, TransferCount: 1,
-		Kind: "thorchain_cross_chain_outbound", Depth: depth + 1, Path: crossChainPath, TxHash: strings.ToLower(outbound.TxHash),
+		Kind: protocol + "_cross_chain_outbound", Depth: depth + 1, Path: crossChainPath, TxHash: strings.ToLower(outbound.TxHash),
 		SourceTxHash: strings.ToLower(transfer.TxHash), SourceAmount: transfer.Amount, SourceAsset: "ETH",
-		FirstBlock: outbound.BlockNumber, LatestBlock: outbound.BlockNumber, Protocol: "thorchain", ProtocolAction: "cross_chain_swap", ProtocolMemo: analysis.ProtocolMemo,
+		FirstBlock: outbound.BlockNumber, LatestBlock: outbound.BlockNumber, Protocol: protocol, ProtocolAction: "cross_chain_swap", ProtocolMemo: analysis.ProtocolMemo,
 	})
 	for _, node := range result.Nodes {
 		if node.Chain == "bitcoin" && strings.EqualFold(node.Address, target) {
 			return true, nil
 		}
 	}
-	result.Nodes = append(result.Nodes, Node{Chain: "bitcoin", Address: target, Depth: depth + 1, Terminal: true, AddressType: "unknown", Protocol: "thorchain", Roles: []string{"cross_chain_recipient"}, StopReason: "verified_cross_chain_endpoint"})
+	result.Nodes = append(result.Nodes, Node{Chain: "bitcoin", Address: target, Depth: depth + 1, Terminal: true, AddressType: "unknown", Protocol: protocol, Roles: []string{"cross_chain_recipient"}, StopReason: "verified_cross_chain_endpoint"})
 	result.Paths = append(result.Paths, crossChainPath)
 	return true, nil
 }
@@ -1277,6 +1297,10 @@ func hasTerminalLabel(labels []store.Label) bool {
 		}
 	}
 	return false
+}
+
+func isKnownWalletTerminal(identity store.AddressIdentity) bool {
+	return identity.Protocol == "woo_x" && containsRole(identity.Roles, "woo_x_wallet")
 }
 
 func nodeTerminal(nodes []Node, address string) bool {

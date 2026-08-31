@@ -31,11 +31,12 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("ETHEREUM_RPC_URL", "")
 	t.Setenv("THORCHAIN_STATUS_URL", "")
 	t.Setenv("THORCHAIN_CLIENT_ID", "")
+	t.Setenv("MAYACHAIN_STATUS_URL", "")
 	t.Setenv("BITCOIN_API_URL", "")
 	t.Setenv("CROSS_CHAIN_HTTP_TIMEOUT_SECONDS", "")
 
 	got := Load()
-	if got.THORChainStatusURL != "https://gateway.liquify.com/chain/thorchain_api" || got.THORChainClientID != "eth-fund-trace" || got.BitcoinAPIURL != "https://mempool.space" || got.CrossChainHTTPTimeoutSeconds != 15 {
+	if got.THORChainStatusURL != "https://gateway.liquify.com/chain/thorchain_api" || got.THORChainClientID != "eth-fund-trace" || got.MAYAChainStatusURL != "https://mayanode.mayachain.info" || got.BitcoinAPIURL != "https://mempool.space" || got.CrossChainHTTPTimeoutSeconds != 15 {
 		t.Fatalf("unexpected cross-chain defaults: %+v", got)
 	}
 	if got.HTTPAddr != ":8080" || got.HTTPTimeoutSeconds != 30 || got.HTTPBodyLimit != "1M" || got.HTTPRequestsPerSecond != 20 || got.HTTPBurst != 10 || got.MongoURI != "mongodb://localhost:27017" || got.MongoDatabase != "eth_fund_trace" || got.EtherscanBaseURL != "https://api.etherscan.io/v2/api" || got.EtherscanPageSize != 1000 || got.EtherscanMaxPages != 10 || got.EtherscanRequestsPerSecond != 3 || got.EtherscanBurst != 1 || got.EtherscanMaxRetries != 5 || got.EtherscanRetryBaseMS != 1000 || got.EtherscanHTTPTimeoutSeconds != 120 || got.SyncCacheTTLMinutes != 15 || got.SyncConfirmations != 12 || got.SyncQueueSize != 100 || got.SyncMaxRecordsPerAction != 50_000 || got.TraceExistingDataOnly || got.EthereumSyncStartBlock != 21525891 || got.EthereumSyncEndBlock != 0 {
@@ -72,11 +73,12 @@ func TestLoadEnvironment(t *testing.T) {
 	t.Setenv("ETHEREUM_RPC_URL", "https://ethereum.example/rpc")
 	t.Setenv("THORCHAIN_STATUS_URL", "https://thor.example")
 	t.Setenv("THORCHAIN_CLIENT_ID", "trace-test")
+	t.Setenv("MAYACHAIN_STATUS_URL", "https://maya.example")
 	t.Setenv("BITCOIN_API_URL", "https://bitcoin.example")
 	t.Setenv("CROSS_CHAIN_HTTP_TIMEOUT_SECONDS", "9")
 
 	got := Load()
-	if got.THORChainStatusURL != "https://thor.example" || got.THORChainClientID != "trace-test" || got.BitcoinAPIURL != "https://bitcoin.example" || got.CrossChainHTTPTimeoutSeconds != 9 {
+	if got.THORChainStatusURL != "https://thor.example" || got.THORChainClientID != "trace-test" || got.MAYAChainStatusURL != "https://maya.example" || got.BitcoinAPIURL != "https://bitcoin.example" || got.CrossChainHTTPTimeoutSeconds != 9 {
 		t.Fatalf("unexpected cross-chain environment: %+v", got)
 	}
 	if got.HTTPAddr != ":9090" || got.HTTPAPIKey != "api-secret" || !got.HTTPAuthDisabled || got.HTTPTimeoutSeconds != 12 || got.HTTPBodyLimit != "2M" || got.HTTPRequestsPerSecond != 8 || got.HTTPBurst != 3 || got.MongoURI != "mongodb://mongo:27017" || got.MongoDatabase != "test_db" || got.EtherscanAPIKey != "secret" || got.EtherscanBaseURL != "http://localhost:9999/api" || got.EtherscanPageSize != 25 || got.EtherscanMaxPages != 4 || got.EtherscanRequestsPerSecond != 7 || got.EtherscanBurst != 2 || got.EtherscanMaxRetries != 4 || got.EtherscanRetryBaseMS != 25 || got.EtherscanHTTPTimeoutSeconds != 45 || got.SyncCacheTTLMinutes != 30 || got.SyncConfirmations != 20 || got.SyncQueueSize != 50 || got.SyncMaxRecordsPerAction != 100_000 || !got.TraceExistingDataOnly || got.EthereumSyncStartBlock != 22000000 || got.EthereumSyncEndBlock != 25860787 || got.EthereumRPCURL != "https://ethereum.example/rpc" {

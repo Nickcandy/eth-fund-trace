@@ -18,7 +18,7 @@ import (
 
 const (
 	// AnalysisVersion invalidates cached analyses when semantic rules change.
-	AnalysisVersion   = "transaction-analysis-v11"
+	AnalysisVersion   = "transaction-analysis-v12"
 	EthereumV3Factory = "0x1f98431c8ad98523631ae4a59f267346ea31f984"
 	EthereumWETH      = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
 	// KyberSwapRouter is the Ethereum MetaAggregation Router supported by the RFQ adapter.
@@ -26,6 +26,7 @@ const (
 	// KyberSwapExecutor is the Ethereum Executor supported by the RFQ adapter.
 	KyberSwapExecutor          = "0x6e4141d33021b52c91c28608403db4a0ffb50ec6"
 	THORChainRouter            = "0xd37bbe5744d730a1d98d8dc97c42f0ca46ad7146"
+	MAYAChainRouter            = "0xe3985e6b61b814f7cdb188766562ba71b446b46d"
 	BitTorrentRootChainManager = "0xd06029b23e9d4cd24bad01d436837fa02b8f0dd9"
 	BitTorrentEtherPredicate   = "0xa2611f4488c92e1a91eb4d2a8d30110eba9925b5"
 	lockedEtherTopic           = "0x3e799b2d61372379e767ef8f04d65089179b7a6f63f9be3065806456c7309f1b"
@@ -54,6 +55,7 @@ var officialContracts = map[string]string{
 	KyberSwapRouter:            "KyberSwap MetaAggregation Router",
 	KyberSwapExecutor:          "KyberSwap Executor",
 	THORChainRouter:            "THORChain Router v4",
+	MAYAChainRouter:            "Maya Protocol ETH Router v4",
 	BitTorrentRootChainManager: "BitTorrent Chain RootChainManager",
 	BitTorrentEtherPredicate:   "BitTorrent Chain EtherPredicate",
 	EthereumL1StandardBridge:   "Base L1 Standard Bridge",
@@ -63,6 +65,7 @@ var contractIdentities = map[string]store.AddressIdentity{
 	KyberSwapRouter:            {AddressType: "contract", Protocol: "kyberswap", Roles: []string{"kyberswap_router"}},
 	KyberSwapExecutor:          {AddressType: "contract", Protocol: "kyberswap", Roles: []string{"kyberswap_executor"}},
 	THORChainRouter:            {AddressType: "contract", Protocol: "thorchain", Roles: []string{"router"}},
+	MAYAChainRouter:            {AddressType: "contract", Protocol: "mayachain", Roles: []string{"router"}},
 	BitTorrentRootChainManager: {AddressType: "contract", Protocol: "bittorrent_bridge", Roles: []string{"root_chain_manager", "cross_chain_bridge"}},
 	BitTorrentEtherPredicate:   {AddressType: "contract", Protocol: "bittorrent_bridge", Roles: []string{"ether_predicate", "cross_chain_bridge"}},
 	EthereumV3Factory:          {AddressType: "contract", Protocol: "uniswap", Roles: []string{"factory"}},
@@ -238,6 +241,13 @@ func (s *Service) Analyze(ctx context.Context, chain, txHash string) (store.Tran
 		} else if isTHORChainTransferOutAction(analysis.ProtocolAction) {
 			analysis.Quality.Evidence = append(analysis.Quality.Evidence, "verified THORChain transferOut")
 		}
+	case analysis.Succeeded && analysis.To == MAYAChainRouter:
+		if !parseMAYAChainDeposit(&analysis) {
+			analysis.Quality.Status = "partial"
+			analysis.Quality.Issues = append(analysis.Quality.Issues, "unsupported or malformed MayaChain calldata")
+		} else {
+			analysis.Quality.Evidence = append(analysis.Quality.Evidence, "decoded MayaChain inbound memo intent")
+		}
 	case analysis.Succeeded && parseTHORChainInboundMemo(&analysis):
 		analysis.Quality.Evidence = append(analysis.Quality.Evidence, "decoded THORChain inbound memo intent")
 	case analysis.To == KyberSwapRouter:
@@ -301,7 +311,15 @@ func parseBitTorrentBridge(analysis *store.TransactionAnalysis, logs []etherscan
 // parseTHORChainDeposit decodes depositWithExpiry(address,address,uint256,string,uint256).
 // The memo is an ABI dynamic string at the offset in argument three.
 func parseTHORChainDeposit(analysis *store.TransactionAnalysis) bool {
-	if !analysis.Succeeded || analysis.To != THORChainRouter || len(analysis.Input) < 10 || !strings.EqualFold(analysis.Input[2:10], "44bc937b") {
+	return parseRouterDeposit(analysis, THORChainRouter)
+}
+
+func parseMAYAChainDeposit(analysis *store.TransactionAnalysis) bool {
+	return parseRouterDeposit(analysis, MAYAChainRouter)
+}
+
+func parseRouterDeposit(analysis *store.TransactionAnalysis, router string) bool {
+	if !analysis.Succeeded || analysis.To != router || len(analysis.Input) < 10 || !strings.EqualFold(analysis.Input[2:10], "44bc937b") {
 		return false
 	}
 	raw, err := hex.DecodeString(strings.TrimPrefix(analysis.Input[10:], "0x"))

@@ -6,7 +6,8 @@ import {
   expansionPathKeys,
   matchesAssetFilter,
   revealedNodeIDs,
-  thorchainEdgeLabel,
+	thorchainEdgeLabel,
+	crossChainEdgeLabel,
 } from "./GraphCanvas";
 import type { GraphEdgeModel, GraphNodeModel } from "../graph/model";
 
@@ -192,6 +193,12 @@ describe("GraphCanvas THORChain semantics", () => {
     expect(thorchainEdgeLabel("vault_migration")).toBe("THORChain Vault 迁移");
     expect(thorchainEdgeLabel("protocol_outbound")).toBe("THORChain 协议出站");
     expect(thorchainEdgeLabel("cross_chain_swap")).toBe("THORChain 跨链兑换");
-    expect(thorchainEdgeLabel("refund")).toBe("THORChain 退款");
+	expect(thorchainEdgeLabel("refund")).toBe("THORChain 退款");
+	expect(crossChainEdgeLabel("mayachain", "router_inbound")).toBe(
+		"进入 Maya Protocol Router",
+	);
+	expect(crossChainEdgeLabel("mayachain", "cross_chain_swap")).toBe(
+		"Maya Protocol 跨链兑换",
+	);
   });
 });
