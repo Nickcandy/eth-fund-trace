@@ -28,6 +28,57 @@ func TestTraceFiltersLowValueEthereumTransfers(t *testing.T) {
 	}
 }
 
+func TestTraceFiltersAmountBelowThresholdAfterBudgetClipping(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	anchor := "0x0000000000000000000000000000000000000002"
+	first := "0x0000000000000000000000000000000000000003"
+	dust := "0x0000000000000000000000000000000000000004"
+	repository := &fakeRepository{
+		addresses: map[string]store.Address{
+			seed: completeAddress(0, 100), anchor: completeAddress(0, 100),
+			first: completeAddress(0, 100), dust: completeAddress(0, 100),
+		},
+		labels: map[string][]store.Label{},
+		transfers: []store.Transfer{
+			{Chain: "ethereum", ChainID: 1, TxHash: "0xin", BlockNumber: 10, From: seed, To: anchor, AssetType: "eth", Asset: "ETH", Amount: "20000000000000000"},
+			{Chain: "ethereum", ChainID: 1, TxHash: "0xfirst", BlockNumber: 11, From: anchor, To: first, AssetType: "eth", Asset: "ETH", Amount: "15000000000000000"},
+			{Chain: "ethereum", ChainID: 1, TxHash: "0xdust", BlockNumber: 12, From: anchor, To: dust, AssetType: "eth", Asset: "ETH", Amount: "20000000000000000"},
+		},
+	}
+
+	result, err := New(repository).Trace(context.Background(), Query{Chain: "ethereum", Address: seed, Direction: "out"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Edges) != 2 || result.Edges[1].To != first {
+		t.Fatalf("edges=%+v, want clipped 0.005 ETH edge excluded", result.Edges)
+	}
+}
+
+func TestExtendBranchFiltersAmountBelowThresholdAfterBudgetClipping(t *testing.T) {
+	seed := "0x0000000000000000000000000000000000000001"
+	anchor := "0x0000000000000000000000000000000000000002"
+	next := "0x0000000000000000000000000000000000000003"
+	repository := &fakeRepository{
+		addresses: map[string]store.Address{anchor: completeAddress(0, 100), next: completeAddress(0, 100)},
+		labels:    map[string][]store.Label{},
+		transfers: []store.Transfer{
+			{Chain: "ethereum", ChainID: 1, TxHash: "0xnext", BlockNumber: 11, From: anchor, To: next, AssetType: "eth", Asset: "ETH", Amount: "20000000000000000"},
+		},
+	}
+	root := Result{Nodes: []Node{{Chain: "ethereum", Address: seed}, {Chain: "ethereum", Address: anchor, Depth: 1}}, DataThroughBlock: 100, Edges: []Edge{
+		{Chain: "ethereum", From: seed, To: anchor, AssetType: "eth", Asset: "ETH", TotalAmount: "5000000000000000", FirstBlock: 10, LatestBlock: 10, Path: []string{seed, anchor}},
+	}}
+
+	result, err := New(repository).ExtendBranch(context.Background(), root, ExtensionRequest{Chain: "ethereum", Address: anchor, Direction: "out", Depth: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Edges) != 0 {
+		t.Fatalf("edges=%+v, want clipped 0.005 ETH edge excluded", result.Edges)
+	}
+}
+
 func TestAboveTraceThreshold(t *testing.T) {
 	tests := []struct {
 		name    string

@@ -58,6 +58,34 @@ describe("DetailsPanel labels", () => {
     expect(screen.getByText("1.2346 ETH")).toBeVisible();
     expect(screen.getByText("区块 123")).toBeVisible();
   });
+
+  it("shows the Relay Solver identity", () => {
+    const node: GraphNodeModel = {
+      id: "ethereum:relay",
+      chain: "ethereum",
+      address: "0xf70da97812cb96acdf810712aa562db8dfa3dbef",
+      hop: 0,
+      terminal: false,
+      seed: true,
+      risk: "normal",
+      hotWallet: false,
+      labelTypes: [],
+      addressType: "eoa",
+      protocol: "relay",
+      roles: ["solver"],
+    };
+    render(
+      <DetailsPanel
+        node={node}
+        labels={[]}
+        onLabel={vi.fn()}
+        onClose={() => undefined}
+        onFocus={() => undefined}
+      />,
+    );
+    expect(screen.getByText("Relay Solver")).toBeVisible();
+    expect(screen.getByText("relay · eoa")).toBeVisible();
+  });
   it("creates a label for the selected node from the labels tab", async () => {
     const user = userEvent.setup();
     const onLabel = vi.fn().mockResolvedValue(undefined);

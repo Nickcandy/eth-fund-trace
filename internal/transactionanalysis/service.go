@@ -18,7 +18,7 @@ import (
 
 const (
 	// AnalysisVersion invalidates cached analyses when semantic rules change.
-	AnalysisVersion   = "transaction-analysis-v12"
+	AnalysisVersion   = "transaction-analysis-v13"
 	EthereumV3Factory = "0x1f98431c8ad98523631ae4a59f267346ea31f984"
 	EthereumWETH      = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
 	// KyberSwapRouter is the Ethereum MetaAggregation Router supported by the RFQ adapter.
@@ -27,6 +27,7 @@ const (
 	KyberSwapExecutor          = "0x6e4141d33021b52c91c28608403db4a0ffb50ec6"
 	THORChainRouter            = "0xd37bbe5744d730a1d98d8dc97c42f0ca46ad7146"
 	MAYAChainRouter            = "0xe3985e6b61b814f7cdb188766562ba71b446b46d"
+	RelaySolver                = "0xf70da97812cb96acdf810712aa562db8dfa3dbef"
 	BitTorrentRootChainManager = "0xd06029b23e9d4cd24bad01d436837fa02b8f0dd9"
 	BitTorrentEtherPredicate   = "0xa2611f4488c92e1a91eb4d2a8d30110eba9925b5"
 	lockedEtherTopic           = "0x3e799b2d61372379e767ef8f04d65089179b7a6f63f9be3065806456c7309f1b"
@@ -73,6 +74,10 @@ var contractIdentities = map[string]store.AddressIdentity{
 	EthereumL1StandardBridge:   {AddressType: "contract", Protocol: "bridge", Roles: []string{"cross_chain_bridge"}},
 }
 
+var knownEOAIdentities = map[string]store.AddressIdentity{
+	RelaySolver: {AddressType: "eoa", Protocol: "relay", Roles: []string{"solver"}},
+}
+
 // wooXIdentities contains the Ethereum addresses publicly labelled for WOO X.
 // The list is based on the public EVM CEX address registry (2025-01-07,
 // https://gist.github.com/xfwil/07dadf39ae559829132952734ca524f3), with role
@@ -111,7 +116,7 @@ func (s *Service) InspectAddress(ctx context.Context, chain, address string) (st
 		return store.AddressIdentity{}, ErrUnsupportedChain
 	}
 	address = strings.ToLower(strings.TrimSpace(address))
-	if identity, ok := wooXIdentities[address]; ok {
+	if identity, ok := s.KnownAddressIdentity(chain, address); ok {
 		return identity, nil
 	}
 	code, err := s.source.CodeAt(ctx, address)
@@ -134,6 +139,21 @@ func (s *Service) InspectAddress(ctx context.Context, chain, address string) (st
 	return store.AddressIdentity{AddressType: "contract"}, nil
 }
 
+// KnownAddressIdentity returns static protocol attribution without an RPC call.
+func (s *Service) KnownAddressIdentity(chain, address string) (store.AddressIdentity, bool) {
+	if strings.ToLower(strings.TrimSpace(chain)) != "ethereum" {
+		return store.AddressIdentity{}, false
+	}
+	address = strings.ToLower(strings.TrimSpace(address))
+	if identity, ok := knownEOAIdentities[address]; ok {
+		return identity, true
+	}
+	if identity, ok := wooXIdentities[address]; ok {
+		return identity, true
+	}
+	return store.AddressIdentity{}, false
+}
+
 // Repository persists transaction analysis and pool metadata caches.
 type Repository interface {
 	FindTransactionAnalysis(context.Context, string, string) (store.TransactionAnalysis, bool, error)
@@ -142,11 +162,24 @@ type Repository interface {
 	SavePoolMetadata(context.Context, store.PoolMetadata) error
 }
 
+// RelayVerifier verifies a solver payment against Relay and its source-chain transaction.
+type RelayVerifier interface {
+	Supports(store.TransactionAnalysis) bool
+	Verify(context.Context, store.TransactionAnalysis) (store.CrossChainAnalysis, bool, error)
+}
+
 // Service analyzes confirmed Ethereum transaction receipts.
 type Service struct {
-	source Source
-	repo   Repository
-	now    func() time.Time
+	source        Source
+	repo          Repository
+	relayVerifier RelayVerifier
+	now           func() time.Time
+}
+
+// WithRelayVerifier enables verified Relay destination parsing.
+func (s *Service) WithRelayVerifier(verifier RelayVerifier) *Service {
+	s.relayVerifier = verifier
+	return s
 }
 
 // New creates a transaction analysis service.
@@ -250,6 +283,23 @@ func (s *Service) Analyze(ctx context.Context, chain, txHash string) (store.Tran
 		}
 	case analysis.Succeeded && parseTHORChainInboundMemo(&analysis):
 		analysis.Quality.Evidence = append(analysis.Quality.Evidence, "decoded THORChain inbound memo intent")
+	case analysis.Succeeded && s.relayVerifier != nil && s.relayVerifier.Supports(analysis):
+		crossChain, found, verifyErr := s.relayVerifier.Verify(ctx, analysis)
+		if verifyErr != nil {
+			analysis.Quality.Status = "partial"
+			analysis.Quality.Issues = append(analysis.Quality.Issues, "Relay verification unavailable: "+verifyErr.Error())
+		} else if found {
+			analysis.CrossChain = &crossChain
+			analysis.ProtocolAction = "relay_cross_chain_transfer"
+			analysis.ProtocolMemo = crossChain.RequestID
+			analysis.ProtocolDestination = crossChain.To
+			analysis.ProtocolAsset = crossChain.TargetAsset
+			analysis.ProtocolAmount = crossChain.TargetAmount
+			analysis.Quality.Evidence = append(analysis.Quality.Evidence, "verified Relay status and Arbitrum source transaction")
+		} else {
+			analysis.Quality.Status = "partial"
+			analysis.Quality.Issues = append(analysis.Quality.Issues, "Relay candidate could not be verified")
+		}
 	case analysis.To == KyberSwapRouter:
 		s.finalizeKyberRFQ(&analysis, internalErr)
 	default:

@@ -412,6 +412,7 @@ function Metric({ label, value }: { label: string; value: string | number }) {
   );
 }
 function roleName(role: string) {
+	if (role === "solver") return "Relay Solver";
 	if (role === "router") return "THORChain Router";
 	if (role === "root_chain_manager") return "主链管理";
 	if (role === "thorchain_vault") return "THORChain Vault";

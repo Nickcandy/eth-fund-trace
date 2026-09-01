@@ -425,6 +425,7 @@ export interface TransactionAnalysis {
     | "vault_migration"
     | "protocol_outbound"
     | "cross_chain_swap"
+    | "relay_cross_chain_transfer"
     | "bittorrent_bridge_inbound"
     | "refund"
     | "protocol_internal";
@@ -432,6 +433,24 @@ export interface TransactionAnalysis {
   protocolDestination?: string;
   protocolAsset?: string;
   protocolAmount?: string;
+  crossChain?: {
+    protocol: string;
+    status: "complete";
+    requestId: string;
+    sourceChain: string;
+    sourceChainId: number;
+    targetChain: string;
+    targetChainId: number;
+    sourceTxHash: string;
+    targetTxHash: string;
+    from: string;
+    to: string;
+    sourceAsset: string;
+    sourceAmount: string;
+    targetAsset: string;
+    targetAmount: string;
+    feeAmount: string;
+  };
   quality: {
     status: "complete" | "partial";
     ambiguousRoute: boolean;

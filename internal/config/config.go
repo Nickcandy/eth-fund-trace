@@ -36,6 +36,8 @@ type Config struct {
 	THORChainStatusURL           string
 	THORChainClientID            string
 	MAYAChainStatusURL           string
+	RelayStatusURL               string
+	ArbitrumRPCURL               string
 	BitcoinAPIURL                string
 	CrossChainHTTPTimeoutSeconds int
 }
@@ -72,6 +74,8 @@ func Load() Config {
 		THORChainStatusURL:           value("THORCHAIN_STATUS_URL", "https://gateway.liquify.com/chain/thorchain_api"),
 		THORChainClientID:            value("THORCHAIN_CLIENT_ID", "eth-fund-trace"),
 		MAYAChainStatusURL:           value("MAYACHAIN_STATUS_URL", "https://mayanode.mayachain.info"),
+		RelayStatusURL:               value("RELAY_STATUS_URL", "https://api.relay.link"),
+		ArbitrumRPCURL:               value("ARBITRUM_RPC_URL", "https://arb1.arbitrum.io/rpc"),
 		BitcoinAPIURL:                value("BITCOIN_API_URL", "https://mempool.space"),
 		CrossChainHTTPTimeoutSeconds: intValue("CROSS_CHAIN_HTTP_TIMEOUT_SECONDS", 15),
 	}

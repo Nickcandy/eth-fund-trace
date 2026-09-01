@@ -47,7 +47,7 @@
     <tr><td>无法安全解释</td><td><code>ambiguous_conversion</code></td><td>合约交易没有唯一、完整的资产转换证据</td></tr>
     <tr><td>数据边界</td><td><code>missing_data</code> / <code>high_frequency</code></td><td>补同步仍失败，或记录量触发保护</td></tr>
     <tr><td>自然结束</td><td><code>no_matching_transfers</code></td><td>当前方向、资产、时间窗口内无符合条件的事实</td></tr>
-    <tr><td>计算保护</td><td><code>cycle</code> / <code>node_limit</code></td><td>环路不重复扩展；全图最多 5,000 节点</td></tr>
+    <tr><td>计算保护</td><td>状态去重 / <code>node_limit</code></td><td>入口交易状态不重复扩展；全图最多 5,000 节点</td></tr>
   </table>
   <p>关键区分：终点不是“坏地址”，而是“当前规则下不再扩展的边界”。风险标签、数据不完整和资源保护不能混成一个概念。</p>
 

@@ -83,4 +83,37 @@ describe("TransactionView", () => {
       view.queryByRole("button", { name: /继续追踪/ }),
     ).not.toBeInTheDocument();
   });
+
+  it("shows a verified Relay cross-chain route", () => {
+    render(
+      <TransactionView
+        analysis={{
+          ...analysis,
+          protocolAction: "relay_cross_chain_transfer",
+          crossChain: {
+            protocol: "relay",
+            status: "complete",
+            requestId: `0x${"b".repeat(64)}`,
+            sourceChain: "arbitrum",
+            sourceChainId: 42161,
+            targetChain: "ethereum",
+            targetChainId: 1,
+            sourceTxHash: `0x${"c".repeat(64)}`,
+            targetTxHash: analysis.txHash,
+            from: address,
+            to: address,
+            sourceAsset: "ETH",
+            sourceAmount: "127990000000000000000",
+            targetAsset: "ETH",
+            targetAmount: "127957978616285681831",
+            feeAmount: "32021383714318169",
+          },
+        }}
+        onTrace={() => undefined}
+      />,
+    );
+    expect(screen.getByText("Relay 跨链转账")).toBeVisible();
+    expect(screen.getByText(/Relay arbitrum/)).toBeVisible();
+    expect(screen.getByText(/协议费用 0.032 ETH/)).toBeVisible();
+  });
 });

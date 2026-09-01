@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import type { TransactionAnalysis } from "../api/types";
 import { formatChainAmount } from "../lib/format";
+import { CrossChainRoute } from "./CrossChainRoute";
 
 interface Props {
   analysis: TransactionAnalysis;
@@ -60,6 +61,8 @@ export function TransactionView({ analysis, onTrace }: Props) {
                   ? "THORChain 协议出站"
                 : analysis.protocolAction === "cross_chain_swap"
                   ? "THORChain 跨链兑换"
+                  : analysis.protocolAction === "relay_cross_chain_transfer"
+                    ? "Relay 跨链转账"
                   : analysis.protocolAction === "bittorrent_bridge_inbound"
                     ? "BitTorrent Bridge 入桥"
                     : analysis.protocolAction
@@ -153,7 +156,8 @@ export function TransactionView({ analysis, onTrace }: Props) {
           <h3>
             <RefreshCw size={15} /> WETH 包装事件
           </h3>
-          {analysis.protocolDestination && (
+          {analysis.crossChain && <CrossChainRoute route={analysis.crossChain} />}
+          {analysis.protocolDestination && !analysis.crossChain && (
             <div className="wrap-row">
               <strong>
                 {analysis.protocolAction === "bittorrent_bridge_inbound"

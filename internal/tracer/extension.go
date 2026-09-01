@@ -102,7 +102,6 @@ func (g *Graph) ExtendBranch(ctx context.Context, root Result, request Extension
 			if other == "" {
 				continue
 			}
-			cycle := pathContains(anchor.Path, other)
 			amount, valid := new(big.Int).SetString(summary.TotalAmount, 10)
 			if !valid || amount.Sign() <= 0 || budget.Sign() <= 0 {
 				continue
@@ -112,17 +111,10 @@ func (g *Graph) ExtendBranch(ctx context.Context, root Result, request Extension
 			}
 			summary.TotalAmount = amount.String()
 			budget.Sub(budget, amount)
-			path := append(append([]string(nil), anchor.Path...), other)
-			if cycle {
-				result.Edges = append(result.Edges, edgeFromSummary(summary, anchorNode.Depth+1, path))
-				result.Paths = append(result.Paths, path)
-				result.MoneyTransfers = append(result.MoneyTransfers, moneyTransfer(summary, store.StopCycle))
-				result.MoneyStates = append(result.MoneyStates,
-					store.MoneyState{Chain: summary.Chain, Address: strings.ToLower(summary.From), Direction: "out", AssetType: summary.AssetType, Asset: summary.Asset, Amount: summary.TotalAmount, RemainingAmount: summary.TotalAmount, EntryTxHash: summary.Representative.TxHash, EntryBlock: summary.Representative.BlockNumber, Path: path, Evidence: "transfer", Inferred: true},
-					store.MoneyState{Chain: summary.Chain, Address: strings.ToLower(summary.To), Direction: "in", AssetType: summary.AssetType, Asset: summary.Asset, Amount: summary.TotalAmount, RemainingAmount: summary.TotalAmount, EntryTxHash: summary.Representative.TxHash, EntryBlock: summary.Representative.BlockNumber, Path: path, Evidence: "transfer", Inferred: true},
-				)
+			if !aboveTraceThreshold(summary) {
 				continue
 			}
+			path := append(append([]string(nil), anchor.Path...), other)
 			metadata, exists, metadataErr := g.repository.FindAddress(ctx, request.Chain, other)
 			if metadataErr != nil {
 				return Result{}, metadataErr

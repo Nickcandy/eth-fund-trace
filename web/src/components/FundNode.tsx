@@ -201,6 +201,7 @@ function ExpansionButton({
 }
 
 function roleLabel(role: string, protocol?: string) {
+  if (role === "solver") return "Relay Solver";
   if (role === "router")
     return protocol === "mayachain" ? "Maya Router" : "THOR Router";
   if (role === "root_chain_manager") return "主链管理";

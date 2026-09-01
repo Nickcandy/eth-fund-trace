@@ -19,6 +19,15 @@ type addressProviderStub struct {
 	labels  []store.Label
 }
 
+type knownAddressInspectorStub struct {
+	identity store.AddressIdentity
+	found    bool
+}
+
+func (s knownAddressInspectorStub) KnownAddressIdentity(string, string) (store.AddressIdentity, bool) {
+	return s.identity, s.found
+}
+
 func (s addressProviderStub) FindAddress(context.Context, string, string) (store.Address, bool, error) {
 	return s.address, s.found, nil
 }
@@ -34,6 +43,20 @@ func TestAddressHandlerReturnsMetadataAndLabels(t *testing.T) {
 	res := httptest.NewRecorder()
 	e.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/api/v1/addresses/"+seed+"?chain=ethereum", nil))
 	if res.Code != 200 || !containsAll(res.Body.String(), `"chainId":1`, `"exchange"`) {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestAddressHandlerRefreshesKnownRelayIdentity(t *testing.T) {
+	const solver = "0xf70da97812cb96acdf810712aa562db8dfa3dbef"
+	e := echo.New()
+	h := NewAddressHandler(addressProviderStub{address: store.Address{Chain: "ethereum", ChainID: 1, Address: solver, AddressType: "eoa"}, found: true}).WithKnownAddressInspector(knownAddressInspectorStub{
+		identity: store.AddressIdentity{AddressType: "eoa", Protocol: "relay", Roles: []string{"solver"}}, found: true,
+	})
+	e.GET("/api/v1/addresses/:address", h.Get)
+	res := httptest.NewRecorder()
+	e.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/api/v1/addresses/"+solver+"?chain=ethereum", nil))
+	if res.Code != http.StatusOK || !containsAll(res.Body.String(), `"protocol":"relay"`, `"roles":["solver"]`) {
 		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
 	}
 }

@@ -19,7 +19,7 @@ var ErrInvalidQuery = errors.New("invalid trace query")
 var ErrAddressNotSynced = errors.New("address is not synced")
 
 const (
-	traceRuleVersion       = "trace-v6"
+	traceRuleVersion       = "trace-v9"
 	traceTransferRecordCap = 50_000
 )
 
@@ -51,6 +51,10 @@ type VerifiedCrossChainTransfer = store.VerifiedCrossChainTransfer
 // AddressInspector resolves chain-confirmed account types before graph expansion.
 type AddressInspector interface {
 	InspectAddress(context.Context, string, string) (store.AddressIdentity, error)
+}
+
+type knownAddressInspector interface {
+	KnownAddressIdentity(string, string) (store.AddressIdentity, bool)
 }
 
 type Query struct {
@@ -289,6 +293,12 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 	visitedNodes := map[string]bool{seed: true}
 	seedStopReason := g.dependencyStopReason(q.Chain, seed)
 	seedIdentity := addressIdentity(metadata)
+	if identity, known := g.knownAddressIdentity(q.Chain, seed); known {
+		seedIdentity = identity
+		if err := g.repository.SetAddressIdentity(ctx, q.Chain, seed, identity); err != nil {
+			return Result{}, err
+		}
+	}
 	seedTerminal := metadata.IsTerminal || highFrequency || seedStopReason != "" || hasTerminalLabel(seedLabels) || isKnownWalletTerminal(seedIdentity) || isCrossChainBridge(seedIdentity)
 	seedNode := Node{Chain: q.Chain, Address: seed, Depth: 0, Terminal: seedTerminal, AddressType: seedIdentity.AddressType, Protocol: seedIdentity.Protocol, Roles: seedIdentity.Roles}
 	if highFrequency {
@@ -304,7 +314,7 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 	result.Nodes = append(result.Nodes, seedNode)
 	for _, direction := range directions {
 		for _, asset := range assets {
-			state := branchState{Address: seed, Direction: direction, AssetMode: asset.AssetMode, Asset: asset.Asset, Path: []string{seed}}
+			state := branchState{Address: seed, Direction: direction, AssetMode: asset.AssetMode, Asset: asset.Asset, Identity: seedIdentity, Path: []string{seed}}
 			frontier = append(frontier, state)
 			visitedStates[branchStateKey(state)] = true
 			result.branchStates = append(result.branchStates, state)
@@ -346,7 +356,11 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 				if other == "" {
 					continue
 				}
-				cycle := pathContains(state.Path, other)
+				assetMode, asset := summaryAsset(summary)
+				stateKey := branchStateKey(branchState{Address: other, Direction: state.Direction, AssetMode: assetMode, Asset: asset, AnchorBlock: summary.Representative.BlockNumber, EnteringTx: summary.Representative})
+				if visitedStates[stateKey] {
+					continue
+				}
 				amount, amountOK := new(big.Int).SetString(summary.TotalAmount, 10)
 				if !amountOK || amount.Sign() <= 0 || budget != nil && budget.Sign() <= 0 {
 					continue
@@ -358,6 +372,9 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 					budget.Sub(budget, amount)
 				}
 				summary.TotalAmount = amount.String()
+				if !aboveTraceThreshold(summary) {
+					continue
+				}
 				path := append(append([]string(nil), state.Path...), other)
 				if !visitedNodes[other] && len(visitedNodes) >= maxTraceNodes {
 					result.DataStatus = "partial"
@@ -369,19 +386,11 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 				result.Edges = append(result.Edges, edge)
 				expandedAddresses[strings.ToLower(state.Address)] = true
 				edgeIndex := len(result.Edges) - 1
-				stopReason := store.StopReason("")
-				if cycle {
-					stopReason = store.StopCycle
-				}
-				result.MoneyTransfers = append(result.MoneyTransfers, moneyTransfer(summary, stopReason))
+				result.MoneyTransfers = append(result.MoneyTransfers, moneyTransfer(summary, ""))
 				result.MoneyStates = append(result.MoneyStates,
 					store.MoneyState{Chain: summary.Chain, Address: strings.ToLower(summary.From), Direction: "out", AssetType: summary.AssetType, Asset: summary.Asset, Amount: summary.TotalAmount, RemainingAmount: summary.TotalAmount, EntryTxHash: summary.Representative.TxHash, EntryBlock: summary.Representative.BlockNumber, Path: path, Evidence: "transfer", Inferred: state.Amount != ""},
 					store.MoneyState{Chain: summary.Chain, Address: strings.ToLower(summary.To), Direction: "in", AssetType: summary.AssetType, Asset: summary.Asset, Amount: summary.TotalAmount, RemainingAmount: summary.TotalAmount, EntryTxHash: summary.Representative.TxHash, EntryBlock: summary.Representative.BlockNumber, Path: path, Evidence: "transfer", Inferred: state.Amount != ""},
 				)
-				if cycle {
-					result.Paths = append(result.Paths, path)
-					continue
-				}
 				if other == zeroAddress {
 					if !visitedNodes[other] && len(visitedNodes) < maxTraceNodes {
 						visitedNodes[other] = true
@@ -396,7 +405,16 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 				otherHighFrequency := isHighFrequencyAddress(otherMetadata)
 				dependencyStopReason := g.dependencyStopReason(q.Chain, other)
 				identity := addressIdentity(otherMetadata)
-				if (identity.AddressType == "unknown" || identity.AddressType == "contract" && identity.Protocol == "") && g.inspector != nil && !g.existingDataOnly {
+				if knownIdentity, known := g.knownAddressIdentity(q.Chain, other); known {
+					identity = knownIdentity
+					if metadataErr = g.repository.SetAddressIdentity(ctx, q.Chain, other, identity); metadataErr != nil {
+						return metadataErr
+					}
+					otherMetadata.AddressType = identity.AddressType
+					otherMetadata.IsContract = identity.AddressType == "contract"
+					otherMetadata.Protocol = identity.Protocol
+					otherMetadata.Roles = identity.Roles
+				} else if (identity.AddressType == "unknown" || identity.AddressType == "contract" && identity.Protocol == "") && g.inspector != nil && !g.existingDataOnly {
 					identity, metadataErr = g.inspector.InspectAddress(ctx, q.Chain, other)
 					if metadataErr != nil {
 						return metadataErr
@@ -453,11 +471,9 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 				if otherMetadata.SyncStatus == "partial" {
 					result.DataStatus = "partial"
 				}
-				assetMode, asset := summaryAsset(summary)
 				relation := store.CounterpartyQuery{Chain: q.Chain, Address: state.Address, Counterparty: other, Direction: state.Direction, AssetMode: assetMode, Asset: asset}
 				nextState := branchState{Address: other, Direction: state.Direction, AssetMode: assetMode, Asset: asset, AnchorBlock: summary.Representative.BlockNumber, EnteringQuery: relation, EnteringTx: summary.Representative, EnteringEdge: edgeIndex, Amount: summary.TotalAmount, Contract: contract, Identity: identity, Path: path}
-				stateKey := branchStateKey(nextState)
-				if visitedStates[stateKey] || len(visitedNodes) >= maxTraceNodes {
+				if len(visitedNodes) >= maxTraceNodes {
 					continue
 				}
 				otherLabels, labelsErr := g.repository.ListLabels(ctx, q.Chain, other)
@@ -618,6 +634,14 @@ func (g *Graph) traceSameChain(ctx context.Context, query Query) (Result, error)
 		}
 	}
 	return result, nil
+}
+
+func (g *Graph) knownAddressIdentity(chain, address string) (store.AddressIdentity, bool) {
+	inspector, ok := g.inspector.(knownAddressInspector)
+	if !ok {
+		return store.AddressIdentity{}, false
+	}
+	return inspector.KnownAddressIdentity(chain, address)
 }
 
 func buildLedgers(states []store.MoneyState) []store.AssetLedger {

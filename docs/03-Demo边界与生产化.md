@@ -18,7 +18,7 @@
 
 - Ethereum 普通 ETH、内部 ETH 和 ERC-20 地址历史采集；
 - 分页、重试、区间拆分、检查点、批量幂等写入和任务停止；
-- `trace-v1` 的金额预算、时间边界、环路剪枝、终点判断和手动扩展；
+- `trace-v1` 的金额预算、时间边界、入口交易状态去重、终点判断和手动扩展；
 - Transaction、Receipt、ERC-20、WETH、Swap 与 THORChain 语义；
 - Swap 双向关系展示；
 - 当前 Ethereum 余额查询；

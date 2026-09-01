@@ -17,6 +17,7 @@ import (
 	"github.com/Nickcandy/eth-fund-trace/internal/httpapi"
 	"github.com/Nickcandy/eth-fund-trace/internal/mayachain"
 	"github.com/Nickcandy/eth-fund-trace/internal/profile"
+	"github.com/Nickcandy/eth-fund-trace/internal/relay"
 	"github.com/Nickcandy/eth-fund-trace/internal/store"
 	"github.com/Nickcandy/eth-fund-trace/internal/syncer"
 	"github.com/Nickcandy/eth-fund-trace/internal/thorchain"
@@ -82,7 +83,10 @@ func run(parent context.Context) error {
 			return err
 		},
 	})
-	transactionAnalyzer := transactionanalysis.New(ethereumClient, appStore, time.Now)
+	transactionAnalyzer := transactionanalysis.New(ethereumClient, appStore, time.Now).WithRelayVerifier(relay.New(relay.Config{
+		StatusBaseURL: cfg.RelayStatusURL, ArbitrumRPC: cfg.ArbitrumRPCURL,
+		HTTPClient: &http.Client{Timeout: time.Duration(cfg.CrossChainHTTPTimeoutSeconds) * time.Second},
+	}))
 	crossChainVerifier := thorchain.New(thorchain.Config{
 		StatusBaseURL: cfg.THORChainStatusURL, BitcoinBaseURL: cfg.BitcoinAPIURL, ClientID: cfg.THORChainClientID,
 		HTTPClient: &http.Client{Timeout: time.Duration(cfg.CrossChainHTTPTimeoutSeconds) * time.Second},
@@ -104,7 +108,7 @@ func run(parent context.Context) error {
 	e.GET("/api/v1/sync-jobs/:id", syncHandler.Job)
 	e.GET("/api/v1/addresses/:address/profile", httpapi.NewProfileHandler(addressProfiler).Get)
 	e.GET("/api/v1/addresses/:address/balance", httpapi.NewBalanceHandler(balanceProviders, time.Now).Get)
-	e.GET("/api/v1/addresses/:address", httpapi.NewAddressHandler(appStore).Get)
+	e.GET("/api/v1/addresses/:address", httpapi.NewAddressHandler(appStore).WithKnownAddressInspector(transactionAnalyzer).Get)
 	e.GET("/api/v1/edges", httpapi.NewEdgeHandler(fundgraph.New(appStore)).Get)
 	traceGraph := tracer.New(appStore).
 		WithTransactionAnalyzer(transactionAnalyzer).

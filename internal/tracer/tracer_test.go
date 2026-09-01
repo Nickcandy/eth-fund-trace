@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -106,6 +107,23 @@ func TestTraceMarksAddressWithoutMatchingTransfersAsTerminal(t *testing.T) {
 	}
 }
 
+func TestTraceRefreshesKnownRelaySolverRootIdentity(t *testing.T) {
+	const solver = "0xf70da97812cb96acdf810712aa562db8dfa3dbef"
+	repository := &fakeRepository{addresses: map[string]store.Address{solver: completeEOAAddress(0, 100)}, labels: map[string][]store.Label{}}
+	identity := store.AddressIdentity{AddressType: "eoa", Protocol: "relay", Roles: []string{"solver"}}
+
+	result, err := New(repository).WithAddressInspector(knownAddressInspectorStub{address: solver, identity: identity}).Trace(context.Background(), Query{Address: solver, Direction: "out"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Nodes) != 1 || result.Nodes[0].Protocol != "relay" || !slices.Equal(result.Nodes[0].Roles, []string{"solver"}) {
+		t.Fatalf("nodes=%+v", result.Nodes)
+	}
+	if persisted := repository.identities[solver]; persisted.Protocol != "relay" || !slices.Equal(persisted.Roles, []string{"solver"}) {
+		t.Fatalf("persisted identity=%+v", persisted)
+	}
+}
+
 func TestTraceHonorsCancellationDuringAutomaticExpansion(t *testing.T) {
 	seed := "0x0000000000000000000000000000000000000001"
 	repository := &fakeRepository{addresses: map[string]store.Address{seed: completeAddress(0, 100)}, labels: map[string][]store.Label{}}
@@ -118,7 +136,7 @@ func TestTraceHonorsCancellationDuringAutomaticExpansion(t *testing.T) {
 	}
 }
 
-func TestTracePreservesCycleEdgeWithoutRequeueingIt(t *testing.T) {
+func TestTracePreservesReturnEdgeWithoutCycleStop(t *testing.T) {
 	seed := "0x0000000000000000000000000000000000000001"
 	next := "0x0000000000000000000000000000000000000002"
 	repository := &fakeRepository{addresses: map[string]store.Address{
@@ -133,10 +151,65 @@ func TestTracePreservesCycleEdgeWithoutRequeueingIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(result.Edges) != 2 || len(result.Nodes) != 2 {
-		t.Fatalf("result=%+v, want the cycle edge without another node", result)
+		t.Fatalf("result=%+v, want the return edge without another node", result)
 	}
-	if len(result.MoneyTransfers) != 2 || result.MoneyTransfers[1].StopReason != store.StopCycle {
-		t.Fatalf("money transfers=%+v, want explicit cycle stop evidence", result.MoneyTransfers)
+	if len(result.MoneyTransfers) != 2 || result.MoneyTransfers[1].StopReason != "" {
+		t.Fatalf("money transfers=%+v, returned funds must remain traceable", result.MoneyTransfers)
+	}
+}
+
+func TestTraceContinuesAfterFundsReturnToVisitedAddress(t *testing.T) {
+	a := "0x0000000000000000000000000000000000000001"
+	b := "0x0000000000000000000000000000000000000002"
+	c := "0x0000000000000000000000000000000000000003"
+	d := "0x0000000000000000000000000000000000000004"
+	addresses := map[string]store.Address{}
+	for _, address := range []string{a, b, c, d} {
+		addresses[address] = completeAddress(0, 100)
+	}
+	repository := &fakeRepository{addresses: addresses, labels: map[string][]store.Label{}, transfers: []store.Transfer{
+		{Chain: "ethereum", TxHash: "0xab", BlockNumber: 10, From: a, To: b, AssetType: "eth", Asset: "ETH", Amount: "30"},
+		{Chain: "ethereum", TxHash: "0xbc", BlockNumber: 11, From: b, To: c, AssetType: "eth", Asset: "ETH", Amount: "30"},
+		{Chain: "ethereum", TxHash: "0xcb", BlockNumber: 12, From: c, To: b, AssetType: "eth", Asset: "ETH", Amount: "30"},
+		{Chain: "ethereum", TxHash: "0xbd", BlockNumber: 13, From: b, To: d, AssetType: "eth", Asset: "ETH", Amount: "30"},
+	}}
+
+	result, err := New(repository).Trace(context.Background(), Query{Chain: "ethereum", Address: a, Direction: "out"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Edges) != 4 || result.Edges[3].TxHash != "0xbd" || result.Edges[3].From != b || result.Edges[3].To != d {
+		t.Fatalf("edges=%+v, want A -> B -> C -> B -> D", result.Edges)
+	}
+	for _, transfer := range result.MoneyTransfers {
+		if transfer.StopReason == "cycle" {
+			t.Fatalf("money transfers=%+v, returned funds must remain traceable", result.MoneyTransfers)
+		}
+	}
+}
+
+func TestTraceDoesNotReplayTransferWhenFundsReturnInSameBlock(t *testing.T) {
+	a := "0x0000000000000000000000000000000000000001"
+	b := "0x0000000000000000000000000000000000000002"
+	c := "0x0000000000000000000000000000000000000003"
+	d := "0x0000000000000000000000000000000000000004"
+	addresses := map[string]store.Address{}
+	for _, address := range []string{a, b, c, d} {
+		addresses[address] = completeAddress(0, 100)
+	}
+	repository := &fakeRepository{addresses: addresses, labels: map[string][]store.Label{}, transfers: []store.Transfer{
+		{Chain: "ethereum", TxHash: "0xab", BlockNumber: 10, From: a, To: b, AssetType: "eth", Asset: "ETH", Amount: "30"},
+		{Chain: "ethereum", TxHash: "0xbc", BlockNumber: 11, From: b, To: c, AssetType: "eth", Asset: "ETH", Amount: "30"},
+		{Chain: "ethereum", TxHash: "0xcb", BlockNumber: 11, From: c, To: b, AssetType: "eth", Asset: "ETH", Amount: "30"},
+		{Chain: "ethereum", TxHash: "0xbd", BlockNumber: 12, From: b, To: d, AssetType: "eth", Asset: "ETH", Amount: "30"},
+	}}
+
+	result, err := New(repository).Trace(context.Background(), Query{Chain: "ethereum", Address: a, Direction: "out"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Edges) != 4 || result.Edges[3].TxHash != "0xbd" {
+		t.Fatalf("edges=%+v, same-block query must not replay B -> C", result.Edges)
 	}
 }
 
@@ -317,6 +390,19 @@ type addressInspectorStub struct {
 
 func (s addressInspectorStub) InspectAddress(context.Context, string, string) (store.AddressIdentity, error) {
 	return s.identity, nil
+}
+
+type knownAddressInspectorStub struct {
+	address  string
+	identity store.AddressIdentity
+}
+
+func (s knownAddressInspectorStub) InspectAddress(context.Context, string, string) (store.AddressIdentity, error) {
+	return s.identity, nil
+}
+
+func (s knownAddressInspectorStub) KnownAddressIdentity(_ string, address string) (store.AddressIdentity, bool) {
+	return s.identity, strings.EqualFold(address, s.address)
 }
 
 type failingAddressInspector struct{}
@@ -710,7 +796,7 @@ func TestTraceUsesMonotonicBlockWindows(t *testing.T) {
 	}
 }
 
-func TestTraceBothStopsDirectionalBudgetsAtCycles(t *testing.T) {
+func TestTraceBothKeepsDirectionalBudgetsOnReturns(t *testing.T) {
 	seed := "0x0000000000000000000000000000000000000001"
 	shared := "0x0000000000000000000000000000000000000002"
 	parent := "0x0000000000000000000000000000000000000003"
@@ -730,16 +816,12 @@ func TestTraceBothStopsDirectionalBudgetsAtCycles(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(result.Nodes) != 2 {
-		t.Fatalf("nodes=%+v, unrelated parent and child must not consume exhausted cycle budgets", result.Nodes)
+		t.Fatalf("nodes=%+v, unrelated parent and child must not consume exhausted return budgets", result.Nodes)
 	}
-	cycleStops := 0
 	for _, transfer := range result.MoneyTransfers {
-		if transfer.StopReason == store.StopCycle {
-			cycleStops++
+		if transfer.StopReason == "cycle" {
+			t.Fatalf("money transfers=%+v, address returns must not be cycle stops", result.MoneyTransfers)
 		}
-	}
-	if cycleStops != 2 {
-		t.Fatalf("money transfers=%+v, want one cycle stop in each direction", result.MoneyTransfers)
 	}
 }
 

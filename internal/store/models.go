@@ -52,7 +52,6 @@ const (
 	StopNoMatchingTransfers StopReason = "no_matching_transfers"
 	StopAmbiguousConversion StopReason = "ambiguous_conversion"
 	StopMissingData         StopReason = "missing_data"
-	StopCycle               StopReason = "cycle"
 )
 
 type MoneyState struct {
@@ -113,6 +112,26 @@ type VerifiedCrossChainTransfer struct {
 	Amount      string
 	TxHash      string
 	BlockNumber int64
+}
+
+// CrossChainAnalysis links one verified source transaction to its destination transaction.
+type CrossChainAnalysis struct {
+	Protocol      string `bson:"protocol" json:"protocol"`
+	Status        string `bson:"status" json:"status"`
+	RequestID     string `bson:"requestId" json:"requestId"`
+	SourceChain   string `bson:"sourceChain" json:"sourceChain"`
+	SourceChainID int64  `bson:"sourceChainId" json:"sourceChainId"`
+	TargetChain   string `bson:"targetChain" json:"targetChain"`
+	TargetChainID int64  `bson:"targetChainId" json:"targetChainId"`
+	SourceTxHash  string `bson:"sourceTxHash" json:"sourceTxHash"`
+	TargetTxHash  string `bson:"targetTxHash" json:"targetTxHash"`
+	From          string `bson:"from" json:"from"`
+	To            string `bson:"to" json:"to"`
+	SourceAsset   string `bson:"sourceAsset" json:"sourceAsset"`
+	SourceAmount  string `bson:"sourceAmount" json:"sourceAmount"`
+	TargetAsset   string `bson:"targetAsset" json:"targetAsset"`
+	TargetAmount  string `bson:"targetAmount" json:"targetAmount"`
+	FeeAmount     string `bson:"feeAmount" json:"feeAmount"`
 }
 
 type Transfer struct {
@@ -327,32 +346,33 @@ type CounterpartySummary struct {
 
 // TransactionAnalysis is a cached interpretation of a confirmed receipt.
 type TransactionAnalysis struct {
-	AnalysisVersion     string            `bson:"analysisVersion" json:"analysisVersion"`
-	Chain               string            `bson:"chain" json:"chain"`
-	ChainID             int64             `bson:"chainId" json:"chainId"`
-	TxHash              string            `bson:"txHash" json:"txHash"`
-	BlockNumber         int64             `bson:"blockNumber" json:"blockNumber"`
-	From                string            `bson:"from" json:"from"`
-	To                  string            `bson:"to" json:"to"`
-	Value               string            `bson:"value" json:"value"`
-	Input               string            `bson:"input" json:"input"`
-	Succeeded           bool              `bson:"succeeded" json:"succeeded"`
-	EntryContract       string            `bson:"entryContract,omitempty" json:"entryContract,omitempty"`
-	EntryContractName   string            `bson:"entryContractName,omitempty" json:"entryContractName,omitempty"`
-	Transfers           []ReceiptTransfer `bson:"transfers" json:"transfers"`
-	Swaps               []SwapEvent       `bson:"swaps" json:"swaps"`
-	Wraps               []WrapEvent       `bson:"wraps" json:"wraps"`
-	InternalCalls       []InternalCall    `bson:"internalCalls" json:"internalCalls"`
-	Conversions         []SwapConversion  `bson:"conversions" json:"conversions"`
-	ProtocolAction      string            `bson:"protocolAction,omitempty" json:"protocolAction,omitempty"`
-	ProtocolMemo        string            `bson:"protocolMemo,omitempty" json:"protocolMemo,omitempty"`
-	ProtocolDestination string            `bson:"protocolDestination,omitempty" json:"protocolDestination,omitempty"`
-	ProtocolVault       string            `bson:"protocolVault,omitempty" json:"protocolVault,omitempty"`
-	ProtocolAsset       string            `bson:"protocolAsset,omitempty" json:"protocolAsset,omitempty"`
-	ProtocolAmount      string            `bson:"protocolAmount,omitempty" json:"protocolAmount,omitempty"`
-	FinalOutputAddress  string            `bson:"finalOutputAddress,omitempty" json:"finalOutputAddress,omitempty"`
-	Quality             AnalysisQuality   `bson:"quality" json:"quality"`
-	AnalyzedAt          time.Time         `bson:"analyzedAt" json:"analyzedAt"`
+	AnalysisVersion     string              `bson:"analysisVersion" json:"analysisVersion"`
+	Chain               string              `bson:"chain" json:"chain"`
+	ChainID             int64               `bson:"chainId" json:"chainId"`
+	TxHash              string              `bson:"txHash" json:"txHash"`
+	BlockNumber         int64               `bson:"blockNumber" json:"blockNumber"`
+	From                string              `bson:"from" json:"from"`
+	To                  string              `bson:"to" json:"to"`
+	Value               string              `bson:"value" json:"value"`
+	Input               string              `bson:"input" json:"input"`
+	Succeeded           bool                `bson:"succeeded" json:"succeeded"`
+	EntryContract       string              `bson:"entryContract,omitempty" json:"entryContract,omitempty"`
+	EntryContractName   string              `bson:"entryContractName,omitempty" json:"entryContractName,omitempty"`
+	Transfers           []ReceiptTransfer   `bson:"transfers" json:"transfers"`
+	Swaps               []SwapEvent         `bson:"swaps" json:"swaps"`
+	Wraps               []WrapEvent         `bson:"wraps" json:"wraps"`
+	InternalCalls       []InternalCall      `bson:"internalCalls" json:"internalCalls"`
+	Conversions         []SwapConversion    `bson:"conversions" json:"conversions"`
+	ProtocolAction      string              `bson:"protocolAction,omitempty" json:"protocolAction,omitempty"`
+	ProtocolMemo        string              `bson:"protocolMemo,omitempty" json:"protocolMemo,omitempty"`
+	ProtocolDestination string              `bson:"protocolDestination,omitempty" json:"protocolDestination,omitempty"`
+	ProtocolVault       string              `bson:"protocolVault,omitempty" json:"protocolVault,omitempty"`
+	ProtocolAsset       string              `bson:"protocolAsset,omitempty" json:"protocolAsset,omitempty"`
+	ProtocolAmount      string              `bson:"protocolAmount,omitempty" json:"protocolAmount,omitempty"`
+	CrossChain          *CrossChainAnalysis `bson:"crossChain,omitempty" json:"crossChain,omitempty"`
+	FinalOutputAddress  string              `bson:"finalOutputAddress,omitempty" json:"finalOutputAddress,omitempty"`
+	Quality             AnalysisQuality     `bson:"quality" json:"quality"`
+	AnalyzedAt          time.Time           `bson:"analyzedAt" json:"analyzedAt"`
 }
 
 // InternalCall is one flattened transaction-level EVM call fact.

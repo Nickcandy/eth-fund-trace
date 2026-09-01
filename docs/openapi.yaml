@@ -58,7 +58,7 @@ components:
         address: {type: string}
         depth: {type: integer}
         terminal: {type: boolean}
-        stopReason: {type: string, enum: [terminal, cross_chain_bridge, unsupported_contract, high_frequency, ambiguous_conversion, missing_data, cycle, no_matching_transfers, node_limit]}
+        stopReason: {type: string, enum: [terminal, cross_chain_bridge, unsupported_contract, high_frequency, ambiguous_conversion, missing_data, no_matching_transfers, node_limit]}
         addressType: {type: string, enum: [unknown, eoa, contract]}
         protocol: {type: string}
         roles: {type: array, items: {type: string}}

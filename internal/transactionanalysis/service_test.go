@@ -60,6 +60,17 @@ type repoStub struct {
 	pools    map[string]store.PoolMetadata
 }
 
+type relayVerifierStub struct {
+	result store.CrossChainAnalysis
+	found  bool
+	err    error
+}
+
+func (s relayVerifierStub) Supports(store.TransactionAnalysis) bool { return true }
+func (s relayVerifierStub) Verify(context.Context, store.TransactionAnalysis) (store.CrossChainAnalysis, bool, error) {
+	return s.result, s.found, s.err
+}
+
 func newRepoStub() *repoStub {
 	return &repoStub{analyses: map[string]store.TransactionAnalysis{}, pools: map[string]store.PoolMetadata{}}
 }
@@ -108,6 +119,36 @@ func TestAnalyzeVerifiedV3SwapPreservesSignedLargeAmountsAndCaches(t *testing.T)
 	}
 	if _, err := service.Analyze(context.Background(), "ethereum", testHash); err != nil || source.txCalls != 1 {
 		t.Fatalf("cache txCalls=%d err=%v", source.txCalls, err)
+	}
+}
+
+func TestAnalyzeAddsVerifiedRelayCrossChainEvidence(t *testing.T) {
+	const requestID = "0x0ba05c68bed94b3ccd383f0392ed2736319ed820f237d2d134e45a753ad2a604"
+	source := &sourceStub{
+		tx:      etherscan.RPCTransaction{Hash: testHash, From: "0xf70da97812cb96acdf810712aa562db8dfa3dbef", To: testUser, Value: "0x19", Input: requestID},
+		receipt: etherscan.RPCReceipt{TransactionHash: testHash, BlockNumber: "0x10", Status: "0x1"},
+	}
+	verified := store.CrossChainAnalysis{Protocol: "relay", Status: "complete", RequestID: requestID, SourceChain: "arbitrum", SourceChainID: 42161, TargetChain: "ethereum", TargetChainID: 1, SourceTxHash: "0xsource", TargetTxHash: testHash, From: testUser, To: testUser, SourceAsset: "ETH", SourceAmount: "26", TargetAsset: "ETH", TargetAmount: "25", FeeAmount: "1"}
+	analysis, err := New(source, newRepoStub(), time.Now).WithRelayVerifier(relayVerifierStub{result: verified, found: true}).Analyze(context.Background(), "ethereum", testHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if analysis.CrossChain == nil || analysis.CrossChain.SourceTxHash != "0xsource" || analysis.ProtocolAction != "relay_cross_chain_transfer" || analysis.ProtocolMemo != requestID || analysis.ProtocolDestination != testUser || analysis.ProtocolAmount != "25" || analysis.Quality.Status != "complete" {
+		t.Fatalf("analysis=%+v", analysis)
+	}
+}
+
+func TestAnalyzeKeepsRelayFactsWhenVerificationFails(t *testing.T) {
+	source := &sourceStub{
+		tx:      etherscan.RPCTransaction{Hash: testHash, From: "0xf70da97812cb96acdf810712aa562db8dfa3dbef", To: testUser, Value: "0x19", Input: "0x" + strings.Repeat("a", 64)},
+		receipt: etherscan.RPCReceipt{TransactionHash: testHash, BlockNumber: "0x10", Status: "0x1"},
+	}
+	analysis, err := New(source, newRepoStub(), time.Now).WithRelayVerifier(relayVerifierStub{err: errors.New("status API unavailable")}).Analyze(context.Background(), "ethereum", testHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if analysis.CrossChain != nil || analysis.Quality.Status != "partial" || !strings.Contains(strings.Join(analysis.Quality.Issues, " "), "Relay verification unavailable") {
+		t.Fatalf("analysis=%+v", analysis)
 	}
 }
 
@@ -160,6 +201,17 @@ func TestInspectAddressClassifiesWOOXWalletsBeforeBytecodeLookup(t *testing.T) {
 	identity, err = service.InspectAddress(context.Background(), "ethereum", testUser)
 	if err != nil || identity.Protocol != "" || identity.AddressType != "contract" {
 		t.Fatalf("unknown identity=%+v err=%v", identity, err)
+	}
+}
+
+func TestInspectAddressClassifiesRelaySolverBeforeBytecodeLookup(t *testing.T) {
+	service := New(&sourceStub{code: "0x"}, newRepoStub(), time.Now)
+	identity, err := service.InspectAddress(context.Background(), "ethereum", "0xF70dA97812CB96acDF810712Aa562db8dfA3dbEF")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.AddressType != "eoa" || identity.Protocol != "relay" || !slices.Equal(identity.Roles, []string{"solver"}) {
+		t.Fatalf("identity=%+v", identity)
 	}
 }
 
